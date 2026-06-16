@@ -323,13 +323,16 @@ Tool pool final se obtiene desde el manager, no registrando MCP como nativas.
 
 #### Fase M0 - Provider shell
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `McpProvider`.
-- [ ] Mover `load_mcp_tools` detras del provider.
-- [ ] Mantener wrappers actuales como adapter temporal.
-- [ ] Exponer `mcp.tools` desde provider.
-- [ ] Exponer `mcp.resources` desde provider.
+- [x] Crear `McpProvider` (primer `CapabilityProvider` concreto, `capabilities/mcp/`).
+- [~] Mover `load_mcp_tools` detras del provider. → N/A en este repo: no existe loader MCP
+      heredado (eso era `new_core`). En su lugar el provider define el **punto de inyección**:
+      el integrador conecta servers/transporte y registra specs; el transporte (`McpCall`) se
+      inyecta, el shell no lo implementa (ciclo de vida real = M1).
+- [~] Mantener wrappers actuales como adapter temporal. → N/A (no hay wrappers heredados).
+- [x] Exponer `mcp.tools` desde provider (`tools(context)` vía `McpState.all_tools()`).
+- [x] Exponer `mcp.resources` desde provider (`resources(context)`).
 - [ ] Config de server **tolerante en lo operativo, estricta en lo de seguridad** (ver "Robustez
       ante skills/MCP de terceros"): props no estándar (p.ej. `model`) → `Optional` + default;
       validez de config/identidad del server → validación dura que rechaza explícitamente.
@@ -343,6 +346,12 @@ Criterios:
 - Un MCP de terceros sin las props no estándar opera con defaults; una config de server inválida
   se rechaza con error claro (borde de seguridad), no se ignora silenciosamente.
 - Tests: tool MCP sin annotations → default; server con config inválida → rechazo explícito.
+
+Evidencia M0: `capabilities/mcp/{config,tool_adapter,state,provider}.py`. `McpServerConfig`
+(`extra="allow"`, `command` xor `url` validado → rechaza). `parse_server_config` estricto (lanza),
+`load_server_configs` tolerante (salta con log). `build_mcp_tool` tolerante (annotations opcionales,
+sin `name` → omite). `McpProvider` cumple `CapabilityProvider`; sus tools convergen por
+`CapabilityManager.build_tool_pool`. 17 tests en `test_mcp_provider.py`.
 
 #### Fase M1 - Estado MCP separado
 
@@ -856,6 +865,33 @@ Al terminar:
   rechaza; skill remota MCP nunca ejecuta shell inline). `CapabilitySummary` ya nació alineado
   (campos opcionales con default); falta que S0/M0 hereden el contrato de robustez.
 - Doc-only; no se tocó código (los providers no existen aún). Sin tests nuevos en esta entrada.
+
+### 2026-06-16 — M0: McpProvider shell (primer CapabilityProvider concreto)
+
+- Implementado `capabilities/mcp/`: `config.py` (`McpServerConfig` schema abierto + identidad
+  estricta), `tool_adapter.py` (`McpTool` + `build_mcp_tool` tolerante), `state.py` (`McpState`
+  separado del registry nativo, patrón `appState.mcp.*`), `provider.py` (`McpProvider`).
+- **Por qué se adaptó el M0 del plan**: sus bullets ("mover `load_mcp_tools`", "mantener wrappers")
+  describían `new_core`, donde MCP vivía disperso. En este repo NO existe loader MCP heredado, así
+  que no hay nada que "mover". M0 aquí = construir el shell desde cero con el contrato de robustez,
+  definiendo el **punto de inyección**: el integrador conecta servers y registra specs; el transporte
+  (`McpCall`) se inyecta. El shell no abre conexiones (eso es M1). Sin transporte fake.
+- **Robustez aplicada (no teórica)**: identidad/seguridad estricta — `add_server` lanza si la config
+  es inválida (`command` xor `url`); operativo tolerante — `extra="allow"` conserva props de terceros,
+  `load_servers` salta inválidos con log, `build_mcp_tool` degrada annotations ausentes a default
+  seguro (tercero no anotado: requiere permiso, no background). Asimetría tal cual el canónico.
+- **Decisión de permisos**: tools MCP de terceros siempre `requires_permission=True` (no confiables);
+  solo `readOnlyHint` las marca `safe_for_background`. Conservador por defecto.
+- **Convergencia verificada**: `McpProvider` cumple `CapabilityProvider`; sus tools fluyen por
+  `CapabilityManager.build_tool_pool` y quedan como sufijo tras las nativas (paridad assembleToolPool).
+- Probado: `test_mcp_provider.py` (17): contrato, identidad estricta, schema abierto, tolerancia en
+  bloque, adapter tolerante (sin name/annotations/inputSchema malformado), execute (ok + error de
+  transporte envuelto), catálogo `mcp_tool`, resources, timeout por server, convergencia con C0.
+  Suite **222 passed, 5 skipped** (205 → +17). Lint limpio.
+- No probado: transporte/cliente real (M1), deferred loading (M3), API de management (M5), resources
+  como tools del provider (M4). Cableado en loop/factory pendiente (no se registró el provider en
+  `factory.py` aún — lo hará el integrador / fase de wiring).
+- Siguiente: S0 (SkillsProvider shell) — mismo contrato de robustez — o M1 (estado/cliente MCP).
 
 ### YYYY-MM-DD
 
