@@ -71,7 +71,7 @@ Los nombres finales pueden variar, pero las responsabilidades deben quedar separ
 
 ### CapabilityProvider
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -99,7 +99,7 @@ class CapabilityProvider(Protocol):
 
 ### CapabilityManager
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -117,7 +117,7 @@ Criterios:
 
 ### CapabilitySummary
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -134,7 +134,7 @@ Campos sugeridos:
 
 ### CapabilityActivation
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -534,15 +534,18 @@ nunca implementar semántica de fork, copia de mensajes ni background propias.
 
 ### Fase C0 - Integracion inicial
 
-Estado: `[ ] no iniciado`
+Estado: `[~] en progreso`
 
 Tareas:
 
-- [ ] Crear `CapabilityManager` con lista de providers registrados.
-- [ ] Registrar `SkillsProvider` y `McpProvider` en el manager.
-- [ ] Exponer `catalog(context) -> list[CapabilitySummary]`.
-- [ ] Exponer `tools(context) -> list[Tool]`.
-- [ ] Exponer `compact_context(context) -> list[dict]`.
+- [x] Crear `CapabilityManager` con lista de providers registrados.
+- [ ] Registrar `SkillsProvider` y `McpProvider` en el manager.  ← pendiente: aún no existen los providers (M0/S0).
+- [x] Exponer `catalog(context) -> list[CapabilitySummary]`.
+- [x] Exponer `tools(context) -> list[Tool]`.
+- [x] Exponer `compact_context(context) -> list[dict]`.
+- [x] Convergencia native + capability preparada: `manager.build_tool_pool(native_tools, context)`
+      produce el `ToolPool` que el runtime consume; la fusión la hace `ToolPool.assemble()`
+      (built-ins como prefijo contiguo, dedup native-gana, deny) — paridad con `assembleToolPool`.
 
 Criterios:
 
@@ -732,6 +735,50 @@ Al terminar:
 - Pendiente sin cambios: construir Skills (S0-S5), MCP (M0-M5), CapabilityManager (C0-C3) y STT/TTS
   sobre el runtime nuevo. Falta cablear en el runtime las primitivas `PathPresentation` y
   `ToolExecEnvironment` (sandbox bwrap) — ver complementary plan.
+
+### 2026-06-15 — C0: CapabilityManager + contratos (sin mover comportamiento)
+
+- Implementado el esqueleto de la capa de capabilities como el plan pide *empezar*: contratos
+  estables (`capabilities/contracts.py`) + coordinador (`capabilities/manager.py`). Nada de
+  comportamiento del runtime cambia todavía — esto es la junta a la que después se enchufan
+  Skills/MCP. Por eso C0 queda `[~]`: el manager existe y está testeado, pero registrar
+  `SkillsProvider`/`McpProvider` no es posible aún (no existen; son M0/S0).
+- **Por qué Pydantic en `CapabilitySummary`/`CapabilityActivation` y no dict**: regla de salida
+  tipada. El catálogo que ve el modelo y el resultado de activar una capability viajan por bordes
+  del runtime; un dict suelto ahí es justo lo que el plan quiere erradicar.
+- **Por qué `CapabilityProvider` como `Protocol` (no clase base)**: el manager coordina por
+  contrato y no debe importar ningún provider concreto (criterio C0: "sin importar ninguno
+  directamente en el runtime"). Test de acoplamiento lo fija: el source de `manager.py` no
+  menciona `SkillsProvider`/`McpProvider`.
+- **Decisión de convivencia**: el `capabilities/` previo (`CapabilitiesResolver`/`protocol.py`)
+  es un primitivo anterior y distinto (resuelve schemas para el resolver); se dejó intacto y los
+  contratos nuevos se agregaron al lado. Reconciliar/unificar ambos se difiere a cuando MCP/Skills
+  providers existan y se vea el solapamiento real — no antes (evita refactor especulativo).
+- **Dedup de tools**: por nombre, primera aparición gana = prioridad por orden de registro. Es la
+  misma semántica que `assemble_tool_pool` (native gana), coherente para cuando el assembler
+  consuma `manager.tools()`.
+- **Convergencia native ↔ capability (preparada, igual que el canónico)**: skills/MCP los registra
+  *quien embebe el runtime* (no el runtime). Para que las tools de esas capabilities y las nativas
+  ya registradas converjan como en `claude-code`, se replicó su punto único `assembleToolPool`:
+  - Canónico: native (`getTools()`) y MCP (`appState.mcp.tools`) viven separadas y se fusionan SOLO
+    en `assembleToolPool(permissionContext, mcpTools)` — el caller pasa `mcpTools`; ese punto no
+    importa el estado MCP. Invariantes: built-ins como **prefijo contiguo** (prompt-cache; el server
+    pone el breakpoint tras la última built-in), **dedup por nombre native-gana**, deny a ambos. No
+    se identifica MCP por `__`: partición explícita (`isMcpTool`).
+  - Aquí: `tools/pool.py::assemble_tool_pool` ya replicaba esa semántica; faltaba el puente desde el
+    manager. Se agregó `CapabilityManager.build_tool_pool(native_tools, context) -> ToolPool`, que
+    es "el resultado que el runtime consume" (criterio C0). La fusión la hace `ToolPool.assemble()`,
+    único punto. Dirección de dependencia capabilities → tools, nunca al revés (igual que allí).
+- Probado: `test_capability_manager.py` (12 casos): 8 del manager (unión sin duplicados, provider
+  sin tools, catálogo de todos, compact en orden, `agent_id=None` no rompe, startup/shutdown,
+  acoplamiento) + 4 de convergencia (particiones, prefijo contiguo native, native-gana en colisión,
+  deny a ambas particiones). Suite completa **205 passed, 5 skipped** (193 → +12). Lint limpio.
+- No probado: integración real con providers concretos (no existen aún) y cableado en el loop
+  (consumir `build_tool_pool` por turno = Fase C2, requiere tests antes/después). C1/C2/C3 dependen
+  de M0+/S0+.
+- Siguiente: M0 (McpProvider shell) según Orden Recomendado — MCP antes que Skills. Será el primer
+  `CapabilityProvider` concreto que el integrador podrá registrar y cuyas tools convergerán por
+  `build_tool_pool`.
 
 ### YYYY-MM-DD
 
