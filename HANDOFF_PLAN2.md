@@ -6,9 +6,43 @@
 
 ## Cómo retomar (enunciado sugerido al reentrar)
 
-> "Retoma el Plan 2 en este repo. Lee HANDOFF_PLAN2.md y PLAN_CAPABILITIES_SKILLS_MCP.md.
-> El runtime ya está estable (193 passed, 5 skipped). Arranca por el Orden Recomendado:
-> CapabilityManager (C0) + contracts, sin mover comportamiento. TDD, 1 commit por fase."
+> "Retoma el Plan 2 en este repo. Lee HANDOFF_PLAN2.md (en especial §0 Estado al reentrar) y
+> PLAN_CAPABILITIES_SKILLS_MCP.md. Estás en la rama `feature/capabilities` con C0 y M0 cerrados
+> (227 passed, 0 skipped). Sigue por S0 (SkillsProvider shell) aplicando el contrato de robustez
+> de la sección 'Robustez Ante Skills/MCP De Terceros'. TDD, 1 commit por fase, PR --base main al cerrar."
+
+---
+
+## 0. Estado al reentrar (actualizado 2026-06-16)
+
+**Rama de trabajo: `feature/capabilities`** (creada desde `main`). NO commitear directo a `main`; PR
+`--base main` al cerrar. Commits hechos en orden:
+
+1. `C0` — `CapabilityManager` + contratos (`capabilities/contracts.py`: `CapabilityProvider`,
+   `CapabilitySummary`, `CapabilityActivation`; `capabilities/manager.py`) + **convergencia native↔capability**
+   (`manager.build_tool_pool()` → `ToolPool.assemble()`, paridad con `assembleToolPool` del canónico:
+   native como prefijo contiguo, dedup native-gana, deny). Tests: `test_capability_manager.py`.
+2. `docs` — sección **"Robustez Ante Skills/MCP De Terceros"** + criterios de aceptación S0/M0.
+   Decisión clave: props operativas NO estándar (skill `allowed-tools`; MCP `model`) **nunca se exigen**;
+   cada una degrada a un default que define comportamiento. Estricto solo en seguridad/identidad.
+3. `M0` — `McpProvider` shell (`capabilities/mcp/`): `config.py` (`McpServerConfig` schema abierto +
+   identidad estricta `command` xor `url`), `tool_adapter.py` (`build_mcp_tool` tolerante), `state.py`
+   (`McpState`, separado del registry nativo), `provider.py`. Transporte (`McpCall`) inyectado, sin fake.
+   Tests: `test_mcp_provider.py`. Primer `CapabilityProvider` concreto; sus tools convergen por el manager.
+4. `chore` — `.gitignore` blindado para secretos de E2E (`.env`, `*.env`, `certs/`, `*.pem`, `src/agent_core/`).
+
+**Verde actual: `227 passed, 0 skipped`** (era 193/5 al inicio). Lint `uvx ruff check src/agentic_runtime` limpio.
+Los antiguos 5 skips ya corren: **bwrap instalado** (sandbox real OK bajo WSL2) y **config Azure portada**
+a `src/agent_core/.env` + `certs/cacert.pem` (ambos gitignored; los 4 E2E reales contra gpt-5.4-mini pasan).
+Si clonas en otra máquina sin esos archivos, esos 5 volverán a omitirse (gating correcto).
+
+**Siguiente paso recomendado: S0 (SkillsProvider shell)** — mismo patrón que M0, heredando el contrato de
+robustez (frontmatter tolerante: `name`/`description` estándar; `allowed-tools`/`model`/etc. operativos
+opcionales con default; aislamiento por ítem). Alternativa: M1 (estado/cliente MCP real). C1/C2/C3 (wiring
+en chat/loop/compactor) dependen de tener S0+M0; el provider aún NO está registrado en `factory.py`.
+
+**Recordatorio de lo que NO está cableado aún (declarado, no fingido):** el loop no consume
+`build_tool_pool` por turno (Fase C2); `McpProvider` no está en `factory.py`; transporte MCP real = M1.
 
 ---
 
