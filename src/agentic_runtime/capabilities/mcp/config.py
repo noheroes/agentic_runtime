@@ -37,9 +37,12 @@ class McpServerConfig(BaseModel):
     # Transporte http/sse
     url: str | None = None
     headers: dict[str, str] = {}
-    # Auth y TLS (seguridad)
+    # Auth y TLS (seguridad). `auth` nombra un modo extensible (none/bearer/oauth/...).
     auth: str | None = None
-    token: str | None = None
+    token: str | None = None            # bearer: token estático
+    scope: str | None = None            # oauth: scopes solicitados
+    client_name: str | None = None      # oauth: nombre de cliente
+    redirect_uris: list[str] = []       # oauth: redirect URIs registrados
     ssl_verify: bool = True
     # Operativo (opcional, con default — no del estándar MCP)
     timeout_seconds: float | None = None
@@ -69,8 +72,16 @@ class McpServerConfig(BaseModel):
                 raise ValueError(f"MCP server {self.name!r}: type={kind!r} requiere 'url'")
 
         # Bearer es borde de seguridad: sin token no se asume anónimo silenciosamente.
-        if (self.auth or "").lower().strip() == "bearer" and not self.token:
+        auth = (self.auth or "").lower().strip()
+        if auth == "bearer" and not self.token:
             raise ValueError(f"MCP server {self.name!r}: auth='bearer' requiere 'token'")
+        # La auth HTTP (bearer/oauth) no aplica a stdio: la spec exige credenciales por
+        # entorno para stdio. Evita configuraciones engañosas (borde de seguridad).
+        if auth in ("bearer", "oauth") and self.resolved_transport() == "stdio":
+            raise ValueError(
+                f"MCP server {self.name!r}: auth={auth!r} no aplica a stdio "
+                f"(usa variables de entorno en 'env' para credenciales stdio)"
+            )
         return self
 
     def resolved_transport(self) -> str:

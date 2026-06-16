@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..contracts import CapabilitySummary
 from .client import McpClient
@@ -39,9 +39,38 @@ class McpProvider:
         state: McpState | None = None,
         *,
         client_factory: "Callable[[McpServerConfig], McpClient] | None" = None,
+        storage: "Any | None" = None,
+        redirect_handler: "Any | None" = None,
+        callback_handler: "Any | None" = None,
+        user_id: str = "mcp",
     ) -> None:
         self._state = state or McpState()
-        self._client_factory = client_factory or McpClient
+        # Inyección para auth OAuth: storage para TokenStorage por defecto; handlers
+        # interactivos los provee QUIEN INTEGRA el runtime (headless no abre navegador).
+        self._storage = storage
+        self._redirect_handler = redirect_handler
+        self._callback_handler = callback_handler
+        self._user_id = user_id
+        self._client_factory = client_factory or self._default_client
+
+    def _default_client(self, config: McpServerConfig) -> McpClient:
+        """Factory por defecto: arma `AuthDeps` para oauth (TokenStorage sobre storage)."""
+        from .auth import AuthDeps
+        from .token_storage import StorageBackedTokenStorage
+
+        deps = None
+        if (config.auth or "").lower().strip() == "oauth":
+            token_storage = (
+                StorageBackedTokenStorage(self._storage, config.name, user_id=self._user_id)
+                if self._storage is not None
+                else None
+            )
+            deps = AuthDeps(
+                token_storage=token_storage,
+                redirect_handler=self._redirect_handler,
+                callback_handler=self._callback_handler,
+            )
+        return McpClient(config, auth_deps=deps)
 
     @property
     def state(self) -> McpState:

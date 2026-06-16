@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import AsyncExitStack
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .config import McpServerConfig
+
+if TYPE_CHECKING:
+    from .auth import AuthDeps
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +66,9 @@ class McpClient:
     startup/shutdown del provider) — el SDK usa anyio cancel scopes por tarea.
     """
 
-    def __init__(self, config: McpServerConfig) -> None:
+    def __init__(self, config: McpServerConfig, *, auth_deps: "AuthDeps | None" = None) -> None:
         self._config = config
+        self._auth_deps = auth_deps
         self._stack: AsyncExitStack | None = None
         self._session: Any = None
 
@@ -91,13 +95,20 @@ class McpClient:
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             else:
-                headers = self._config.auth_headers() or None
+                from .auth import build_auth
+
+                artifacts = build_auth(self._config, server_url=self._config.url or "", deps=self._auth_deps)
+                headers = {**dict(self._config.headers), **artifacts.headers} or None
+                httpx_auth = artifacts.httpx_auth
                 factory = _http_client_factory(self._config.ssl_verify)
                 if transport == "sse":
                     from mcp.client.sse import sse_client
 
                     streams = await stack.enter_async_context(
-                        sse_client(self._config.url, headers=headers, httpx_client_factory=factory)
+                        sse_client(
+                            self._config.url, headers=headers,
+                            httpx_client_factory=factory, auth=httpx_auth,
+                        )
                     )
                 else:  # http (streamable)
                     from mcp.client.streamable_http import streamablehttp_client
@@ -105,7 +116,8 @@ class McpClient:
                     # streamablehttp_client cede (read, write, get_session_id)
                     streams = await stack.enter_async_context(
                         streamablehttp_client(
-                            self._config.url, headers=headers, httpx_client_factory=factory
+                            self._config.url, headers=headers,
+                            httpx_client_factory=factory, auth=httpx_auth,
                         )
                     )
                 read, write = streams[0], streams[1]

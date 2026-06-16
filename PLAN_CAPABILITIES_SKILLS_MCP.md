@@ -440,9 +440,19 @@ Criterios:
 - Gmail adapter recibe provider/client resolver. → N/A en este repo (no hay Gmail adapter heredado).
 
 Contrato de registro (extendido): `McpServerConfig` soporta `url`, `type` (http/sse/stdio, explícito o
-inferido), `auth='bearer'`+`token` (→ header `Authorization`, estricto: bearer exige token) y `ssl_verify`
-(valida/omite TLS vía `httpx_client_factory`). `resolved_transport()`/`auth_headers()` lo materializan;
-`McpClient.connect` enruta a stdio/sse/streamable-http según `type`. Tests: `test_mcp_config_contract.py` (14).
+inferido), `auth` (modo extensible), `ssl_verify` (valida/omite TLS vía `httpx_client_factory`).
+`resolved_transport()` lo materializa; `McpClient.connect` enruta a stdio/sse/streamable-http según `type`.
+Tests: `test_mcp_config_contract.py` (14).
+
+**Auth MUTABLE/extensible (spec MCP 2025-11-25 = OAuth 2.1, no solo bearer):** `capabilities/mcp/auth.py`
+modela cada modo como ESTRATEGIA registrable (`register_auth_strategy`); añadir un modo no toca client ni
+provider. Integradas: `none`, `bearer` (token estático → `Authorization`), `oauth` (cablea el
+`OAuthClientProvider` del SDK `mcp` = OAuth 2.1 completo: discovery RFC 9728/8414, PKCE S256, DCR, refresh,
+resource indicator RFC 8707 — NO se reimplementa). `AuthDeps` inyecta lo que el runtime headless no posee:
+`redirect_handler`/`callback_handler` (los provee **quien integra el runtime**) y `token_storage`
+(`StorageBackedTokenStorage` sobre `StorageProtocol` por defecto, inyectable). Estricto en seguridad:
+bearer exige token; bearer/oauth no aplican a stdio (credenciales por `env`, como manda la spec).
+`McpProvider`/`factory` exponen los puntos de inyección. Tests: `test_mcp_auth.py` (11).
 
 Evidencia M1: `capabilities/mcp/client.py` (`McpClient`: transporte stdio/streamable-http vía SDK `mcp`,
 `connect`/`list_tools`/`list_resources`/`call`/`read_resource`/`aclose`; `McpToolError` mapea

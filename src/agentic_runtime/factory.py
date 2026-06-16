@@ -37,6 +37,10 @@ class CapabilitiesConfig:
     mcp_servers: dict[str, dict] = field(default_factory=dict)  # name -> raw server config
     skill_dirs: list[Path] = field(default_factory=list)        # raíces <dir>/<skill>/SKILL.md
     extra_providers: list[Any] = field(default_factory=list)    # CapabilityProvider adicionales
+    # Auth OAuth de MCP: handlers interactivos inyectados por el integrador (el runtime
+    # headless no abre navegador). TokenStorage por defecto = sobre StorageProtocol.
+    mcp_oauth_redirect_handler: Any = None
+    mcp_oauth_callback_handler: Any = None
 
 
 @dataclass
@@ -72,7 +76,7 @@ class RuntimeFactory:
         cls._modes[name] = name if False else runtime_cls
 
     @classmethod
-    def _build_capability_manager(cls, caps: "CapabilitiesConfig") -> Any:
+    def _build_capability_manager(cls, caps: "CapabilitiesConfig", storage: Any = None) -> Any:
         """Ensambla el CapabilityManager con providers MCP/Skills declarados.
 
         Registra servers MCP y dirs de skills de forma tolerante (config inválida
@@ -86,7 +90,11 @@ class RuntimeFactory:
         providers: list[Any] = []
 
         if caps.mcp_servers:
-            mcp = McpProvider()
+            mcp = McpProvider(
+                storage=storage,  # TokenStorage OAuth por defecto sobre StorageProtocol
+                redirect_handler=caps.mcp_oauth_redirect_handler,
+                callback_handler=caps.mcp_oauth_callback_handler,
+            )
             mcp.load_servers(caps.mcp_servers)  # tolerante; conecta en startup()
             providers.append(mcp)
 
@@ -116,7 +124,7 @@ class RuntimeFactory:
         # Capabilities: manager con providers (Skills/MCP). El pool por turno
         # converge native + capability vía manager.build_tool_pool (alineado a
         # assembleToolPool). Los providers se conectan en startup() (MCP) / al cargar.
-        capability_manager = cls._build_capability_manager(config.capabilities)
+        capability_manager = cls._build_capability_manager(config.capabilities, storage=storage)
 
         # Resolver legacy — conservado para compatibilidad; el loop usa el pool.
         capabilities_resolver = CapabilitiesResolver(
