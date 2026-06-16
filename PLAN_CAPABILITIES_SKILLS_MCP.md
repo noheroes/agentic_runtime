@@ -189,11 +189,18 @@ Estado: `[ ] no iniciado`
 - [ ] Exponer catalogo desde provider.
 - [ ] Mantener `SkillTool` actual como adapter temporal.
 - [ ] Tests de catalogo.
+- [ ] Parseo de frontmatter **tolerante** (ver "Robustez ante skills/MCP de terceros"):
+      modelo de metadata tipado (Pydantic) con todo campo operativo `Optional` + default
+      explícito; el parser nunca lanza por campo ausente/malformado.
+- [ ] Aislamiento por ítem: un `SKILL.md` malformado se salta con log, no aborta la carga del resto.
 
 Criterios:
 
 - `chat.py` puede pedir catalogo al manager, no a `skills.loader`.
 - No cambia comportamiento aun.
+- Una skill de terceros con frontmatter mínimo (solo `name`/`description`, sin `allowed-tools`
+  ni `model`) carga y opera con defaults definidos: no activa tools extra; hereda el modelo del padre.
+- Tests: frontmatter ausente/parcial/malformado → carga estable con defaults, sin excepción.
 
 #### Fase S1 - Skill como comando procesado
 
@@ -323,11 +330,19 @@ Estado: `[ ] no iniciado`
 - [ ] Mantener wrappers actuales como adapter temporal.
 - [ ] Exponer `mcp.tools` desde provider.
 - [ ] Exponer `mcp.resources` desde provider.
+- [ ] Config de server **tolerante en lo operativo, estricta en lo de seguridad** (ver "Robustez
+      ante skills/MCP de terceros"): props no estándar (p.ej. `model`) → `Optional` + default;
+      validez de config/identidad del server → validación dura que rechaza explícitamente.
+- [ ] Aislamiento por ítem: un server/tool malformado se salta con log, no tumba al resto.
+- [ ] Campos de tool del estándar pero opcionales (annotations/hints) → default seguro (`?? false`).
 
 Criterios:
 
 - `main.py` inicializa provider.
 - El registry nativo no necesita cargar MCP para startup.
+- Un MCP de terceros sin las props no estándar opera con defaults; una config de server inválida
+  se rechaza con error claro (borde de seguridad), no se ignora silenciosamente.
+- Tests: tool MCP sin annotations → default; server con config inválida → rechazo explícito.
 
 #### Fase M1 - Estado MCP separado
 
@@ -505,6 +520,50 @@ Criterios:
 - [ ] `compact_context` preserva memorias activas tras compactación.
 - [ ] Recall scopeado por `agent_id`: un hijo no ve memorias de otro agente salvo política.
 - [ ] Test de acoplamiento: el runtime no importa lógica de memoria.
+
+## Robustez Ante Skills/MCP De Terceros
+
+> Decisión de diseño validada contra el canónico (2026-06-16). Aplica a `SkillsProvider` (S0) y
+> `McpProvider` (M0). Motivada por la fragilidad observada en `agent_core` (versión preliminar,
+> todo mezclado): el enforcement de directivas del frontmatter era débil.
+
+### El hecho
+
+La spec de Agent Skills de Anthropic estandariza pocas directivas (`name`, `description`); y la spec
+de Model Context Protocol tampoco incluye varias props que el canónico usa (p.ej. `model`). Es decir,
+**propiedades operativas importantes NO son parte del estándar**. Como hoy hay registros y listas de
+terceros que consolidan skills/MCP, no controlamos esas propiedades: en skills/MCP de terceros
+simplemente no vendrán. El objetivo es **comportamiento estable con skills/MCP propios o de terceros**.
+
+### Cómo lo resuelve el canónico (patrón a replicar)
+
+Patrón único en skills y MCP: *schema abierto + parseo tolerante por campo con default definido +
+aislamiento por ítem; rigor solo en los bordes de seguridad/identidad.*
+
+1. **Schema abierto** — nunca rechaza claves desconocidas (`FrontmatterData` cierra con
+   `[key: string]: unknown`); estándar y extensiones operativas conviven.
+2. **Parseo total que nunca lanza** — sin frontmatter → `{}`; YAML inválido → reintento → log + `{}`.
+3. **Cada campo operativo degrada a un default que DEFINE comportamiento, no a error**:
+   `allowed-tools` ø → no activa tools extra; `model` ø/`inherit` → hereda el del padre;
+   `description` ø → se deriva del cuerpo; `effort`/`shell` inválidos → log + default.
+4. **Aislamiento por ítem** — un skill/server malformado se salta con log; el resto carga.
+5. **Rigor solo en seguridad/identidad** — validez de config de server se valida y **rechaza**
+   (no se ignora); skills remotas MCP nunca ejecutan shell inline. Tolerancia en lo operativo,
+   estrictez en lo que compromete seguridad.
+
+### La pregunta de diseño correcta
+
+No es "¿cómo forzar que traigan `allowed-tools`/`model`?" sino **"¿qué hace el sistema cuando NO
+vienen?"** — y la respuesta debe estar fijada por campo, con un default seguro y documentado.
+
+### Criterios de aceptación (S0/M0)
+
+- Modelo de metadata tipado (Pydantic): todo campo operativo `Optional` + default explícito; el
+  parser nunca lanza por campo ausente/malformado.
+- Tabla estándar-vs-operativo documentada en el provider, con el default-comportamiento de cada
+  campo operativo.
+- Aislamiento por ítem (un ítem malo no aborta la carga).
+- Estrictez reservada a bordes de seguridad/identidad (config de server, ejecución remota).
 
 ## Primitivas Fork Y Background (provistas por el runtime)
 
@@ -779,6 +838,24 @@ Al terminar:
 - Siguiente: M0 (McpProvider shell) según Orden Recomendado — MCP antes que Skills. Será el primer
   `CapabilityProvider` concreto que el integrador podrá registrar y cuyas tools convergerán por
   `build_tool_pool`.
+
+### 2026-06-16 — Decisión de diseño: robustez ante skills/MCP de terceros (S0/M0)
+
+- **Por qué ahora**: cerrar la idea antes de construir los providers. En `agent_core` (preliminar,
+  todo mezclado) se constató enforcement débil de las directivas del frontmatter. Propiedades
+  operativas clave (skill: `allowed-tools`; MCP: `model`) NO están en los estándares de Anthropic
+  Skills / MCP, y como skills/MCP se consumen de registros de terceros, no controlamos su presencia.
+- **Qué se hizo**: revisión directa del canónico (`skills/loadSkillsDir.ts`, `utils/frontmatterParser.ts`,
+  `services/mcp/config.ts`, `services/mcp/client.ts`) y se destiló el patrón: schema abierto +
+  parseo tolerante por campo con default que define comportamiento + aislamiento por ítem + rigor
+  solo en bordes de seguridad/identidad. Se agregó la sección "Robustez Ante Skills/MCP De Terceros"
+  y criterios de aceptación a S0 y M0.
+- **Insight central**: la pregunta no es cómo forzar las props no estándar, sino qué hace el sistema
+  cuando faltan — respuesta fijada por campo (`allowed-tools` ø → no activa nada; `model` ø → hereda).
+- **Asimetría clave**: tolerante en lo operativo, estricto en seguridad (config de server inválida se
+  rechaza; skill remota MCP nunca ejecuta shell inline). `CapabilitySummary` ya nació alineado
+  (campos opcionales con default); falta que S0/M0 hereden el contrato de robustez.
+- Doc-only; no se tocó código (los providers no existen aún). Sin tests nuevos en esta entrada.
 
 ### YYYY-MM-DD
 
