@@ -25,6 +25,9 @@ class McpTool:
     """
 
     category = ToolCategory.SYSTEM
+    # Las tools MCP son diferidas (workflow-specific): no se anuncian hasta que
+    # ToolSearch las descubre. Siguen ejecutables desde el pool (M3).
+    deferred = True
 
     def __init__(
         self,

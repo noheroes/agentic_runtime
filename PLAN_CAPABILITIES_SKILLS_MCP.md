@@ -425,17 +425,32 @@ runtime_v2/runtime_e2e/runtime_factory. Suite 255 passed. Lint limpio.
 
 #### Fase M3 - Deferred loading
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Mover `discovered_deferred_tools` a `McpState` o `CapabilityState`.
-- [ ] `ToolSearch` debe llamar `CapabilityManager.activate(...)`.
-- [ ] Skills allowed-tools debe activar MCP tools via permission/context, no via runtime.
-- [ ] El runtime no recibe `deferred_loading_enabled` como logica MCP.
+- [x] Mover `discovered_deferred_tools` a `CapabilityState` → estado de descubrimiento en
+      `ctx.app_state.capabilities["discovered_tools"]`, scopeado por agente (`tools/deferred.py`:
+      `discovered_tool_names`/`mark_tools_discovered`). No vive en `session.metadata`.
+- [x] `ToolSearch` descubre (activa): marca las matched en el estado del contexto y devuelve sus
+      schemas; en turnos siguientes se anuncian. (No llama un `manager.activate` aparte — la activación
+      ES el descubrimiento, como en el canónico vía historial; aquí materializado en el contexto.)
+- [~] Skills allowed-tools activa MCP tools via permission/context → la activación va por
+      descubrimiento (ToolSearch) + permiso, no por el runtime. El cruce skill→MCP se cierra en S2.
+- [x] El runtime/loop no recibe `deferred_loading_enabled` como lógica MCP → la proyección diferida
+      vive en `_schemas_for_turn` del loop sobre `is_deferred_tool`, agnóstica de MCP.
+
+**Alineamiento canónico:** `isDeferredTool` (MCP siempre diferido; ToolSearch nunca) → `is_deferred_tool`.
+`claude.ts` arma el anuncio = no-diferidas + ToolSearch + diferidas DESCUBIERTAS, y descarta ToolSearch
+si no hay diferidas → replicado en `_schemas_for_turn`. **Deferred es visibilidad, no disponibilidad**:
+la tool diferida sigue ejecutable desde `ctx.tool_pool` aunque no se anuncie (test que lo prueba).
 
 Criterios:
 
-- `runtime.py` no conoce deferred MCP.
-- ToolSearch no escribe session metadata MCP directamente.
+- `runtime.py` no conoce deferred MCP. ✓ (lógica en loop/deferred, sobre `is_deferred_tool`).
+- ToolSearch no escribe session metadata MCP directamente. ✓ (escribe `ctx.app_state.capabilities`).
+
+Evidencia M3: `tools/deferred.py` (`is_deferred_tool`, `discovered_tool_names`, `mark_tools_discovered`),
+`McpTool.deferred = True`, `AgentLoop._schemas_for_turn` (proyección), `ToolSearchTool.execute`
+(descubre + devuelve schemas, busca solo diferidas). Tests: `test_deferred_loading.py` (7). Suite 262.
 
 #### Fase M4 - MCP resources
 

@@ -74,14 +74,30 @@ class AgentLoop:
     def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
         """Schemas anunciados al modelo, derivados del pool ensamblado.
 
-        Filtra por permiso (una tool que requiere permiso solo se anuncia si está
-        permitida); `assemble()` ya quitó las denegadas. La proyección de diferidas
-        (ToolSearch) es M3 — aquí todas las tools del pool son visibles."""
+        - Permiso: una tool que requiere permiso solo se anuncia si está permitida
+          (`assemble()` ya quitó las denegadas) — modelo autónomo, sin prompt.
+        - Diferidas (M3, espejo de `claude.ts`): las tools diferidas (MCP) NO se
+          anuncian hasta que ToolSearch las descubre; ToolSearch solo se anuncia si
+          hay diferidas que descubrir. La ejecución no se ve afectada (viven en el pool).
+        """
+        from ..tools.deferred import discovered_tool_names, is_deferred_tool
+        from ..tools.native.tool_search import TOOL_SEARCH_TOOL_NAME
+
         allowed = ctx.permission_context.allowed_names()
+        pool = ctx.tool_pool.assemble(ctx.permission_context)
+        deferred_names = {t.name for t in pool if is_deferred_tool(t)}
+        tool_search_active = bool(deferred_names)
+        discovered = discovered_tool_names(ctx)
+
         schemas: list[dict] = []
-        for tool in ctx.tool_pool.assemble(ctx.permission_context):
+        for tool in pool:
             if tool.requires_permission and tool.name not in allowed:
                 continue
+            if tool.name == TOOL_SEARCH_TOOL_NAME:
+                if not tool_search_active:
+                    continue  # sin diferidas, no hay nada que buscar
+            elif tool.name in deferred_names and tool.name not in discovered:
+                continue  # diferida no descubierta → oculta hasta ToolSearch
             schemas.append(_tool_schema(tool))
         return schemas
 

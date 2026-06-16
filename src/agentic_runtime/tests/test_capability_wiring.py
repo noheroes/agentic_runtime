@@ -99,10 +99,10 @@ async def test_loop_assembles_native_plus_capability_pool_and_announces():
     await loop.run("hola", ctx)
 
     announced = {t["name"] for t in type(caller).captured_tools}
-    # native como prefijo + capability anunciada en el mismo pool
+    # native se anuncia; la MCP es diferida (M3) → NO se anuncia hasta descubrirse,
+    # pero ambas viven en el MISMO pool ensamblado (y son ejecutables desde él).
     assert "echo" in announced
-    assert "mcp_ping" in announced
-    # y el pool del ctx quedó poblado con ambas
+    assert "mcp_ping" not in announced
     pool_names = {t.name for t in ctx.tool_pool.assemble()}
     assert {"echo", "mcp_ping"} <= pool_names
 
