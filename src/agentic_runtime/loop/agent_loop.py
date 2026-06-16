@@ -227,6 +227,15 @@ class AgentLoop:
                     result=result.output,
                     is_error=getattr(result, "is_error", False),
                 ))
+                # Aplica el context_modifier que la tool haya producido (skills →
+                # allowed-tools/skill activa; worktree/plan_mode → estado nativo).
+                # Convención: el modifier muta ctx in-place y lo retorna (no forka).
+                modifier = getattr(result, "context_modifier", None)
+                if modifier is not None:
+                    try:
+                        ctx = modifier(ctx) or ctx
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("AgentLoop: context_modifier de %s falló: %s", tc.tool_name, exc)
                 logger.debug(
                     "AgentLoop turno %d: tool %s(%s) -> %s",
                     ctx.turn_count, tc.tool_name, tc.tool_input,

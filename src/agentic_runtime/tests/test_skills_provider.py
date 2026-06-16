@@ -155,13 +155,15 @@ def test_provider_catalog_emits_skill_summaries(tmp_path: Path):
     assert catalog[0].when_to_use == "dibuja"
 
 
-def test_provider_shell_returns_empty_for_unimplemented_phases():
+def test_provider_tool_and_context_depend_on_state():
     provider = SkillsProvider()
     provider.add_skill_text("s", _skill_md("description: d", "b"))
     ctx = _ctx()
-    assert provider.tools(ctx) == []  # SkillTool es S1
-    assert provider.active_context(ctx) == []  # S1/S3
-    assert provider.compact_context(ctx) == []  # S5
+    # con skills presentes, expone la tool `Skill` (S1)
+    assert [t.name for t in provider.tools(ctx)] == ["Skill"]
+    # sin skills activas en el ctx, no hay contexto activo/compact (S3/S5)
+    assert provider.active_context(ctx) == []
+    assert provider.compact_context(ctx) == []
 
 
 def test_add_skill_text_registers_and_is_retrievable():
@@ -184,5 +186,5 @@ def test_skills_catalog_flows_through_capability_manager():
     catalog = mgr.catalog(_ctx())
     assert {c.name for c in catalog} == {"alpha", "beta"}
     assert all(c.kind == "skill" for c in catalog)
-    # S0 no aporta tools: el pool sigue siendo solo el nativo
-    assert mgr.tools(_ctx()) == []
+    # con skills presentes, el provider aporta la tool `Skill` al pool (S1)
+    assert [t.name for t in mgr.tools(_ctx())] == ["Skill"]

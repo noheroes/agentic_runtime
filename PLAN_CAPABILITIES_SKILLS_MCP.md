@@ -217,19 +217,41 @@ frontmatter, espejo del canónico; no estaba en el repo).
 
 #### Fase S1 - Skill como comando procesado
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `SkillCommandProcessor`.
-- [ ] Renderizar skill con metadata.
-- [ ] Producir mensajes meta, no mensaje user plano.
-- [ ] Producir `allowed_tools`.
-- [ ] Producir `command_permissions` o equivalente Python.
-- [ ] Registrar invoked skill con contenido completo.
+- [x] Crear procesador de invocación (`skill_tool.py`: `SkillTool` + `render_skill` +
+      `build_skill_context_modifier`).
+- [x] Renderizar skill con metadata (`render_skill`: instrucciones + framing 'continúa, no reinvoques').
+- [x] Producir mensajes meta, no mensaje user plano → las instrucciones van como tool result (rol `tool`).
+- [x] Producir `allowed_tools` (del frontmatter, habilitados vía modifier).
+- [x] Producir `command_permissions` o equivalente → `PermissionContext.with_command_allow` en el modifier.
+- [x] Registrar invoked skill con contenido completo (`active_skills[name].content`, no solo el nombre).
 
 Criterios:
 
-- Una invocacion de `Skill` deja estado activo estructurado.
-- El modelo recibe instrucciones de skill sin tener que reinvocar.
+- Una invocacion de `Skill` deja estado activo estructurado. ✓ (`app_state.capabilities`).
+- El modelo recibe instrucciones de skill sin tener que reinvocar. ✓ (tool result + active_context).
+
+Evidencia S1: `capabilities/skills/skill_tool.py`. Tests: `test_skill_invocation.py`.
+
+#### Fase S2 - Context modifier de skills
+
+Estado: `[x] completado`
+
+- [x] `SkillTool` devuelve `context_modifier` (`result.context_modifier`, patrón ya usado por worktree/
+      plan_mode — antes **latente**: el loop no lo aplicaba; ahora sí).
+- [x] El modifier agrega allowed tools al `PermissionContext` (+ los marca descubiertos, cruce M3).
+- [x] El modifier agrega skill activa al `AppState` (`app_state.capabilities['active_skills']`).
+- [x] El runtime no deriva tools desde `invoked_skills` → no hay `_allowed_tools_for_invoked_skills`;
+      la habilitación va por permisos/contexto, no por lógica del runtime.
+
+Criterios:
+
+- `runtime.py` no contiene `_allowed_tools_for_invoked_skills`. ✓ (no existe tal función).
+- Tests verifican que allowed tools aparecen por permisos/contexto. ✓ (`test_skill_invocation`).
+
+**Cableado clave:** `AgentLoop` ahora aplica `result.context_modifier(ctx)` tras cada dispatch (mutación
+in-place). Esto también activa los modifiers de worktree/plan_mode/todo_write/config, antes muertos.
 
 #### Fase S2 - Context modifier de skills
 
@@ -247,17 +269,52 @@ Criterios:
 
 #### Fase S3 - Catalogo organico
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Mover construccion del catalogo a `SkillsProvider`.
-- [ ] Eliminar regla global "SKILL CHECK before EVERY step" de `sections.py`.
-- [ ] Catalogo debe servir para seleccion, no para reinvocacion.
-- [ ] Si una skill esta activa, el contexto debe decir que se continue siguiendo sus instrucciones.
+- [x] Mover construccion del catalogo a `SkillsProvider` (`catalog()`, desde S0).
+- [~] Eliminar regla global "SKILL CHECK before EVERY step" de `sections.py` → N/A: no hay `sections.py`
+      en este repo. El catálogo nace sin esa regla imperativa (es selección, no mandato).
+- [x] Catalogo debe servir para seleccion, no para reinvocacion → `catalog()` son `CapabilitySummary`
+      (nombre/descripción), sin "call Skill FIRST".
+- [x] Si una skill esta activa, el contexto debe decir que se continue siguiendo (`active_context`).
 
 Criterios:
 
-- Follow-ups no reinvocan skill por defecto.
-- `Skill(drawio-diagrams)` seguido de tareas internas habilita `drawio__*`.
+- Follow-ups no reinvocan skill por defecto. ✓ (`active_context` dice 'continúa', no 'reinvoca').
+- `Skill(drawio-diagrams)` seguido de tareas internas habilita `drawio__*`. ✓ (modifier marca allowed +
+  descubierto; cruce S2↔M3). Tests: `test_skill_invocation`.
+
+#### Fase S4 - Slash commands
+
+Estado: `[x] completado`
+
+- [x] Sacar `skills.dispatcher` del loop → N/A (el loop nunca importó skills); el procesamiento de slash
+      vive en `capabilities/skills/commands.py` (`parse_slash_command`, `process_slash_command`).
+- [x] Procesar slash commands mediante provider/command processor (`SkillsProvider.process_slash_command`).
+- [x] Mantener compatibilidad con `/skill args` (`parse_slash_command` separa nombre y args).
+- [~] Fork/background pasan por `ForkContext` → la activación de skill es inline; si un slash lanza
+      subagente, lo decide el runtime vía `RuntimeContextForker` (la capability no forka).
+
+Criterios:
+
+- `core/loop.py` no importa `skills.dispatcher`. ✓ (test de acoplamiento en `test_skill_slash`).
+- Slash skill produce los mismos eventos/efecto que la tool `Skill` (reusa `render_skill`+modifier). ✓
+
+#### Fase S5 - Compaction
+
+Estado: `[x] completado`
+
+- [x] SkillsProvider aporta compact context (`compact_context` = `active_context`).
+- [x] El texto sigue referencia: "continúa siguiendo" (no "re-invoke").
+- [~] Eliminar "re-invoke" de compactor base → N/A (no hay compactor base en este repo); el aporte del
+      provider nunca induce reinvocación.
+- [x] Guardar contenido de skills invocadas, no solo nombres (`active_skills[name].content`).
+
+Criterios:
+
+- Tras compactacion no se pierde skill activa. ✓ (`compact_context` reemite el contenido).
+- Tras compactacion no se induce reinvocacion. ✓ (test asserta ausencia de 'reinvoc'). El `Compactor`
+  consumirá `manager.compact_context()` — no importa `SkillsProvider` directamente.
 
 #### Fase S4 - Slash commands
 
@@ -292,13 +349,13 @@ Criterios:
 
 ### Tests Skills
 
-- [ ] Invocar skill agrega active skill context.
-- [ ] Invocar skill agrega allowed tools al permission context.
-- [ ] Follow-up usa tools permitidas sin reinvocar skill.
-- [ ] Compaction preserva instrucciones de skill.
-- [ ] No se inyecta catalogo como mandato de reinvocacion.
-- [ ] Slash inline funciona via provider.
-- [ ] Fork/background siguen funcionando.
+- [x] Invocar skill agrega active skill context (`test_skill_invocation`).
+- [x] Invocar skill agrega allowed tools al permission context (`test_skill_invocation`).
+- [x] Follow-up usa tools permitidas sin reinvocar skill (loop aplica modifier; permisos persisten).
+- [x] Compaction preserva instrucciones de skill (`test_skill_invocation::compact`).
+- [x] No se inyecta catalogo como mandato de reinvocacion (`active_context` dice 'continúa').
+- [x] Slash inline funciona via provider (`test_skill_slash`).
+- [~] Fork/background siguen funcionando → provistos por el runtime (no los toca la capability).
 
 ## MCP Provider
 

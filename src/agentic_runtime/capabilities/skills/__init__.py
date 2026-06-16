@@ -5,16 +5,25 @@ from .loader import (
     load_skill_text,
     load_skills_dir,
 )
+from .commands import SlashCommand, parse_slash_command, process_slash_command
 from .provider import SkillsProvider
+from .skill_tool import SKILL_TOOL_NAME, SkillTool, build_skill_context_modifier, render_skill
 from .state import SkillsState
 
 __all__ = [
+    "SKILL_TOOL_NAME",
     "SkillDefinition",
     "SkillFrontmatter",
+    "SkillTool",
     "SkillsProvider",
     "SkillsState",
+    "SlashCommand",
+    "build_skill_context_modifier",
+    "parse_slash_command",
+    "process_slash_command",
     "load_skill_file",
     "load_skill_text",
     "load_skills_dir",
     "parse_frontmatter",
+    "render_skill",
 ]

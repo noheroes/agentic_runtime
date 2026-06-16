@@ -63,6 +63,13 @@ class SkillsProvider:
         self._state.set_skill(skill)
         return skill
 
+    def process_slash_command(self, text: str, context: "ToolUseContext") -> str | None:
+        """Procesa `/<skill> args` (S4): activa la skill en el contexto y devuelve sus
+        instrucciones, o None si no aplica. El loop NO importa esto — lo usa el integrador."""
+        from .commands import process_slash_command
+
+        return process_slash_command(text, self._state, context)
+
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
@@ -84,16 +91,38 @@ class SkillsProvider:
         ]
 
     def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
-        # La tool `Skill` (invocación) es S1; el shell no aporta tools.
-        return []
+        # La tool `Skill` (invocación) solo si hay skills que invocar (S1).
+        if not self._state.all_skills():
+            return []
+        from .skill_tool import SkillTool
+
+        return [SkillTool(self._state)]
 
     def active_context(self, context: "ToolUseContext") -> list[dict]:
-        # Las instrucciones de skills activas (scopeadas por agent_id) son S1/S3.
-        return []
+        """Skills activas en este contexto → mensajes 'continúa siguiendo' (S3).
+
+        Scoped por agente: lee `app_state.capabilities['active_skills']` del ctx, que
+        la invocación pobló. No reinyecta el catálogo como mandato de reinvocación.
+        """
+        active = context.app_state.capabilities.get("active_skills", {})
+        messages: list[dict] = []
+        for name, info in active.items():
+            messages.append({
+                "role": "system",
+                "content": (
+                    f"Skill activa '{name}': continúa siguiendo sus instrucciones.\n\n"
+                    f"{info.get('content', '').strip()}"
+                ),
+            })
+        return messages
 
     def compact_context(self, context: "ToolUseContext") -> list[dict]:
-        # "continue to follow these guidelines" es S5.
-        return []
+        """Tras compactación: preservar skills activas como 'continue to follow' (S5).
+
+        Mismo aporte que `active_context` — el contenido de la skill sobrevive a la
+        compactación (no solo el nombre), y NO induce reinvocación.
+        """
+        return self.active_context(context)
 
 
 __all__ = ["SkillsProvider"]
