@@ -17,6 +17,29 @@ class McpToolError(Exception):
     """
 
 
+def _http_client_factory(ssl_verify: bool):
+    """Factory de cliente httpx para los transportes http/sse, respetando `ssl_verify`.
+
+    Cumple `McpHttpClientFactory(headers, timeout, auth) -> httpx.AsyncClient`. Con
+    `ssl_verify=False` desactiva la validación de certificados TLS (útil contra
+    servidores corporativos con CA propia o entornos de prueba). Borde de seguridad:
+    es una decisión explícita del que registra el server, nunca un default silencioso.
+    """
+    import httpx
+
+    def factory(headers=None, timeout=None, auth=None) -> "httpx.AsyncClient":
+        kwargs: dict[str, Any] = {"follow_redirects": True, "verify": ssl_verify}
+        if headers is not None:
+            kwargs["headers"] = headers
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx.AsyncClient(**kwargs)
+
+    return factory
+
+
 def _text_from_content(content: Any) -> str:
     """Extrae texto de los content blocks de un `CallToolResult`/`ReadResourceResult`.
 
@@ -57,9 +80,10 @@ class McpClient:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
+        transport = self._config.resolved_transport()
         stack = AsyncExitStack()
         try:
-            if self._config.command:
+            if transport == "stdio":
                 params = StdioServerParameters(
                     command=self._config.command,
                     args=list(self._config.args),
@@ -67,13 +91,24 @@ class McpClient:
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             else:
-                from mcp.client.streamable_http import streamablehttp_client
+                headers = self._config.auth_headers() or None
+                factory = _http_client_factory(self._config.ssl_verify)
+                if transport == "sse":
+                    from mcp.client.sse import sse_client
 
-                # streamablehttp_client cede (read, write, get_session_id)
-                transport = await stack.enter_async_context(
-                    streamablehttp_client(self._config.url, headers=dict(self._config.headers) or None)
-                )
-                read, write = transport[0], transport[1]
+                    streams = await stack.enter_async_context(
+                        sse_client(self._config.url, headers=headers, httpx_client_factory=factory)
+                    )
+                else:  # http (streamable)
+                    from mcp.client.streamable_http import streamablehttp_client
+
+                    # streamablehttp_client cede (read, write, get_session_id)
+                    streams = await stack.enter_async_context(
+                        streamablehttp_client(
+                            self._config.url, headers=headers, httpx_client_factory=factory
+                        )
+                    )
+                read, write = streams[0], streams[1]
 
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()

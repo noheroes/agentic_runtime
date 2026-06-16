@@ -6,20 +6,30 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 logger = logging.getLogger(__name__)
 
+_TRANSPORTS = {"http", "sse", "stdio"}
+
 
 class McpServerConfig(BaseModel):
-    """Config de un server MCP — schema abierto, estricta en identidad.
+    """Config de un server MCP — schema abierto, estricta en identidad/seguridad.
 
     Robustez ante terceros (ver plan §"Robustez Ante Skills/MCP De Terceros"):
     - `extra="allow"`: props operativas que NO son del estándar MCP (p.ej. props
       propias de un registro de terceros) se conservan sin romper el parseo.
-    - identidad/transporte (`command` xor `url`) es un borde de seguridad: se valida
-      y se RECHAZA si es inválida. La tolerancia es para lo operativo, no para esto.
+    - identidad/transporte y seguridad son bordes ESTRICTOS: se validan y RECHAZAN.
+      La tolerancia es para lo operativo, no para esto.
+
+    Contrato de registro:
+    - `type`: transporte explícito (`http`/`sse`/`stdio`). Si se omite, se infiere
+      (`command` → stdio; `url` → http) por compatibilidad.
+    - `url`: requerido para http/sse. `command`(+`args`/`env`): requerido para stdio.
+    - `auth`: esquema de autenticación. `bearer` exige `token` (borde de seguridad).
+    - `ssl_verify`: valida o no los certificados TLS (default True = valida).
     """
 
     model_config = ConfigDict(extra="allow")
 
     name: str
+    type: str | None = None
     # Transporte stdio
     command: str | None = None
     args: list[str] = []
@@ -27,20 +37,55 @@ class McpServerConfig(BaseModel):
     # Transporte http/sse
     url: str | None = None
     headers: dict[str, str] = {}
+    # Auth y TLS (seguridad)
+    auth: str | None = None
+    token: str | None = None
+    ssl_verify: bool = True
     # Operativo (opcional, con default — no del estándar MCP)
     timeout_seconds: float | None = None
     model: str | None = None
 
     @model_validator(mode="after")
-    def _exactly_one_transport(self) -> "McpServerConfig":
-        has_command = bool(self.command)
-        has_url = bool(self.url)
-        if has_command == has_url:  # ambos o ninguno
+    def _validate_identity_and_auth(self) -> "McpServerConfig":
+        kind = (self.type or "").lower().strip() or None
+        if kind is not None and kind not in _TRANSPORTS:
             raise ValueError(
-                f"MCP server {self.name!r}: debe especificar exactamente uno de "
-                f"'command' (stdio) o 'url' (http/sse)"
+                f"MCP server {self.name!r}: 'type' inválido {self.type!r} "
+                f"(debe ser uno de {sorted(_TRANSPORTS)})"
             )
+        if kind is None:
+            # Inferencia retro-compatible: exactamente uno de command/url.
+            has_command, has_url = bool(self.command), bool(self.url)
+            if has_command == has_url:  # ambos o ninguno → ambiguo
+                raise ValueError(
+                    f"MCP server {self.name!r}: especifica 'type', o exactamente uno "
+                    f"de 'command' (stdio) o 'url' (http/sse)"
+                )
+        elif kind == "stdio":
+            if not self.command:
+                raise ValueError(f"MCP server {self.name!r}: type='stdio' requiere 'command'")
+        else:  # http / sse
+            if not self.url:
+                raise ValueError(f"MCP server {self.name!r}: type={kind!r} requiere 'url'")
+
+        # Bearer es borde de seguridad: sin token no se asume anónimo silenciosamente.
+        if (self.auth or "").lower().strip() == "bearer" and not self.token:
+            raise ValueError(f"MCP server {self.name!r}: auth='bearer' requiere 'token'")
         return self
+
+    def resolved_transport(self) -> str:
+        """Transporte efectivo (`http`/`sse`/`stdio`), explícito o inferido."""
+        kind = (self.type or "").lower().strip()
+        if kind in _TRANSPORTS:
+            return kind
+        return "stdio" if self.command else "http"
+
+    def auth_headers(self) -> dict[str, str]:
+        """Headers de auth combinados con los explícitos (bearer → Authorization)."""
+        headers = dict(self.headers)
+        if (self.auth or "").lower().strip() == "bearer" and self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
 
 def parse_server_config(name: str, raw: dict) -> McpServerConfig:

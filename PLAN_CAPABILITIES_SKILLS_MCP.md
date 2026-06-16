@@ -439,6 +439,11 @@ Criterios:
   el transporte; `resources()` sale del estado poblado por `connect_server`).
 - Gmail adapter recibe provider/client resolver. → N/A en este repo (no hay Gmail adapter heredado).
 
+Contrato de registro (extendido): `McpServerConfig` soporta `url`, `type` (http/sse/stdio, explícito o
+inferido), `auth='bearer'`+`token` (→ header `Authorization`, estricto: bearer exige token) y `ssl_verify`
+(valida/omite TLS vía `httpx_client_factory`). `resolved_transport()`/`auth_headers()` lo materializan;
+`McpClient.connect` enruta a stdio/sse/streamable-http según `type`. Tests: `test_mcp_config_contract.py` (14).
+
 Evidencia M1: `capabilities/mcp/client.py` (`McpClient`: transporte stdio/streamable-http vía SDK `mcp`,
 `connect`/`list_tools`/`list_resources`/`call`/`read_resource`/`aclose`; `McpToolError` mapea
 `isError`→error sin re-llamar). `McpState` con `ServerStatus` (configured/pending/connected/failed) +
