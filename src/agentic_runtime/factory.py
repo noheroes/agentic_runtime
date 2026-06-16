@@ -33,6 +33,10 @@ class ToolsConfig:
 class CapabilitiesConfig:
     skill_catalog: Any = None
     resolve_timeout_seconds: float = 5.0
+    # Providers de capabilities (Skills/MCP) — el integrador declara qué conectar.
+    mcp_servers: dict[str, dict] = field(default_factory=dict)  # name -> raw server config
+    skill_dirs: list[Path] = field(default_factory=list)        # raíces <dir>/<skill>/SKILL.md
+    extra_providers: list[Any] = field(default_factory=list)    # CapabilityProvider adicionales
 
 
 @dataclass
@@ -68,6 +72,34 @@ class RuntimeFactory:
         cls._modes[name] = name if False else runtime_cls
 
     @classmethod
+    def _build_capability_manager(cls, caps: "CapabilitiesConfig") -> Any:
+        """Ensambla el CapabilityManager con providers MCP/Skills declarados.
+
+        Registra servers MCP y dirs de skills de forma tolerante (config inválida
+        no aborta el ensamblado). Los servers MCP se CONECTAN en `manager.startup()`
+        (lo invoca el integrador), no aquí — el factory no abre conexiones de red.
+        """
+        from .capabilities.manager import CapabilityManager
+        from .capabilities.mcp import McpProvider
+        from .capabilities.skills import SkillsProvider
+
+        providers: list[Any] = []
+
+        if caps.mcp_servers:
+            mcp = McpProvider()
+            mcp.load_servers(caps.mcp_servers)  # tolerante; conecta en startup()
+            providers.append(mcp)
+
+        if caps.skill_dirs:
+            skills = SkillsProvider()
+            for root in caps.skill_dirs:
+                skills.load_dir(root)
+            providers.append(skills)
+
+        providers.extend(caps.extra_providers)
+        return CapabilityManager(providers)
+
+    @classmethod
     def _build_local(cls, config: RuntimeConfig) -> Any:
         from .execution.local import LocalAgentRuntime
 
@@ -78,18 +110,23 @@ class RuntimeFactory:
         storage_kwargs.update(config.storage.extra_kwargs)
         storage = StorageRegistry.create(config.storage.backend, **storage_kwargs)
 
-        # Tools
+        # Tools nativas — input al ensamblado del pool, no lookup de ejecución
         tool_registry = create_tools(extras=config.tools.extras)
 
-        # Capabilities
+        # Capabilities: manager con providers (Skills/MCP). El pool por turno
+        # converge native + capability vía manager.build_tool_pool (alineado a
+        # assembleToolPool). Los providers se conectan en startup() (MCP) / al cargar.
+        capability_manager = cls._build_capability_manager(config.capabilities)
+
+        # Resolver legacy — conservado para compatibilidad; el loop usa el pool.
         capabilities_resolver = CapabilitiesResolver(
             tool_registry=tool_registry,
             skill_catalog=config.capabilities.skill_catalog,
             resolve_timeout_seconds=config.capabilities.resolve_timeout_seconds,
         )
 
-        # Tool dispatch — único puente loop ↔ tools
-        tool_dispatcher = ToolDispatcher(registry=tool_registry)
+        # Tool dispatch — único puente loop ↔ tools; resuelve desde ctx.tool_pool
+        tool_dispatcher = ToolDispatcher()
 
         # Presentación de paths — default identidad (canónico CLI/IDE)
         presentation = config.presentation or IdentityPresentation()
@@ -99,6 +136,8 @@ class RuntimeFactory:
 
         return LocalAgentRuntime(
             model_caller=config.model_caller,
+            tool_registry=tool_registry,
+            capability_manager=capability_manager,
             capabilities_resolver=capabilities_resolver,
             tool_dispatcher=tool_dispatcher,
             task_registry=config.task_registry,

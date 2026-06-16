@@ -53,6 +53,8 @@ class LocalAgentRuntime:
         self,
         *,
         model_caller: "Optional[ModelCallerProtocol]" = None,
+        tool_registry: Any = None,
+        capability_manager: Any = None,
         capabilities_resolver: "Optional[CapabilitiesResolver]" = None,
         tool_dispatcher: "Optional[ToolDispatcher]" = None,
         task_registry: Optional[TaskRegistryProtocol] = None,
@@ -66,6 +68,8 @@ class LocalAgentRuntime:
         default_timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._model_caller = model_caller
+        self._tool_registry = tool_registry
+        self._capability_manager = capability_manager
         self._capabilities_resolver = capabilities_resolver
         self._tool_dispatcher = tool_dispatcher
         self._task_registry = task_registry or InMemoryTaskRegistry()
@@ -81,6 +85,22 @@ class LocalAgentRuntime:
     @property
     def runtime_id(self) -> str:
         return "local"
+
+    # ------------------------------------------------------------------
+    # Ciclo de vida de capabilities (conecta/cierra providers: MCP, ...)
+    # ------------------------------------------------------------------
+
+    async def startup(self) -> None:
+        """Arranca los providers de capabilities (p.ej. conecta servers MCP).
+
+        Lo invoca el integrador antes de despachar tasks. Idempotente a nivel de
+        manager; sin manager es no-op (runtime solo-nativo)."""
+        if self._capability_manager is not None:
+            await self._capability_manager.startup()
+
+    async def shutdown(self) -> None:
+        if self._capability_manager is not None:
+            await self._capability_manager.shutdown()
 
     # ------------------------------------------------------------------
     # AgentRuntime
@@ -217,6 +237,8 @@ class LocalAgentRuntime:
 
         loop = AgentLoop(
             model_caller=self._model_caller,
+            tool_registry=self._tool_registry,
+            capability_manager=self._capability_manager,
             capabilities_resolver=self._capabilities_resolver,
             tool_dispatcher=self._tool_dispatcher,
             event_bus=bus,

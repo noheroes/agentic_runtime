@@ -9,6 +9,7 @@ from agentic_runtime.tools import (
     ToolRegistry,
     ToolResult,
 )
+from agentic_runtime.tools.pool import ToolPool
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.permissions import PermissionContext
 
@@ -57,8 +58,14 @@ class PermissionedTool:
         return ToolResult(tool_name=self.name, output="secret")
 
 
-def _ctx(stop: asyncio.Event | None = None) -> ToolUseContext:
-    return ToolUseContext(session_id="s1", stop=stop)
+def _ctx(*tools: ToolProtocol, stop: asyncio.Event | None = None) -> ToolUseContext:
+    # El dispatcher resuelve desde ctx.tool_pool (alineado al canónico): las tools
+    # del turno se siembran en el pool, no en un registry aparte.
+    return ToolUseContext(
+        session_id="s1",
+        stop=stop,
+        tool_pool=ToolPool(native_tools=list(tools)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -104,19 +111,16 @@ def test_registry_list_available_includes_all_in_foreground():
 
 @pytest.mark.asyncio
 async def test_dispatcher_resolves_and_executes():
-    reg = ToolRegistry()
-    reg.register(FastTool())
-    disp = ToolDispatcher(registry=reg)
+    disp = ToolDispatcher()
 
-    result = await disp.dispatch(tool_name="fast_tool", tool_input={}, ctx=_ctx())
+    result = await disp.dispatch(tool_name="fast_tool", tool_input={}, ctx=_ctx(FastTool()))
     assert result.output == "done"
     assert not result.is_error
 
 
 @pytest.mark.asyncio
 async def test_dispatcher_unknown_tool_returns_error():
-    reg = ToolRegistry()
-    disp = ToolDispatcher(registry=reg)
+    disp = ToolDispatcher()
 
     result = await disp.dispatch(tool_name="ghost", tool_input={}, ctx=_ctx())
     assert result.is_error
@@ -129,11 +133,9 @@ async def test_dispatcher_unknown_tool_returns_error():
 
 @pytest.mark.asyncio
 async def test_dispatcher_applies_timeout():
-    reg = ToolRegistry()
-    reg.register(SlowTool())
-    disp = ToolDispatcher(registry=reg)
+    disp = ToolDispatcher()
 
-    result = await disp.dispatch(tool_name="slow_tool", tool_input={}, ctx=_ctx())
+    result = await disp.dispatch(tool_name="slow_tool", tool_input={}, ctx=_ctx(SlowTool()))
     assert result.is_timeout
 
 
@@ -143,13 +145,11 @@ async def test_dispatcher_applies_timeout():
 
 @pytest.mark.asyncio
 async def test_dispatcher_aborts_if_event_set():
-    reg = ToolRegistry()
-    reg.register(FastTool())
-    disp = ToolDispatcher(registry=reg)
+    disp = ToolDispatcher()
 
     stop = asyncio.Event()
     stop.set()
-    result = await disp.dispatch(tool_name="fast_tool", tool_input={}, ctx=_ctx(stop=stop))
+    result = await disp.dispatch(tool_name="fast_tool", tool_input={}, ctx=_ctx(FastTool(), stop=stop))
     assert result.is_aborted
 
 
@@ -159,12 +159,10 @@ async def test_dispatcher_aborts_if_event_set():
 
 @pytest.mark.asyncio
 async def test_dispatcher_checks_permission_denied():
-    reg = ToolRegistry()
-    reg.register(PermissionedTool())
-    disp = ToolDispatcher(registry=reg)
+    disp = ToolDispatcher()
 
     # PermissionContext por defecto no tiene permisos
-    result = await disp.dispatch(tool_name="permissioned_tool", tool_input={}, ctx=_ctx())
+    result = await disp.dispatch(tool_name="permissioned_tool", tool_input={}, ctx=_ctx(PermissionedTool()))
     assert result.is_error
 
 
@@ -172,12 +170,14 @@ async def test_dispatcher_checks_permission_denied():
 async def test_dispatcher_allows_permissioned_tool_when_granted():
     from agentic_runtime.context.tool_use import AppState
 
-    reg = ToolRegistry()
-    reg.register(PermissionedTool())
-    disp = ToolDispatcher(registry=reg)
+    disp = ToolDispatcher()
 
     perms = PermissionContext(always_allow_command=["permissioned_tool"])
-    ctx = ToolUseContext(session_id="s1", app_state=AppState(permissions=perms))
+    ctx = ToolUseContext(
+        session_id="s1",
+        app_state=AppState(permissions=perms),
+        tool_pool=ToolPool(native_tools=[PermissionedTool()]),
+    )
     result = await disp.dispatch(tool_name="permissioned_tool", tool_input={}, ctx=ctx)
     assert not result.is_error
     assert result.output == "secret"

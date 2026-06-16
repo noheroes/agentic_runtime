@@ -14,6 +14,7 @@ from agentic_runtime.contracts.storage import PathPresentation
 from agentic_runtime.events import DoneEvent, EventBus, ToolCallEvent, ToolResultEvent
 from agentic_runtime.loop.agent_loop import AgentLoop
 from agentic_runtime.tools import ToolCategory, ToolDispatcher, ToolRegistry, ToolResult
+from agentic_runtime.tools.pool import ToolPool
 
 
 _REAL = "/srv/agents/u42/work/secret.txt"
@@ -45,13 +46,16 @@ class FakePresentation:
 
 
 def _dispatcher() -> ToolDispatcher:
-    reg = ToolRegistry()
-    reg.register(PathLeakingTool())
-    return ToolDispatcher(registry=reg)
+    return ToolDispatcher()
+
+
+def _pool() -> ToolPool:
+    # El dispatcher resuelve desde ctx.tool_pool (alineado al canónico).
+    return ToolPool(native_tools=[PathLeakingTool()])
 
 
 def test_identity_is_noop():
-    ctx = ToolUseContext(session_id="s1", presentation=IdentityPresentation())
+    ctx = ToolUseContext(session_id="s1", presentation=IdentityPresentation(), tool_pool=_pool())
     result = asyncio.run(
         _dispatcher().dispatch(tool_name="leak", tool_input={}, ctx=ctx)
     )
@@ -59,7 +63,7 @@ def test_identity_is_noop():
 
 
 def test_no_presentation_is_noop():
-    ctx = ToolUseContext(session_id="s1")  # presentation=None
+    ctx = ToolUseContext(session_id="s1", tool_pool=_pool())  # presentation=None
     result = asyncio.run(
         _dispatcher().dispatch(tool_name="leak", tool_input={}, ctx=ctx)
     )
@@ -67,7 +71,7 @@ def test_no_presentation_is_noop():
 
 
 def test_fake_presentation_hides_real_path():
-    ctx = ToolUseContext(session_id="s1", presentation=FakePresentation())
+    ctx = ToolUseContext(session_id="s1", presentation=FakePresentation(), tool_pool=_pool())
     result = asyncio.run(
         _dispatcher().dispatch(tool_name="leak", tool_input={}, ctx=ctx)
     )
@@ -105,7 +109,8 @@ def test_choke_point_covers_messages_and_bus():
     ctx = ToolUseContext(session_id="s1", presentation=FakePresentation())
     loop = AgentLoop(
         model_caller=_ScriptedCaller(),
-        tool_dispatcher=ToolDispatcher(registry=reg),
+        tool_registry=reg,
+        tool_dispatcher=ToolDispatcher(),
         event_bus=bus,
     )
     asyncio.run(loop.run("go", ctx))

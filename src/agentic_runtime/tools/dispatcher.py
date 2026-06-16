@@ -6,7 +6,6 @@ from typing import Optional
 import agentic_models
 
 from .protocol import ToolResult
-from .registry import ToolRegistry
 
 from ..context.tool_use import ToolUseContext
 
@@ -16,10 +15,14 @@ class ToolDispatcher:
     Único punto de integración entre ToolUseContext y ToolProtocol.
 
     El loop llama a dispatch(); ni el loop ni las tools se tocan entre sí.
+
+    Resolución alineada al canónico: la tool se resuelve por nombre desde el pool
+    ensamblado del turno (`ctx.tool_pool`), igual que `findToolByName(options.tools,
+    name)`. No hay registry nativo aparte para ejecutar: MCP/skills y nativas son
+    uniformes en el pool. El loop puebla `ctx.tool_pool` por turno.
     """
 
-    def __init__(self, *, registry: ToolRegistry, timeout_override: Optional[float] = None) -> None:
-        self._registry = registry
+    def __init__(self, *, timeout_override: Optional[float] = None) -> None:
         self._timeout_override = timeout_override
 
     async def dispatch(
@@ -51,9 +54,9 @@ class ToolDispatcher:
         if ctx.stop and ctx.stop.is_set():
             return ToolResult.aborted(tool_name)
 
-        tool = self._registry.resolve(tool_name)
+        tool = ctx.tool_pool.find(tool_name, ctx.permission_context)
         if tool is None:
-            return ToolResult.error(tool_name, f"tool '{tool_name}' no encontrado en el registry")
+            return ToolResult.error(tool_name, f"tool '{tool_name}' no encontrado en el tool pool")
 
         # Permission check
         if tool.requires_permission:

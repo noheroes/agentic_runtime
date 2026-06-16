@@ -393,18 +393,35 @@ MCP vivo — se cubrirá con la referencia real al integrar).
 
 #### Fase M2 - Tool pool MCP
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado` (incluye cableado C1/C2 — aprobado explícitamente, R4)
 
-- [ ] Sacar MCP wrappers del registry nativo.
-- [ ] `McpProvider.tools(context)` devuelve tools activas.
-- [ ] `ToolPoolAssembler` combina native + MCP.
-- [ ] Deduplicar con prioridad native.
-- [ ] Orden estable siguiendo referencia.
+- [x] Sacar MCP wrappers del registry nativo → nunca estuvieron ahí; el dispatcher ya NO usa el
+      registry nativo para ejecutar. Las MCP viven solo en el provider.
+- [x] `McpProvider.tools(context)` devuelve tools activas (desde `McpState`).
+- [x] `ToolPoolAssembler` combina native + MCP → `CapabilityManager.build_tool_pool` + `ToolPool.assemble`.
+- [x] Deduplicar con prioridad native (en `assemble_tool_pool`, ya desde C0).
+- [x] Orden estable siguiendo referencia (native prefijo, ambos sorted por nombre — cache-estable).
+
+**Alineamiento canónico (contrastado, ver memoria de decisión):** el canónico resuelve la ejecución
+con `findToolByName(toolUseContext.options.tools, name)` — el MISMO pool ensamblado que anuncia, no un
+registry aparte. Adaptación aprobada: el loop ensambla `ctx.tool_pool` por turno
+(`manager.build_tool_pool(registry.list_available(mode), ctx)`), deriva los schemas de él, y el
+`ToolDispatcher` resuelve la ejecución desde `ctx.tool_pool.find(name)`. El `ToolRegistry` pasó a ser
+solo **input** del ensamblado (análogo `getAllBaseTools()`), ya no lookup de ejecución.
 
 Criterios:
 
-- `registry.py` no interpreta nombres con `__`.
-- `main.py` no registra MCP wrappers en registry nativo.
+- `registry.py` no interpreta nombres con `__`. ✓ (nunca lo hizo; el dispatcher ya no lo consulta).
+- `main.py` no registra MCP wrappers en registry nativo. ✓ (no hay main.py; el provider las posee y
+  convergen por el manager).
+
+Evidencia M2/cableado: `ToolPool.find` (findToolByName), `ToolDispatcher` sin registry (resuelve de
+`ctx.tool_pool`), `AgentLoop` (`tool_registry`+`capability_manager`: `_build_tool_pool`+`_schemas_for_turn`),
+`LocalAgentRuntime` (`startup`/`shutdown` conectan/cierran providers), `factory._build_capability_manager`
+(registra McpProvider/SkillsProvider desde `CapabilitiesConfig.mcp_servers`/`skill_dirs`/`extra_providers`).
+Tests: `test_capability_wiring.py` (4: anuncio+ejecución de tool MCP desde pool con registry nativo vacío,
+factory registra provider, startup conecta). Migrados a pool: dispatcher/agent_loop/path_presentation/
+runtime_v2/runtime_e2e/runtime_factory. Suite 255 passed. Lint limpio.
 
 #### Fase M3 - Deferred loading
 
@@ -631,7 +648,8 @@ Estado: `[~] en progreso`
 Tareas:
 
 - [x] Crear `CapabilityManager` con lista de providers registrados.
-- [ ] Registrar `SkillsProvider` y `McpProvider` en el manager.  ← pendiente: aún no existen los providers (M0/S0).
+- [x] Registrar `SkillsProvider` y `McpProvider` en el manager (vía `factory._build_capability_manager`
+      desde `CapabilitiesConfig`; cableado al loop por turno — M2).
 - [x] Exponer `catalog(context) -> list[CapabilitySummary]`.
 - [x] Exponer `tools(context) -> list[Tool]`.
 - [x] Exponer `compact_context(context) -> list[dict]`.

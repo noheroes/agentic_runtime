@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from ..capabilities.resolver import CapabilitiesResolver
 from ..context.tool_use import ToolUseContext
@@ -10,10 +10,20 @@ from ..events.bus import EventBus
 from ..events.event_types import DoneEvent, ErrorEvent, Event, TokenEvent, ToolCallEvent, ToolResultEvent
 from ..models.protocol import ModelCallerProtocol
 from ..tools.dispatcher import ToolDispatcher
+from ..tools.pool import ToolPool
+
+if TYPE_CHECKING:
+    from ..capabilities.manager import CapabilityManager
+    from ..tools.protocol import ToolProtocol
+    from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 _MAX_TURNS = 50  # techo de seguridad para evitar loops infinitos
+
+
+def _tool_schema(tool: "ToolProtocol") -> dict:
+    return {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
 
 
 class AgentLoop:
@@ -33,17 +43,47 @@ class AgentLoop:
         self,
         *,
         model_caller: Optional[ModelCallerProtocol] = None,
+        tool_registry: "Optional[ToolRegistry]" = None,
+        capability_manager: "Optional[CapabilityManager]" = None,
         capabilities_resolver: Optional[CapabilitiesResolver] = None,
         tool_dispatcher: Optional[ToolDispatcher] = None,
         event_bus: Optional[EventBus] = None,
         model_id: str = "",
     ) -> None:
         self._model_caller = model_caller
+        self._tool_registry = tool_registry
+        self._capability_manager = capability_manager
         self._capabilities_resolver = capabilities_resolver
         self._tool_dispatcher = tool_dispatcher
         self._event_bus = event_bus
         self._model_id = model_id
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
+
+    def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
+        """Ensambla el pool del turno (= `assembleToolPool`): native (filtrado por
+        kind) + capability. El registry nativo es solo input; un subagente unattended
+        recibe solo tools `safe_for_background` (B3)."""
+        native: list["ToolProtocol"] = []
+        if self._tool_registry is not None:
+            mode = "background" if ctx.is_subagent else "foreground"
+            native = self._tool_registry.list_available(mode=mode)
+        if self._capability_manager is not None:
+            return self._capability_manager.build_tool_pool(native, ctx)
+        return ToolPool(native_tools=native)
+
+    def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
+        """Schemas anunciados al modelo, derivados del pool ensamblado.
+
+        Filtra por permiso (una tool que requiere permiso solo se anuncia si está
+        permitida); `assemble()` ya quitó las denegadas. La proyección de diferidas
+        (ToolSearch) es M3 — aquí todas las tools del pool son visibles."""
+        allowed = ctx.permission_context.allowed_names()
+        schemas: list[dict] = []
+        for tool in ctx.tool_pool.assemble(ctx.permission_context):
+            if tool.requires_permission and tool.name not in allowed:
+                continue
+            schemas.append(_tool_schema(tool))
+        return schemas
 
     async def _emit(self, event: Event) -> None:
         if self._event_bus is not None:
@@ -84,8 +124,15 @@ class AgentLoop:
 
             ctx.turn_count += 1
 
-            # Resuelve capabilities para este turno
-            if self._capabilities_resolver is not None:
+            # Resuelve tools del turno. Modelo alineado al canónico: se ensambla un
+            # único pool (native + capability) en ctx.tool_pool y los schemas se
+            # derivan de él; la ejecución (dispatcher) resuelve del MISMO pool.
+            if self._tool_registry is not None or self._capability_manager is not None:
+                ctx.tool_pool = self._build_tool_pool(ctx)
+                tool_schemas = self._schemas_for_turn(ctx)
+            elif self._capabilities_resolver is not None:
+                # Path legacy (solo schemas): el dispatcher resuelve de ctx.tool_pool,
+                # así que NO ejecuta tools por esta vía — solo las anuncia.
                 resolved = await self._capabilities_resolver.resolve(ctx)
                 tool_schemas = resolved.tool_schemas
             else:

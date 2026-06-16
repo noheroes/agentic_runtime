@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_runtime.capabilities.resolver import CapabilitiesResolver
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.execution.fork import ForkSnapshot
@@ -45,8 +44,8 @@ def _make_runtime(caller, *, tools=(), task_registry=None, hook_runner=None, sma
         reg.register(t)
     return LocalAgentRuntime(
         model_caller=caller,
-        capabilities_resolver=CapabilitiesResolver(tool_registry=reg),
-        tool_dispatcher=ToolDispatcher(registry=reg),
+        tool_registry=reg,
+        tool_dispatcher=ToolDispatcher(),
         task_registry=task_registry or InMemoryTaskRegistry(),
         hook_runner=hook_runner,
         small_llm=small_llm,

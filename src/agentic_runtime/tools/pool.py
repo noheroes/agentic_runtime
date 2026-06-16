@@ -26,6 +26,24 @@ class ToolPool(BaseModel):
             permission_context or PermissionContext(),
         )
 
+    def find(
+        self,
+        name: str,
+        permission_context: PermissionContext | None = None,
+    ) -> ToolProtocol | None:
+        """Resuelve una tool por nombre desde el pool ensamblado.
+
+        Análogo de `findToolByName(toolUseContext.options.tools, name)` del canónico:
+        la ejecución resuelve desde el MISMO pool que se anuncia (native + capability,
+        dedup native-gana, deny aplicado). No hay un registry aparte para ejecutar.
+        Las tools diferidas (no anunciadas hasta activarse) siguen siendo ejecutables
+        porque viven en el pool — deferred es visibilidad, no disponibilidad.
+        """
+        for tool in self.assemble(permission_context):
+            if tool.name == name:
+                return tool
+        return None
+
 
 def assemble_tool_pool(
     native_tools: list[ToolProtocol],
