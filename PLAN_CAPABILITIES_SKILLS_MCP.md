@@ -182,25 +182,38 @@ Skill invocation debe producir:
 
 #### Fase S0 - Provider shell
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `SkillsProvider`.
-- [ ] Mover acceso a `skills.loader` detras del provider.
-- [ ] Exponer catalogo desde provider.
-- [ ] Mantener `SkillTool` actual como adapter temporal.
-- [ ] Tests de catalogo.
-- [ ] Parseo de frontmatter **tolerante** (ver "Robustez ante skills/MCP de terceros"):
-      modelo de metadata tipado (Pydantic) con todo campo operativo `Optional` + default
-      explícito; el parser nunca lanza por campo ausente/malformado.
-- [ ] Aislamiento por ítem: un `SKILL.md` malformado se salta con log, no aborta la carga del resto.
+- [x] Crear `SkillsProvider` (segundo `CapabilityProvider` concreto, `capabilities/skills/`).
+- [~] Mover acceso a `skills.loader` detras del provider. → N/A en este repo: no existe loader de
+      skills heredado (eso era `new_core`). El loader nace dentro del provider (`skills/loader.py`),
+      detrás de él; el integrador carga vía `provider.load_dir(...)`.
+- [x] Exponer catalogo desde provider (`catalog(context)` → `CapabilitySummary(kind="skill")`).
+- [~] Mantener `SkillTool` actual como adapter temporal. → N/A (no hay `SkillTool` heredado). La tool
+      de invocación `Skill` se construye en S1; en S0 `tools()` devuelve `[]` (shell honesto).
+- [x] Tests de catalogo.
+- [x] Parseo de frontmatter **tolerante** (`skills/frontmatter.py`): `SkillFrontmatter` (`extra="allow"`,
+      todo campo operativo `Optional` con validadores `mode="before"` que degradan tipos inválidos a
+      default); `parse_frontmatter` nunca lanza (sin frontmatter / YAML inválido / no-mapping → `{}`).
+- [x] Aislamiento por ítem: `load_skills_dir` salta con log un `SKILL.md` ilegible; un frontmatter
+      corrupto carga igual con defaults (identidad desde el directorio), no aborta la carga del resto.
 
 Criterios:
 
-- `chat.py` puede pedir catalogo al manager, no a `skills.loader`.
-- No cambia comportamiento aun.
+- `chat.py` puede pedir catalogo al manager, no a `skills.loader`. ✓ (vía `CapabilityManager.catalog`;
+  el wiring real en `chat.py` es fase C — el contrato ya lo permite).
+- No cambia comportamiento aun. ✓ (`tools/active_context/compact_context` vacíos; declarado, no fingido).
 - Una skill de terceros con frontmatter mínimo (solo `name`/`description`, sin `allowed-tools`
-  ni `model`) carga y opera con defaults definidos: no activa tools extra; hereda el modelo del padre.
-- Tests: frontmatter ausente/parcial/malformado → carga estable con defaults, sin excepción.
+  ni `model`) carga y opera con defaults definidos: no activa tools extra; hereda el modelo del padre. ✓
+- Tests: frontmatter ausente/parcial/malformado → carga estable con defaults, sin excepción. ✓
+
+Evidencia S0: `capabilities/skills/{frontmatter,loader,state,provider}.py`. `SkillFrontmatter`
+(`extra="allow"`, `allowed-tools` acepta lista o CSV, `name`/`description`/`model` no-string → `None`).
+`parse_frontmatter` total. `SkillDefinition` tipada: `name` ← dir cuando falta, `description` ← primer
+párrafo del cuerpo cuando falta, `model` ø/`inherit` → `None` (hereda), `allowed_tools` ø → `[]`.
+`load_skills_dir` aísla por ítem. `SkillsProvider` cumple `CapabilityProvider`; su catálogo converge por
+`CapabilityManager`. 18 tests en `test_skills_provider.py`. Dependencia nueva: `pyyaml` (parseo YAML del
+frontmatter, espejo del canónico; no estaba en el repo).
 
 #### Fase S1 - Skill como comando procesado
 
@@ -892,6 +905,39 @@ Al terminar:
   como tools del provider (M4). Cableado en loop/factory pendiente (no se registró el provider en
   `factory.py` aún — lo hará el integrador / fase de wiring).
 - Siguiente: S0 (SkillsProvider shell) — mismo contrato de robustez — o M1 (estado/cliente MCP).
+
+### 2026-06-16 — S0: SkillsProvider shell (segundo CapabilityProvider concreto)
+
+- Implementado `capabilities/skills/`: `frontmatter.py` (`SkillFrontmatter` schema abierto + parseo
+  total), `loader.py` (`SkillDefinition` tipada + `load_skill_text`/`load_skill_file`/`load_skills_dir`),
+  `state.py` (`SkillsState` separado del registry), `provider.py` (`SkillsProvider`).
+- **Por qué se adaptó el S0 del plan**: igual que M0, sus bullets ("mover `skills.loader`", "mantener
+  `SkillTool`") describían `new_core`. En este repo no hay loader de skills ni `SkillTool` heredados:
+  S0 aquí = construir el shell desde cero con el contrato de robustez. El loader nace **dentro** del
+  provider; la tool `Skill` (invocación) es S1, por eso `tools()`/`active_context()`/`compact_context()`
+  devuelven `[]` hoy — declarado, no fingido (no fuerza avance aparente).
+- **Robustez aplicada (no teórica)**: la pregunta "¿qué hace el sistema cuando NO vienen?" resuelta por
+  campo — `name` ø/no-string → identidad desde el nombre del directorio; `description` ø → primer
+  párrafo del cuerpo; `model` ø/`inherit` → `None` (hereda el del padre); `allowed-tools` ø → `[]` (no
+  activa nada), acepta lista o CSV. `parse_frontmatter` nunca lanza (sin frontmatter / YAML inválido /
+  no-mapping → `{}`). Aislamiento por ítem en `load_skills_dir`. **Sin borde estricto**: a diferencia de
+  M0 (config de server), la identidad de skill siempre se resuelve desde el directorio, así que no hay
+  nada que rechazar — la tabla estándar-vs-operativo queda documentada en el docstring del provider.
+- **Decisión sobre YAML**: el frontmatter ES YAML y el contrato exige "YAML inválido → log + {}";
+  escribir un parser a mano sería frágil/heurístico (R1). Se añadió `pyyaml` como dependencia (no estaba
+  en el repo) — herramienta correcta, espejo del canónico; no es cambio arquitectónico.
+- **Convergencia verificada**: `SkillsProvider` cumple `CapabilityProvider`; su catálogo fluye por
+  `CapabilityManager.catalog`. Al no aportar tools en S0, el pool sigue siendo solo el nativo.
+- Probado: `test_skills_provider.py` (18): contrato, frontmatter ausente/abierto-sin-cierre/YAML
+  inválido/no-mapping/schema abierto/no-string/allowed-tools lista+CSV, defaults por campo, override de
+  `name`, `model: inherit`→None, aislamiento por ítem en dir, catálogo, shell honesto vacío, convergencia
+  con C0. Suite **245 passed, 0 skipped** (227 → +18). Lint limpio.
+- No probado / pendiente: invocación de skill como comando procesado (S1), context modifier de
+  allowed-tools (S2), catálogo orgánico sin "SKILL CHECK before EVERY step" (S3), slash commands (S4),
+  compactación (S5). Cableado en `chat.py`/loop/`factory.py` = fases C — el provider aún NO está en
+  `factory.py`.
+- Siguiente: registrar `SkillsProvider`+`McpProvider` en el manager vía `factory.py` y consumir
+  `build_tool_pool` por turno en el loop (fases C1/C2), o M1 (cliente MCP real), o S1 (invocación).
 
 ### YYYY-MM-DD
 

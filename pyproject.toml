@@ -7,6 +7,7 @@ dependencies = [
     "agentic-models",
     "openai>=2.29.0",
     "mcp>=1.26.0",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]

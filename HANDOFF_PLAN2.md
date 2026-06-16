@@ -7,9 +7,9 @@
 ## Cómo retomar (enunciado sugerido al reentrar)
 
 > "Retoma el Plan 2 en este repo. Lee HANDOFF_PLAN2.md (en especial §0 Estado al reentrar) y
-> PLAN_CAPABILITIES_SKILLS_MCP.md. Estás en la rama `feature/capabilities` con C0 y M0 cerrados
-> (227 passed, 0 skipped). Sigue por S0 (SkillsProvider shell) aplicando el contrato de robustez
-> de la sección 'Robustez Ante Skills/MCP De Terceros'. TDD, 1 commit por fase, PR --base main al cerrar."
+> PLAN_CAPABILITIES_SKILLS_MCP.md. Estás en la rama `feature/capabilities` con C0, M0 y S0 cerrados
+> (245 passed, 0 skipped). Sigue por el cableado (fases C: registrar providers en factory.py y consumir
+> build_tool_pool en el loop) o por S1/M1. TDD, 1 commit por fase, PR --base main al cerrar."
 
 ---
 
@@ -30,19 +30,25 @@
    (`McpState`, separado del registry nativo), `provider.py`. Transporte (`McpCall`) inyectado, sin fake.
    Tests: `test_mcp_provider.py`. Primer `CapabilityProvider` concreto; sus tools convergen por el manager.
 4. `chore` — `.gitignore` blindado para secretos de E2E (`.env`, `*.env`, `certs/`, `*.pem`, `src/agent_core/`).
+5. `S0` — `SkillsProvider` shell (`capabilities/skills/`): `frontmatter.py` (`SkillFrontmatter` schema
+   abierto + `parse_frontmatter` total que nunca lanza), `loader.py` (`SkillDefinition` tipada +
+   `load_skills_dir` con aislamiento por ítem), `state.py` (`SkillsState`), `provider.py`. Segundo
+   `CapabilityProvider` concreto; su catálogo converge por el manager. Frontmatter tolerante: `name` ←
+   directorio, `description` ← cuerpo, `model` ø/`inherit` → hereda, `allowed-tools` ø → `[]`. Dependencia
+   nueva: `pyyaml`. Tests: `test_skills_provider.py` (18).
 
-**Verde actual: `227 passed, 0 skipped`** (era 193/5 al inicio). Lint `uvx ruff check src/agentic_runtime` limpio.
-Los antiguos 5 skips ya corren: **bwrap instalado** (sandbox real OK bajo WSL2) y **config Azure portada**
-a `src/agent_core/.env` + `certs/cacert.pem` (ambos gitignored; los 4 E2E reales contra gpt-5.4-mini pasan).
-Si clonas en otra máquina sin esos archivos, esos 5 volverán a omitirse (gating correcto).
+**Verde actual: `245 passed, 0 skipped`** (era 193/5 al inicio, 227 tras M0). Lint `uvx ruff check
+src/agentic_runtime` limpio. Los antiguos 5 skips corren: **bwrap instalado** (sandbox real OK bajo WSL2)
+y **config Azure portada** a `src/agent_core/.env` + `certs/cacert.pem` (ambos gitignored; los 4 E2E
+reales contra gpt-5.4-mini pasan). Si clonas en otra máquina sin esos archivos, esos 5 vuelven a omitirse.
 
-**Siguiente paso recomendado: S0 (SkillsProvider shell)** — mismo patrón que M0, heredando el contrato de
-robustez (frontmatter tolerante: `name`/`description` estándar; `allowed-tools`/`model`/etc. operativos
-opcionales con default; aislamiento por ítem). Alternativa: M1 (estado/cliente MCP real). C1/C2/C3 (wiring
-en chat/loop/compactor) dependen de tener S0+M0; el provider aún NO está registrado en `factory.py`.
+**Siguiente paso recomendado: cableado (fases C) o S1.** Con S0+M0 cerrados, registrar ambos providers
+en `factory.py` (C1) y consumir `build_tool_pool` por turno en el loop (C2). Alternativas: S1 (invocación
+de skill como comando procesado, produce la tool `Skill` + estado activo) o M1 (cliente MCP real).
 
 **Recordatorio de lo que NO está cableado aún (declarado, no fingido):** el loop no consume
-`build_tool_pool` por turno (Fase C2); `McpProvider` no está en `factory.py`; transporte MCP real = M1.
+`build_tool_pool` por turno (Fase C2); ni `McpProvider` ni `SkillsProvider` están en `factory.py`;
+`SkillsProvider.tools()` devuelve `[]` (la tool `Skill` es S1); transporte MCP real = M1.
 
 ---
 
