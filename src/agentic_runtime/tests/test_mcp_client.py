@@ -81,8 +81,11 @@ async def test_connect_discovers_tools_and_marks_connected():
 
     assert ok is True
     assert provider.state.status("srv") is ServerStatus.CONNECTED
-    assert [t.name for t in provider.tools(_ctx())] == ["alpha", "beta"]
-    assert provider.resources(_ctx()) == [{"uri": "mcp://r"}]
+    tool_names = [t.name for t in provider.tools(_ctx())]
+    assert tool_names[:2] == ["alpha", "beta"]  # tools del server como prefijo
+    # con resources presentes, el provider añade además las resource tools (M4)
+    assert {"ListMcpResources", "ReadMcpResource"} <= set(tool_names)
+    assert provider.resources(_ctx()) == [{"uri": "mcp://r", "server": "srv"}]
     assert provider.state.connected_servers() == ["srv"]
 
 

@@ -115,6 +115,32 @@ class McpProvider:
         self._state.set_status(name, ServerStatus.CONNECTED)
         return True
 
+    # --- gestión en runtime (M5: la capa "service" que una API /mcp llamaría) ---
+
+    async def disconnect_server(self, name: str) -> None:
+        """Cierra el client de un server pero conserva su config (queda CONFIGURED)."""
+        client = self._state.get_client(name)
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mcp: error cerrando client %r: %s", name, exc)
+        self._state.remove_client(name)
+        self._state.set_tools(name, [])
+        self._state.set_resources(name, [])
+        if name in self._state.servers:
+            self._state.set_status(name, ServerStatus.CONFIGURED)
+
+    async def remove_server(self, name: str) -> None:
+        """Desconecta y elimina el server por completo (config incluida)."""
+        await self.disconnect_server(name)
+        self._state.remove_server(name)
+
+    async def reconnect_server(self, name: str) -> bool:
+        """Reconecta un server (toggle/refresh). El pool se reensambla solo por turno."""
+        await self.disconnect_server(name)
+        return await self.connect_server(name)
+
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
@@ -130,8 +156,15 @@ class McpProvider:
                 logger.warning("mcp: error cerrando client %r: %s", name, exc)
 
     def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
-        # Deferred loading (qué tools exponer según contexto) es M3.
-        return self._state.all_tools()
+        tools: list["ToolProtocol"] = list(self._state.all_tools())
+        # M4: tools de acceso a resources, expuestas solo si hay resources descubiertos
+        # (espejo del canónico, que añade las special tools condicionalmente).
+        if self._state.all_resources():
+            from .resource_tools import ListMcpResourcesTool, ReadMcpResourceTool
+
+            tools.append(ListMcpResourcesTool(self._state))
+            tools.append(ReadMcpResourceTool(self._state))
+        return tools
 
     def catalog(self, context: "ToolUseContext") -> list[CapabilitySummary]:
         return [

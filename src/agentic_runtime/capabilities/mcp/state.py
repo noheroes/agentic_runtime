@@ -59,6 +59,9 @@ class McpState:
     def get_client(self, server_name: str) -> "McpClient | None":
         return self._clients.get(server_name)
 
+    def remove_client(self, server_name: str) -> None:
+        self._clients.pop(server_name, None)
+
     @property
     def clients(self) -> dict[str, "McpClient"]:
         return dict(self._clients)
@@ -100,8 +103,16 @@ class McpState:
     def all_resources(self) -> list[dict]:
         result: list[dict] = []
         for server in self._servers:
-            result.extend(self._resources.get(server, []))
+            for resource in self._resources.get(server, []):
+                result.append({**resource, "server": server})
         return result
+
+    def find_resource_server(self, uri: str) -> str | None:
+        """Server al que pertenece un resource `uri` (para enrutar la lectura)."""
+        for server, resources in self._resources.items():
+            if any(r.get("uri") == uri for r in resources):
+                return server
+        return None
 
 
 __all__ = ["McpState"]

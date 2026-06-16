@@ -454,15 +454,42 @@ Evidencia M3: `tools/deferred.py` (`is_deferred_tool`, `discovered_tool_names`, 
 
 #### Fase M4 - MCP resources
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Convertir `MCPListResources` y `MCPReadResource` en tools del provider o adapters inyectados.
-- [ ] Resource access usa provider.
-- [ ] Evitar imports directos a `mcp.loader`.
+- [x] Convertir `MCPListResources` y `MCPReadResource` en tools del provider
+      (`capabilities/mcp/resource_tools.py`: `ListMcpResourcesTool`, `ReadMcpResourceTool`).
+- [x] Resource access usa el provider/estado (`McpState`), enruta la lectura al client dueño del uri.
+- [x] Evitar imports directos a `mcp.loader` → no hay loader global; las tools toman `McpState`.
 
 Criterios:
 
-- `tools/mcp_resource_tools.py` no depende del loader global o queda dentro del provider.
+- `mcp_resource_tools` no depende de un loader global → queda dentro del provider, sobre `McpState`. ✓
+
+Evidencia M4: `resource_tools.py` (read-only, no diferidas → se anuncian; `requires_permission=False`).
+`McpState.all_resources` ahora anota cada resource con su `server`; `find_resource_server(uri)` enruta.
+`McpProvider.tools()` añade las resource tools SOLO si hay resources (espejo de las special tools
+condicionales del canónico). Tests: `test_mcp_resources.py` (6).
+
+#### Fase M5 - MCP management API
+
+Estado: `[x] completado` (adaptado: sin API HTTP en este repo)
+
+- [~] API `/mcp` llama service/provider → N/A: no hay `api/routes/` en este repo. En su lugar se
+      implementó la **capa service** (los métodos que una API llamaría) en el provider.
+- [x] API no toca `loop._registry` → ninguna operación toca registry; todo va por `McpState`.
+- [x] Toggle/add/delete actualiza provider state (`add_server`, `disconnect_server`, `remove_server`,
+      `reconnect_server`).
+- [x] Tool pool refresh vía capability manager → automático: el loop reensambla `ctx.tool_pool` por
+      turno desde el manager, así que add/remove/reconnect se reflejan sin refresh explícito.
+
+Criterios:
+
+- `api/routes/mcp.py` no modifica registry directamente → N/A (no existe); la capa service del provider
+  no toca registry. ✓
+
+Evidencia M5: `McpProvider.{disconnect,remove,reconnect}_server` (+ `McpState.remove_client`).
+Tests: `test_mcp_management.py` (4: add/connect, disconnect conserva config y cierra client, remove
+elimina todo, reconnect refresca client+tools). Cuando se agregue una API HTTP, sus rutas delegan aquí.
 
 #### Fase M5 - MCP management API
 
@@ -479,14 +506,14 @@ Criterios:
 
 ### Tests MCP
 
-- [ ] Provider conecta server y expone tools.
-- [ ] Tool pool incluye MCP activo.
-- [ ] Tool pool no incluye MCP diferido no activado.
-- [ ] ToolSearch activa MCP via manager.
-- [ ] Toggle MCP actualiza provider sin tocar registry interno.
-- [ ] Resource read/list funciona por provider.
-- [ ] Timeout MCP sigue usando configuracion.
-- [ ] Wrapper no hace doble llamada en error.
+- [x] Provider conecta server y expone tools (`test_mcp_client`).
+- [x] Tool pool incluye MCP activo (ejecutable desde pool — `test_capability_wiring`/`test_deferred_loading`).
+- [x] Tool pool no incluye MCP diferido no activado (anuncio — `test_deferred_loading`).
+- [x] ToolSearch activa (descubre) MCP (`test_deferred_loading`).
+- [x] Toggle MCP actualiza provider sin tocar registry interno (`test_mcp_management`).
+- [x] Resource read/list funciona por provider (`test_mcp_resources`).
+- [x] Timeout MCP sigue usando configuracion (`test_mcp_provider::test_provider_uses_server_timeout`).
+- [x] Wrapper no hace doble llamada en error (`test_mcp_client::...single_call`).
 
 ## STT/TTS Provider (capability de I/O por voz)
 

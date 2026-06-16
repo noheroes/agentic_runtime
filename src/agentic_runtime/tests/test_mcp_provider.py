@@ -164,7 +164,7 @@ def test_resources_exposed_from_state():
     provider = McpProvider()
     provider.add_server("srv", {"command": "run"})
     provider.register_resources("srv", [{"uri": "mcp://x"}])
-    assert provider.resources(_ctx()) == [{"uri": "mcp://x"}]
+    assert provider.resources(_ctx()) == [{"uri": "mcp://x", "server": "srv"}]
 
 
 def test_provider_uses_server_timeout_for_tools():
