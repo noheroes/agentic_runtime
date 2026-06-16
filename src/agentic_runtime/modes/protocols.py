@@ -1,0 +1,16 @@
+from enum import Enum
+from typing import Optional, Protocol
+
+
+class AgentMode(str, Enum):
+    FOREGROUND = "foreground"
+    BACKGROUND = "background"
+    FORK = "fork"
+
+
+class ModeManagerProtocol(Protocol):
+    def register(self, *, execution_id: str, mode: AgentMode) -> None: ...
+    def unregister(self, execution_id: str) -> None: ...
+    def get_mode(self, execution_id: str) -> Optional[AgentMode]: ...
+    def set_mode(self, execution_id: str, mode: AgentMode) -> None: ...
+    def on_complete(self, execution_id: str) -> bool: ...

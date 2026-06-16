@@ -1,0 +1,27 @@
+[project]
+name = "agentic-runtime"
+version = "0.1.0"
+description = "Generic agentic loop runtime primitives"
+requires-python = ">=3.12"
+dependencies = [
+    "agentic-models",
+    "openai>=2.29.0",
+    "mcp>=1.26.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["agentic_runtime*"]
+
+[tool.uv.sources]
+agentic-models = { path = "../agentic_models", editable = true }
