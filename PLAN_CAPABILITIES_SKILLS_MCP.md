@@ -368,17 +368,28 @@ sin `name` → omite). `McpProvider` cumple `CapabilityProvider`; sus tools conv
 
 #### Fase M1 - Estado MCP separado
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `McpState`.
-- [ ] Guardar servers, clients, tools, resources.
-- [ ] Mover `_clients` y `_clients_by_name` fuera de globals o encapsularlos.
-- [ ] Dejar API de acceso por provider.
+- [x] Crear `McpState`. → ya existía (M0); M1 le añade clients + estado de conexión.
+- [x] Guardar servers, clients, tools, resources (`McpState`: `_clients`, `_status`, `_errors`).
+- [x] Mover `_clients` fuera de globals o encapsularlos → viven en `McpState`, no en globals;
+      el provider los gestiona por su ciclo de vida.
+- [x] Dejar API de acceso por provider (`connect_server`, `startup`/`shutdown`, `state.clients/...`).
 
 Criterios:
 
-- Resource tools no llaman `mcp.loader` directamente.
-- Gmail adapter recibe provider/client resolver.
+- Resource tools no llaman `mcp.loader` directamente. ✓ (no hay loader global; el client encapsula
+  el transporte; `resources()` sale del estado poblado por `connect_server`).
+- Gmail adapter recibe provider/client resolver. → N/A en este repo (no hay Gmail adapter heredado).
+
+Evidencia M1: `capabilities/mcp/client.py` (`McpClient`: transporte stdio/streamable-http vía SDK `mcp`,
+`connect`/`list_tools`/`list_resources`/`call`/`read_resource`/`aclose`; `McpToolError` mapea
+`isError`→error sin re-llamar). `McpState` con `ServerStatus` (configured/pending/connected/failed) +
+`pending_servers`/`failed_servers`/`connected_servers`. `McpProvider.connect_server` descubre y registra
+tools/resources con aislamiento por ítem; `startup` conecta todos, un server caído se marca FAILED y no
+aborta el resto; `shutdown` cierra todos los clients. Transporte inyectable (`client_factory`) para tests.
+6 tests en `test_mcp_client.py` (cliente fake). No unit-testeado el transporte real (necesita un server
+MCP vivo — se cubrirá con la referencia real al integrar).
 
 #### Fase M2 - Tool pool MCP
 

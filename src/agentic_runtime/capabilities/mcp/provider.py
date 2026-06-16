@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ..contracts import CapabilitySummary
+from .client import McpClient
 from .config import McpServerConfig, load_server_configs, parse_server_config
-from .state import McpState
+from .state import McpState, ServerStatus
 from .tool_adapter import McpCall, build_mcp_tool
 
 if TYPE_CHECKING:
@@ -18,18 +19,29 @@ logger = logging.getLogger(__name__)
 class McpProvider:
     """Primer `CapabilityProvider` concreto — MCP conectado por contrato.
 
-    Quien embebe el runtime registra los servers y conecta el transporte; el
-    provider solo mantiene el estado MCP y lo expone por el contrato. El runtime
-    no sabe que estas tools vienen de MCP: las recibe vía `CapabilityManager`.
+    Quien embebe el runtime registra los servers; el provider abre los clients,
+    descubre tools/resources y los expone por el contrato. El runtime no sabe que
+    estas tools vienen de MCP: las recibe vía `CapabilityManager`.
 
-    M0 (shell): estado + catálogo + tools + config robusta. El ciclo de vida de
-    clientes (startup/shutdown reales) y el deferred loading llegan en M1/M3.
+    M0: estado + catálogo + tools + config robusta. M1: ciclo de vida real de
+    clients (`startup`/`shutdown`, transporte stdio/http vía el SDK `mcp`),
+    descubrimiento de tools/resources y estado de conexión (pending/failed/connected).
+    El deferred loading (qué tools exponer según contexto) llega en M3.
+
+    El transporte puede inyectarse para tests (`client_factory`); por defecto crea
+    `McpClient` reales sobre el SDK `mcp`.
     """
 
     name = "mcp"
 
-    def __init__(self, state: McpState | None = None) -> None:
+    def __init__(
+        self,
+        state: McpState | None = None,
+        *,
+        client_factory: "Callable[[McpServerConfig], McpClient] | None" = None,
+    ) -> None:
         self._state = state or McpState()
+        self._client_factory = client_factory or McpClient
 
     @property
     def state(self) -> McpState:
@@ -69,14 +81,53 @@ class McpProvider:
     def register_resources(self, server_name: str, resources: list[dict]) -> None:
         self._state.set_resources(server_name, resources)
 
+    # --- ciclo de vida de clients (M1) -----------------------------------
+
+    async def connect_server(self, name: str) -> bool:
+        """Conecta un server, descubre tools/resources y los registra. Aísla fallos.
+
+        Devuelve True si conectó. Un fallo se marca FAILED con el error y NO se
+        propaga: el resto de servers sigue operando (aislamiento por ítem).
+        """
+        config = self._state.servers.get(name)
+        if config is None:
+            logger.warning("mcp: connect_server(%r) — server no registrado", name)
+            return False
+
+        self._state.set_status(name, ServerStatus.PENDING)
+        client = self._client_factory(config)
+        try:
+            await client.connect()
+            tool_specs = await client.list_tools()
+            resources = await client.list_resources()
+        except Exception as exc:  # noqa: BLE001 — aislamiento por ítem
+            logger.warning("mcp: server %r falló al conectar — aislado: %s", name, exc)
+            self._state.set_status(name, ServerStatus.FAILED, error=str(exc))
+            try:
+                await client.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
+        self._state.set_client(name, client)
+        self.register_tools_from_specs(name, tool_specs, client.call)
+        self._state.set_resources(name, resources)
+        self._state.set_status(name, ServerStatus.CONNECTED)
+        return True
+
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
-        # El ciclo de vida del transporte/cliente es M1; el shell no abre conexiones.
-        return None
+        """Conecta todos los servers registrados. Un server caído no aborta el resto."""
+        for name in list(self._state.servers):
+            await self.connect_server(name)
 
     async def shutdown(self) -> None:
-        return None
+        for name, client in self._state.clients.items():
+            try:
+                await client.aclose()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mcp: error cerrando client %r: %s", name, exc)
 
     def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
         # Deferred loading (qué tools exponer según contexto) es M3.

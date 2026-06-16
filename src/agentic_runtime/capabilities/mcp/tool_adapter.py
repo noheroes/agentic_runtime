@@ -49,8 +49,13 @@ class McpTool:
         self.server_name = server_name
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+        from .client import McpToolError
+
         try:
-            output = await self._call(self.name, input)
+            output = await self._call(self.name, input)  # una sola llamada al server
+        except McpToolError as exc:
+            # El server respondió isError=True: error de la tool, no del transporte.
+            return ToolResult.error(self.name, str(exc))
         except Exception as exc:
             return ToolResult.error(self.name, f"mcp call failed: {exc}")
         return ToolResult(tool_name=self.name, output=output)
