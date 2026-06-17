@@ -20,13 +20,19 @@ def render_skill(skill: SkillDefinition) -> str:
 
     El modelo recibe las instrucciones sin tener que reinvocar la skill (S1): el
     texto va como contenido del tool result (rol `tool`, no un `user` plano).
+
+    Si la skill tiene `base_dir`, se antepone "Base directory for this skill: <dir>"
+    (espejo del canónico): así el modelo localiza los archivos bundled (scripts/,
+    templates/) por ruta y los ejecuta vía bash. Las subcarpetas no tienen manejo
+    especial — son archivos del directorio que el modelo referencia desde el base_dir.
     """
     head = f"Skill '{skill.name}' activada."
     if skill.allowed_tools:
         head += f" Tools habilitadas: {', '.join(skill.allowed_tools)}."
+    base = f"Base directory for this skill: {skill.base_dir}" if skill.base_dir else ""
     body = skill.instructions.strip()
     tail = "Continúa siguiendo estas instrucciones durante la tarea (no reinvoques la skill)."
-    return "\n\n".join(p for p in (head, body, tail) if p)
+    return "\n\n".join(p for p in (head, base, body, tail) if p)
 
 
 def build_skill_context_modifier(skill: SkillDefinition):
@@ -48,6 +54,7 @@ def build_skill_context_modifier(skill: SkillDefinition):
             "content": skill.instructions,
             "allowed_tools": list(skill.allowed_tools),
             "model": skill.model,
+            "base_dir": skill.base_dir,
         }
         if skill.allowed_tools:
             c.app_state.permissions = c.app_state.permissions.with_command_allow(skill.allowed_tools)

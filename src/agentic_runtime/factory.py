@@ -37,6 +37,10 @@ class CapabilitiesConfig:
     mcp_servers: dict[str, dict] = field(default_factory=dict)  # name -> raw server config
     skill_dirs: list[Path] = field(default_factory=list)        # raíces <dir>/<skill>/SKILL.md
     extra_providers: list[Any] = field(default_factory=list)    # CapabilityProvider adicionales
+    # Puertos de persistencia (dónde se guardan el registro de MCP y los skills). Los
+    # inyecta quien integra el runtime; si None, se usa el default sobre StorageProtocol.
+    mcp_config_store: Any = None
+    skill_store: Any = None
     # Auth OAuth de MCP: handlers interactivos inyectados por el integrador (el runtime
     # headless no abre navegador). TokenStorage por defecto = sobre StorageProtocol.
     mcp_oauth_redirect_handler: Any = None
@@ -89,17 +93,19 @@ class RuntimeFactory:
 
         providers: list[Any] = []
 
-        if caps.mcp_servers:
+        if caps.mcp_servers or caps.mcp_config_store is not None:
             mcp = McpProvider(
+                config_store=caps.mcp_config_store,  # registro persistido (lee en startup)
                 storage=storage,  # TokenStorage OAuth por defecto sobre StorageProtocol
                 redirect_handler=caps.mcp_oauth_redirect_handler,
                 callback_handler=caps.mcp_oauth_callback_handler,
             )
-            mcp.load_servers(caps.mcp_servers)  # tolerante; conecta en startup()
+            if caps.mcp_servers:
+                mcp.load_servers(caps.mcp_servers)  # tolerante; conecta en startup()
             providers.append(mcp)
 
-        if caps.skill_dirs:
-            skills = SkillsProvider()
+        if caps.skill_dirs or caps.skill_store is not None:
+            skills = SkillsProvider(skill_store=caps.skill_store)  # lee el store en startup
             for root in caps.skill_dirs:
                 skills.load_dir(root)
             providers.append(skills)

@@ -40,8 +40,11 @@ class SkillsProvider:
 
     name = "skills"
 
-    def __init__(self, state: SkillsState | None = None) -> None:
+    def __init__(self, state: SkillsState | None = None, *, skill_store: "object | None" = None) -> None:
         self._state = state or SkillsState()
+        # Puerto de persistencia de skills (dónde se registran / se escribe el SKILL.md).
+        # Lo provee/inyecta quien integra el runtime; se lee en startup().
+        self._skill_store = skill_store
 
     @property
     def state(self) -> SkillsState:
@@ -70,9 +73,32 @@ class SkillsProvider:
 
         return process_slash_command(text, self._state, context)
 
+    async def register_skill(self, name: str, content: str) -> SkillDefinition:
+        """Registra un skill EN runtime: lo escribe en el store (si hay) y lo carga.
+
+        `write(name, content)` persiste el SKILL.md donde decida el store del integrador."""
+        if self._skill_store is not None:
+            await self._skill_store.write(name, content)
+        return self.add_skill_text(name, content)
+
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
+        """Carga los skills persistidos en el store (si hay). Aislamiento por ítem."""
+        if self._skill_store is None:
+            return None
+        try:
+            names = await self._skill_store.list()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("skills: no se pudo listar el store: %s", exc)
+            return None
+        for name in names:
+            try:
+                content = await self._skill_store.read(name)
+                if content is not None:
+                    self.add_skill_text(name, content)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("skills: no se pudo cargar %r del store: %s", name, exc)
         return None
 
     async def shutdown(self) -> None:
@@ -107,11 +133,13 @@ class SkillsProvider:
         active = context.app_state.capabilities.get("active_skills", {})
         messages: list[dict] = []
         for name, info in active.items():
+            base = info.get("base_dir") or ""
+            base_line = f"Base directory for this skill: {base}\n\n" if base else ""
             messages.append({
                 "role": "system",
                 "content": (
                     f"Skill activa '{name}': continúa siguiendo sus instrucciones.\n\n"
-                    f"{info.get('content', '').strip()}"
+                    f"{base_line}{info.get('content', '').strip()}"
                 ),
             })
         return messages

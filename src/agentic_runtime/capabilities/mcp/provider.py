@@ -39,12 +39,16 @@ class McpProvider:
         state: McpState | None = None,
         *,
         client_factory: "Callable[[McpServerConfig], McpClient] | None" = None,
+        config_store: "Any | None" = None,
         storage: "Any | None" = None,
         redirect_handler: "Any | None" = None,
         callback_handler: "Any | None" = None,
         user_id: str = "mcp",
     ) -> None:
         self._state = state or McpState()
+        # Puerto de persistencia del registro de servers (dónde se guardó la config al
+        # registrar). Lo provee/inyecta quien integra el runtime; se lee en startup().
+        self._config_store = config_store
         # Inyección para auth OAuth: storage para TokenStorage por defecto; handlers
         # interactivos los provee QUIEN INTEGRA el runtime (headless no abre navegador).
         self._storage = storage
@@ -173,9 +177,26 @@ class McpProvider:
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
-        """Conecta todos los servers registrados. Un server caído no aborta el resto."""
+        """Carga el registro persistido (si hay store) y conecta todos los servers.
+
+        Un server caído no aborta el resto. La config en el store ya está en el contrato
+        de capabilities (el integrador la extrajo/mapeó de su formato antes de guardarla)."""
+        if self._config_store is not None:
+            try:
+                persisted = await self._config_store.load()
+                self.load_servers(persisted)  # tolerante: salta inválidos con log
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mcp: no se pudo cargar el registro persistido: %s", exc)
         for name in list(self._state.servers):
             await self.connect_server(name)
+
+    async def register_server(self, name: str, raw: dict) -> McpServerConfig:
+        """Registra un server EN runtime: valida, persiste (si hay store) y deja listo
+        para conectar. La config `raw` ya viene en el contrato (el integrador la mapeó)."""
+        config = self.add_server(name, raw)  # estricto: valida identidad/seguridad
+        if self._config_store is not None:
+            await self._config_store.save(name, raw)
+        return config
 
     async def shutdown(self) -> None:
         for name, client in self._state.clients.items():

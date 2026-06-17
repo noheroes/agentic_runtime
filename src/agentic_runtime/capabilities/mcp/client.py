@@ -95,30 +95,34 @@ class McpClient:
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             else:
+                import httpx
+
                 from .auth import build_auth
 
                 artifacts = build_auth(self._config, server_url=self._config.url or "", deps=self._auth_deps)
                 headers = {**dict(self._config.headers), **artifacts.headers} or None
                 httpx_auth = artifacts.httpx_auth
-                factory = _http_client_factory(self._config.ssl_verify)
                 if transport == "sse":
                     from mcp.client.sse import sse_client
 
                     streams = await stack.enter_async_context(
                         sse_client(
                             self._config.url, headers=headers,
-                            httpx_client_factory=factory, auth=httpx_auth,
+                            httpx_client_factory=_http_client_factory(self._config.ssl_verify),
+                            auth=httpx_auth,
                         )
                     )
-                else:  # http (streamable)
-                    from mcp.client.streamable_http import streamablehttp_client
+                else:  # http (Streamable HTTP) — API nueva: recibe un httpx.AsyncClient
+                    from mcp.client.streamable_http import streamable_http_client
 
-                    # streamablehttp_client cede (read, write, get_session_id)
-                    streams = await stack.enter_async_context(
-                        streamablehttp_client(
-                            self._config.url, headers=headers,
-                            httpx_client_factory=factory, auth=httpx_auth,
+                    http_client = await stack.enter_async_context(
+                        httpx.AsyncClient(
+                            headers=headers, auth=httpx_auth,
+                            verify=self._config.ssl_verify, follow_redirects=True,
                         )
+                    )
+                    streams = await stack.enter_async_context(
+                        streamable_http_client(self._config.url, http_client=http_client)
                     )
                 read, write = streams[0], streams[1]
 

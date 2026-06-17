@@ -1082,14 +1082,38 @@ Al terminar:
 - Siguiente: registrar `SkillsProvider`+`McpProvider` en el manager vía `factory.py` y consumir
   `build_tool_pool` por turno en el loop (fases C1/C2), o M1 (cliente MCP real), o S1 (invocación).
 
-### YYYY-MM-DD
+### 2026-06-16 — Cierre MCP (M1–M5)+auth, Skills (S1–S5), cableado, persistencia y E2E real
 
-Estado:
-
-- Implementado:
-- En progreso:
-- Bloqueado:
-- Probado:
-- No probado:
-- Notas:
+- **MCP M1–M5**: cliente real (`client.py`: stdio/Streamable HTTP vía SDK `mcp`; `streamable_http_client`
+  nuevo recibe un `httpx.AsyncClient` que arma headers+verify+auth), ciclo de vida + `ServerStatus`,
+  deferred loading (`tools/deferred.py`), resources como tools del provider, gestión (disconnect/remove/
+  reconnect). Contrato de registro: url/type(http/sse/stdio)/ssl_verify.
+- **Auth MUTABLE/extensible** (`mcp/auth.py`): estrategias registrables none/bearer/oauth. oauth cablea
+  el `OAuthClientProvider` del SDK (OAuth 2.1 spec 2025-11-25: discovery/PKCE/DCR/refresh/RFC8707; NO
+  reimplementado). Handlers interactivos + `TokenStorage` (`StorageBackedTokenStorage` sobre
+  `StorageProtocol`) **inyectados por el integrador** (headless no abre navegador). stdio usa env.
+- **Cableado (alineado al canónico, R4)**: ejecución resuelve del pool ensamblado por turno
+  (`ToolDispatcher`←`ctx.tool_pool.find`, = `findToolByName`); `AgentLoop` arma pool+schemas; el registry
+  nativo es solo input. `LocalAgentRuntime.startup/shutdown` conectan/cierran providers. **El loop aplica
+  `result.context_modifier`** (antes latente).
+- **Skills S1–S5**: `SkillTool`+`render_skill`+estado activo; modifier habilita allowed-tools (+descubre,
+  cruce M3); catálogo/active_context/compact; slash (`commands.py`). **base_dir** (`skillRoot` del
+  canónico): el render antepone "Base directory for this skill: <dir>" → el modelo accede a subcarpetas
+  bundled (scripts/, templates/, assets/) por ruta. Subcarpetas sin manejo especial.
+- **Persistencia (puertos inyectables, default sobre StorageProtocol)**: `McpConfigStore`/
+  `StorageBackedMcpConfigStore` y `SkillStore`/`StorageBackedSkillStore`. Dónde se guarda el registro/
+  contenido = responsabilidad del integrador; el contrato del runtime NO se deforma para tragar formatos
+  externos — el integrador **extrae y mapea** (ver memoria `integrator-maps-to-contract`). Providers
+  cargan del store en `startup`; `register_server`/`register_skill` persisten.
+- Probado: suite **322 passed, 0 skipped**, lint limpio. E2E real (`test_capability_registration_e2e`):
+  Streamable HTTP REAL sobre TLS self-signed + `ssl_verify=False` → conecta + skill activa tool MCP +
+  ejecución real `HOLA MUNDO`; contraprueba `ssl_verify=True` rechaza self-signed. Verificación ad-hoc
+  (no committeada): conexión REAL al Obsidian MCP del usuario (`https://localhost:5583/mcp`, mapeo docker
+  27124→5583, bearer+ssl_verify=False) → 17 tools, `vault_list` devolvió el vault real. Skills reales
+  docx/xlsx de `/tmp/skills` cargan (frontmatter rico tolerante, allowed-tools:bash, base_dir→scripts/).
+- No probado: ejecución de los scripts docx/xlsx vía bash (requiere deps python-docx/pandas/etc. en el
+  entorno de bash = responsabilidad del integrador; no están en este entorno). OAuth real contra un AS.
+- Notas: el endpoint MCP de Obsidian está en `/mcp` (la url del registro debe incluir el path). Falta
+  cerrar la fase Capability Manager (C0 `[~]`→hecho) y posiblemente un E2E de ambos skills operando en el
+  loop. Pendiente del corte: STT/TTS y Memoria.
 

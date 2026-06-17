@@ -7,6 +7,7 @@ from .auth import (
 )
 from .client import McpClient, McpToolError
 from .config import McpServerConfig, load_server_configs, parse_server_config
+from .config_store import McpConfigStore, StorageBackedMcpConfigStore
 from .token_storage import StorageBackedTokenStorage
 from .provider import McpProvider
 from .resource_tools import ListMcpResourcesTool, ReadMcpResourceTool
@@ -19,6 +20,7 @@ __all__ = [
     "ListMcpResourcesTool",
     "McpCall",
     "McpClient",
+    "McpConfigStore",
     "McpProvider",
     "McpServerConfig",
     "McpState",
@@ -26,6 +28,7 @@ __all__ = [
     "McpToolError",
     "ReadMcpResourceTool",
     "ServerStatus",
+    "StorageBackedMcpConfigStore",
     "StorageBackedTokenStorage",
     "available_auth_strategies",
     "build_auth",
