@@ -15,6 +15,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from ...context.tool_use import ToolUseContext
+from ...contracts.permissions import PermissionContext
 from ...events.bus import EventBus
 from ...events.event_types import ToolCallEvent, ToolResultEvent
 from ...events.protocol import Event, EventHandler
@@ -65,6 +66,7 @@ class LocalAgentRuntime:
         small_llm: Any = None,
         background_result_max_chars: int = 2000,
         model_id: str = "",
+        initial_allowed_tools: Optional[list[str]] = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._model_caller = model_caller
@@ -80,6 +82,7 @@ class LocalAgentRuntime:
         self._small_llm = small_llm
         self._max_chars = background_result_max_chars
         self._model_id = model_id
+        self._initial_allowed_tools = list(initial_allowed_tools or [])
         self._default_timeout = default_timeout
 
     @property
@@ -177,6 +180,13 @@ class LocalAgentRuntime:
             return ctx, parent_snapshot.session_id, parent_snapshot.subagent_depth + 1
         agent_id = f"agent_{uuid.uuid4().hex[:12]}"
         ctx = ToolUseContext(session_id=f"sess_{uuid.uuid4().hex[:12]}", agent_id=agent_id)
+        # Seed de permisos del agente principal: sin esto, tools `requires_permission`
+        # (p.ej. `write_file`, que la memoria necesita para guardar) quedan fuera del
+        # pool en un agente autónomo. Los subagentes los heredan vía snapshot.
+        if self._initial_allowed_tools:
+            ctx = ctx.with_permissions(
+                PermissionContext(always_allow_command=list(self._initial_allowed_tools))
+            )
         return ctx, None, 0
 
     def _make_bus(self, task_id: str, on_event: EventHandler | None = None) -> EventBus:

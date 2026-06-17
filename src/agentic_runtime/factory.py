@@ -41,6 +41,10 @@ class CapabilitiesConfig:
     # inyecta quien integra el runtime; si None, se usa el default sobre StorageProtocol.
     mcp_config_store: Any = None
     skill_store: Any = None
+    # Memoria del agente: dir raíz en disco (default `FilesystemMemoryStore`) o un
+    # `MemoryStore` inyectado. Si alguno está presente, se registra `MemoryProvider`.
+    memory_root: Optional[Path] = None
+    memory_store: Any = None
     # Auth OAuth de MCP: handlers interactivos inyectados por el integrador (el runtime
     # headless no abre navegador). TokenStorage por defecto = sobre StorageProtocol.
     mcp_oauth_redirect_handler: Any = None
@@ -66,6 +70,10 @@ class RuntimeConfig:
     small_llm: Any = None
     model_id: str = ""
     background_result_max_chars: int = 2000
+    # Permisos sembrados en el ctx del agente principal (p.ej. `write_file` para que el
+    # modelo pueda guardar memorias). La memoria NO se auto-concede el permiso — es una
+    # decisión del integrador, espejo de cómo el canónico permite `Write`.
+    initial_allowed_tools: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +117,12 @@ class RuntimeFactory:
             for root in caps.skill_dirs:
                 skills.load_dir(root)
             providers.append(skills)
+
+        if caps.memory_store is not None or caps.memory_root is not None:
+            from .capabilities.memory import FilesystemMemoryStore, MemoryProvider
+
+            store = caps.memory_store or FilesystemMemoryStore(caps.memory_root)
+            providers.append(MemoryProvider(store))
 
         providers.extend(caps.extra_providers)
         return CapabilityManager(providers)
@@ -162,6 +176,7 @@ class RuntimeFactory:
             small_llm=config.small_llm,
             background_result_max_chars=config.background_result_max_chars,
             model_id=config.model_id,
+            initial_allowed_tools=config.initial_allowed_tools,
         )
 
 
