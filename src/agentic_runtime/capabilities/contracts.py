@@ -45,6 +45,17 @@ class CapabilityProvider(Protocol):
     El runtime no sabe si una tool viene de un skill, MCP o plugin: habla con
     el `CapabilityManager`, que habla con providers que cumplen este protocolo.
     Las respuestas se scopean por `context.agent_id` (None = agente principal).
+
+    Hook OPCIONAL (no forma parte del contrato estructural, para no romper a
+    providers existentes ni de terceros)::
+
+        def system_prompt_section(self, context: "ToolUseContext") -> str | None
+
+    Contribución estable de este provider al system prompt: instrucciones
+    permanentes y cache-friendly (mismo texto entre turnos = buen prefijo de
+    caché), no contexto volátil — eso va por `active_context`. `None` = no aporta.
+    El `CapabilityManager` lo invoca de forma tolerante (`getattr`), así que un
+    provider que no lo implemente sigue siendo válido.
     """
 
     name: str

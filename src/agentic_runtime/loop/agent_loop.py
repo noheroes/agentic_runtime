@@ -26,6 +26,15 @@ def _tool_schema(tool: "ToolProtocol") -> dict:
     return {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
 
 
+def _as_reminder(content: str) -> str:
+    """Envuelve el contenido de recall en `<system-reminder>` (espejo del canónico).
+
+    El caller descarta `role:"system"`, así que el recall viaja como `role:"user"`;
+    el marcado `<system-reminder>` le dice al modelo que es contexto del sistema, no
+    una intervención del usuario."""
+    return f"<system-reminder>\n{content.strip()}\n</system-reminder>"
+
+
 class AgentLoop:
     """
     Loop agentico del runtime.
@@ -70,6 +79,26 @@ class AgentLoop:
         if self._capability_manager is not None:
             return self._capability_manager.build_tool_pool(native, ctx)
         return ToolPool(native_tools=native)
+
+    def _inject_recall(self, ctx: ToolUseContext) -> None:
+        """Inyecta el recall del manager como `<system-reminder>` (role:"user").
+
+        Dedup: no reinyecta un contenido ya presente en `ctx.messages` (espejo de
+        `collectSurfacedMemories`). El manager agrega los `active_context` de todos
+        los providers; el loop los rinde — los providers no conocen el formato de
+        reminder ni el rol final."""
+        if self._capability_manager is None:
+            return
+        existing = {m.get("content") for m in ctx.messages if m.get("role") == "user"}
+        for msg in self._capability_manager.active_context(ctx):
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            rendered = _as_reminder(content)
+            if rendered in existing:
+                continue
+            ctx.messages.append({"role": "user", "content": rendered})
+            existing.add(rendered)
 
     def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
         """Schemas anunciados al modelo, derivados del pool ensamblado.
@@ -153,16 +182,32 @@ class AgentLoop:
                 tool_schemas = resolved.tool_schemas
             else:
                 tool_schemas = []
+
+            # Secciones de system prompt aportadas por los providers (memoria, etc.):
+            # el runtime las ensambla; el caller las concatena al system prompt base.
+            system_sections: list[str] = []
+            if self._capability_manager is not None:
+                system_sections = self._capability_manager.system_prompt_sections(ctx)
+                # Canal de recall por turno: cada mensaje de `active_context` se rinde
+                # como `role:"user"` envuelto en `<system-reminder>`, con dedup contra
+                # la historia ya presente (la compactación, al recortar, rehabilita el
+                # re-surface). Activa también Skills S3 sin tocar su provider.
+                self._inject_recall(ctx)
+
             logger.debug(
                 "AgentLoop turno %d: invocando modelo (%d tools, %d mensajes)",
                 ctx.turn_count, len(tool_schemas), len(ctx.messages),
             )
-            # Llama al modelo
+            # Llama al modelo. `system_sections` se pasa solo si hay secciones:
+            # robustez ante callers de terceros que aún no adoptan el kwarg (un
+            # caller compatible con `ModelCallerProtocol` lo acepta con default None).
+            complete_kwargs: dict[str, Any] = {"stop": ctx.stop, "model_id": self._model_id}
+            if system_sections:
+                complete_kwargs["system_sections"] = system_sections
             stream = await self._model_caller.complete(
                 ctx.messages,
                 tool_schemas,
-                stop=ctx.stop,
-                model_id=self._model_id,
+                **complete_kwargs,
             )
 
             # Consume eventos del stream

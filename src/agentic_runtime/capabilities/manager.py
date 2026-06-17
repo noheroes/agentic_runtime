@@ -78,6 +78,23 @@ class CapabilityManager:
             capability_tools=self.tools(context),
         )
 
+    def system_prompt_sections(self, context: "ToolUseContext") -> list[str]:
+        """Secciones de system prompt aportadas por los providers, en orden de registro.
+
+        Tolerante con terceros: un provider que no implemente `system_prompt_section`
+        (o que devuelva `None`/vacío) simplemente no aporta. El runtime ensambla estas
+        secciones sobre el system prompt base; el caller solo las transporta.
+        """
+        sections: list[str] = []
+        for provider in self._providers:
+            hook = getattr(provider, "system_prompt_section", None)
+            if hook is None:
+                continue
+            section = hook(context)
+            if section:
+                sections.append(section)
+        return sections
+
     def active_context(self, context: "ToolUseContext") -> list[dict]:
         messages: list[dict] = []
         for provider in self._providers:

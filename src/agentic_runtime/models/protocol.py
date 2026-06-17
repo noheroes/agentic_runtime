@@ -32,4 +32,5 @@ class ModelCallerProtocol(Protocol):
         *,
         stop: Optional[asyncio.Event] = None,
         model_id: str = "",
+        system_sections: Optional[list[str]] = None,
     ) -> AsyncGenerator["Event", None]: ...
