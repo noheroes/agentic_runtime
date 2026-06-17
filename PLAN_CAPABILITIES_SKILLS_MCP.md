@@ -1117,3 +1117,17 @@ Al terminar:
   cerrar la fase Capability Manager (C0 `[~]`→hecho) y posiblemente un E2E de ambos skills operando en el
   loop. Pendiente del corte: STT/TTS y Memoria.
 
+### 2026-06-16 — E2E real de ambos skills ejecutando sus scripts en el loop
+
+- Cierra el "No probado" anterior: `test_skills_office_loop_e2e_real.py` ejercita la cadena completa de
+  DOS skills de oficina — `Skill(officedocx/officexlsx)` habilita `bash` (allowed-tools) + surface
+  `base_dir`, y **bash ejecuta de verdad** el script bundled (`scripts/make_docx.py`/`make_xlsx.py`)
+  generando `.docx`/`.xlsx` REALES. Verificación por contenido reabriendo los ficheros con
+  `python-docx`/`openpyxl` (tokens únicos: solo el script pudo escribirlos). Lo único guionizado es la
+  decisión del modelo; el caller scripted parsea el `base_dir` que el loop surface (espejo del modelo real)
+  para componer el comando bash. Asienta que `bash` solo queda permitido tras invocar la skill.
+- Skills registradas como DIRECTORIO en disco (`skill_dirs`) → `base_dir`=`skillRoot` real (sin él no se
+  localizan los scripts). Deps de las skills (`python-docx`/`openpyxl`) en grupo `skills-e2e` del pyproject:
+  son las `deps` que el integrador provee para esas skills, NO del runtime; el test se omite si faltan.
+- Probado: suite **323 passed, 0 skipped**, lint limpio.
+

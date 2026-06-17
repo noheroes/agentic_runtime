@@ -15,6 +15,14 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+# Dependencias de las SKILLS de oficina (docx/xlsx) que ejercita el E2E real de
+# ejecución en el loop. NO son del runtime: son las `deps` que el integrador
+# provee para esas skills concretas. Aisladas en su propio grupo para dejar
+# explícito que el runtime no depende de ellas — solo el test que las corre.
+skills-e2e = [
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+]
 
 [build-system]
 requires = ["setuptools>=61"]
