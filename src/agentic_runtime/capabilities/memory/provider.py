@@ -49,6 +49,16 @@ class MemoryProvider:
     def __init__(self, store: MemoryStore) -> None:
         self._store = store
 
+    @staticmethod
+    def _scope(context: "ToolUseContext") -> str | None:
+        """Clave de scope de la memoria a partir del contexto.
+
+        El agente principal usa un scope ESTABLE (`'main'`, vía `None`) para que la
+        memoria persista entre sesiones — su `agent_id` es un uuid distinto por
+        despacho, inservible como clave de memoria. Los subagentes se aíslan por su
+        `agent_id` (A no ve memorias de B)."""
+        return context.agent_id if context.is_subagent else None
+
     async def startup(self) -> None:
         # Crea el dir del agente principal para que el destino de `write_file` exista.
         self._store.ensure_dir(None)
@@ -62,20 +72,20 @@ class MemoryProvider:
         return []
 
     def system_prompt_section(self, context: "ToolUseContext") -> str | None:
-        """Bloque de activación (instrucciones + índice) scopeado por `agent_id`."""
-        agent_id = context.agent_id
-        memory_dir = self._store.ensure_dir(agent_id)
-        index = self._store.read_index(agent_id)
+        """Bloque de activación (instrucciones + índice) scopeado por agente."""
+        agent = self._scope(context)
+        memory_dir = self._store.ensure_dir(agent)
+        index = self._store.read_index(agent)
         return build_memory_activation(str(memory_dir), index)
 
     def active_context(self, context: "ToolUseContext") -> list[dict]:
         """Recall: ≤5 memorias relevantes al último texto del usuario.
 
-        Scoped por `agent_id` (A no ve memorias de B). Excluye `MEMORY.md` (ya va en
-        el system prompt) — el `scan` del store lo omite. Devuelve dicts `role:"system"`;
-        el loop los rinde como recordatorio."""
-        agent_id = context.agent_id
-        headers = self._store.scan(agent_id)
+        Scoped por agente (un subagente no ve memorias de otro). Excluye `MEMORY.md`
+        (ya va en el system prompt) — el `scan` del store lo omite. Devuelve dicts
+        `role:"system"`; el loop los rinde como recordatorio."""
+        agent = self._scope(context)
+        headers = self._store.scan(agent)
         ranked = rank_memories(headers, _last_user_text(context))
         return [{"role": "system", "content": _render_recall(header)} for header in ranked]
 

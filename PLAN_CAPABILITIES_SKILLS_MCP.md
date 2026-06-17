@@ -640,14 +640,25 @@ Criterios:
 Memoria que el agente guarda para recordar entre sesiones — sobrevive compactación y reinicio.
 Construida **sobre** primitivas del runtime, no dentro de él.
 
-### Naturaleza — capability sobre primitivas runtime
+### Naturaleza — capability que se ACTIVA, no solo que almacena
 
 La memoria es una capability (como Skills/MCP): pone la **opinión** (qué guardar, recall, ranking,
-inyección). El runtime solo aporta los primitivos:
+activación). Lo esencial: **la memoria "no va sola"** — hay que replicar *qué la activa* para que el
+modelo **decida usarla**. Se activa por **dos superficies**, y **NO hay tool de memoria** — el modelo
+guarda con `write_file` y lee con `read_file` (guardado canónico):
 
-- **Persistencia**: `StorageProtocol` + `StorageKeys.ltm_key(user_id)` — **ya existe** en el runtime.
-- **Sobrevivir compactación**: contrato `CompactionProvider` / `collect_compaction_context`.
-- **Extracción en background**: `RuntimeContextForker` + `BackgroundNotificationChannel`.
+1. **Bloque en el system prompt** (`MemoryProvider.system_prompt_section`): instrucciones permanentes
+   + taxonomía tipada (`user`/`feedback`/`project`/`reference`) + qué NO guardar + cómo guardar (2
+   pasos: escribir fichero + puntero en `MEMORY.md`) + cuándo acceder + **el índice `MEMORY.md`
+   inyectado**. Texto estable entre turnos (cache-friendly).
+2. **Recall por turno** (`MemoryProvider.active_context`): ≤5 memorias relevantes por `name`/
+   `description`, que el loop rinde como `<system-reminder>` (role:"user"), con dedup contra la
+   historia. Excluye `MEMORY.md` (ya va en el system prompt).
+
+La memoria vive en un **directorio de filesystem** (como `base_dir` de skills), no como blob bajo
+`ltm_key`: el modelo **escribe con `write_file`** y el provider lee ese dir para índice + recall, así
+sobrevive a reinicio (en disco). El runtime solo aporta primitivos: el hook `provider→system-prompt`
+ensamblado por el loop, el canal de recall (`active_context`) y `compact_context`.
 
 Distinción clave: la cascada config/`agent.md` (CLAUDE.md) es **instrucción humana** al system
 prompt; esta memoria es **conocimiento auto-generado por el agente**. Son providers distintos que
@@ -655,35 +666,41 @@ alimentan el prompt, no el mismo.
 
 ### Por qué NO en el runtime
 
-"Qué recordar", ranking de recall, prompts de extracción y thresholds son opiniones que varían por
-producto (un CLI quiere un `MEMORY.md` simple; cloud quiere LTM con ranking semántico). Mismo
-razonamiento que fake-path: el runtime expone el primitivo (storage), la capability implementa la
-opinión. `ltm_key` ya vive en el runtime como **clave**, sin lógica de memoria al lado.
+"Qué recordar", ranking de recall y la voz del bloque de activación son opiniones que varían por
+producto. El runtime expone los primitivos (hook system-prompt, recall, compactación, filesystem); la
+capability implementa la opinión. El loop NO importa `capabilities.memory`.
 
 ### Tareas
 
-Estado: `[ ] no iniciado`
+Estado: `[x] COMPLETO` (F1 plumbing + F2 provider + F3 E2E)
 
-- [ ] Crear `MemoryProvider` como `CapabilityProvider`.
-- [ ] Tool `remember` (save) que persiste vía `StorageProtocol` bajo `ltm_key`.
-- [ ] Recall con ranking (recencia/relevancia) — opinión del provider.
-- [ ] `active_context(context)` inyecta memorias relevantes al inicio del turno, scopeado por `agent_id`.
-- [ ] `compact_context(context)` preserva memorias activas tras compactación.
-- [ ] (Opcional) extracción background al fin del turno vía `RuntimeContextForker`.
+- [x] **F1 plumbing**: hook OPCIONAL `system_prompt_section` (tolerante vía `getattr`, fuera del
+  contrato estructural) + `CapabilityManager.system_prompt_sections` + kwarg `system_sections` en
+  `ModelCallerProtocol`/`AgenticModelsCaller` + cableado de `active_context` en el loop (rinde
+  `<system-reminder>` con dedup; activa también Skills S3, antes latente).
+- [x] **F2 provider**: `capabilities/memory/{store,prompt,recall,provider}`. `MemoryStore` (Protocol)
+  + `FilesystemMemoryStore` (scope `<root>/<agent_id|'main'>`). SIN tools propias (`tools/catalog →
+  []`). Recall determinista (keyword + recencia). Factory `CapabilitiesConfig.memory_root/
+  memory_store`; seed `RuntimeConfig.initial_allowed_tools` (p.ej. `write_file`).
+- [x] **F3 E2E**: ciclo activación → recall → guardado (`write_file`) → reinicio, scripted.
 
-Criterios:
+Criterios (cumplidos):
 
-- El runtime no tiene lógica de memoria — solo storage + contrato de compactación.
-- La memoria sobrevive reinicio (persistida) y compactación (`compact_context`).
-- Recall determinista dado el mismo estado y `agent_id`.
+- El runtime no tiene lógica de memoria — solo el hook system-prompt, recall y compactación.
+- La memoria sobrevive reinicio (en disco) y compactación (`compact_context`).
+- Recall determinista dado el mismo estado y scope. El agente principal usa scope estable `'main'`
+  (su `agent_id` es un uuid por despacho); los subagentes se aíslan por `agent_id`.
 
 ### Tests Memory
 
-- [ ] Save persiste: tras "reinicio" (releer storage) la memoria sigue disponible.
-- [ ] `active_context` inyecta memorias relevantes al inicio del turno.
-- [ ] `compact_context` preserva memorias activas tras compactación.
-- [ ] Recall scopeado por `agent_id`: un hijo no ve memorias de otro agente salvo política.
-- [ ] Test de acoplamiento: el runtime no importa lógica de memoria.
+- [x] Activación contiene instrucciones + índice `MEMORY.md`; dir vacío → "índice vacío".
+- [x] Recall relevante/irrelevante; excluye `MEMORY.md`; ignora `<system-reminder>` al elegir query.
+- [x] Scoping: un subagente no ve memorias de otro; el agente principal usa scope estable.
+- [x] `compact_context` preserva las memorias relevantes.
+- [x] Ranking determinista (keyword + recencia, `limit`).
+- [x] Test de acoplamiento: el loop no importa `capabilities.memory`.
+- [x] E2E: activación llega al caller, recall como `<system-reminder>`, `write_file` guarda ficheros
+  reales, un provider nuevo sobre el mismo dir los encuentra.
 
 ## Robustez Ante Skills/MCP De Terceros
 
@@ -1130,4 +1147,32 @@ Al terminar:
   localizan los scripts). Deps de las skills (`python-docx`/`openpyxl`) en grupo `skills-e2e` del pyproject:
   son las `deps` que el integrador provee para esas skills, NO del runtime; el test se omite si faltan.
 - Probado: suite **323 passed, 0 skipped**, lint limpio.
+
+### 2026-06-17 — MemoryProvider: memoria del agente activada (system-prompt + recall)
+
+- **F1 plumbing** (commit `55fa283`): hook OPCIONAL `system_prompt_section` (documentado fuera del
+  contrato estructural para no romper providers existentes/de terceros; el manager lo invoca tolerante
+  vía `getattr`) + `CapabilityManager.system_prompt_sections`. Kwarg opcional `system_sections` en
+  `ModelCallerProtocol`/`AgenticModelsCaller` (el caller los concatena al system prompt base; el
+  runtime ensambla, el caller transporta). El loop cablea `active_context` por turno y lo rinde como
+  `role:"user"` envuelto en `<system-reminder>` con dedup contra la historia — esto **activa también
+  Skills S3**, antes latente. El kwarg se pasa solo si hay secciones (robustez ante callers de terceros).
+- **F2 provider** (commit `c0886c9`): paquete `capabilities/memory/{store,prompt,recall,provider}`,
+  espejo estructural de skills, **SIN tools propias**. `FilesystemMemoryStore` en disco, scope
+  `<root>/<agent_id|'main'>`; frontmatter YAML tolerante propio (`metadata.type`), no deforma
+  `SkillFrontmatter`. `build_memory_activation` (instrucciones + taxonomía + cómo-guardar con
+  `write_file` + índice). `rank_memories` determinista (keyword + recencia). Factory gana
+  `CapabilitiesConfig.memory_root/memory_store`; `RuntimeConfig.initial_allowed_tools` siembra permisos
+  en el ctx del agente principal (`_build_child`) — la memoria NO se auto-concede `write_file`.
+- Decisión de scope: el agente principal usa scope estable `'main'` (su `agent_id` es un uuid por
+  despacho, inservible como clave de memoria entre sesiones); los subagentes se aíslan por `agent_id`
+  (discriminado por `is_subagent`). Corrige la lectura literal de `<agent_id|'main'>` del plan.
+- **F3 E2E** (`test_memory_loop_e2e.py`, siempre corre): ciclo completo activación → recall → guardado
+  → reinicio sin LLM real. El caller scripted recibe la sección de memoria en `system_sections`, ve el
+  recall pre-sembrado como `<system-reminder>`, llama `write_file` para crear `feedback_estilo.md` +
+  actualizar `MEMORY.md` (ficheros REALES en disco), y un `MemoryProvider` nuevo sobre el mismo dir los
+  encuentra. Lo único guionizado es la decisión del modelo.
+- Divergencias del plan escrito ya corregidas en §MemoryProvider: quitada la tool `remember` y el blob
+  bajo `ltm_key`/`StorageProtocol` — guardado canónico = `write_file` + prompt; memoria en filesystem.
+- Probado: suite **348 passed, 0 skipped**, `ruff` limpio.
 

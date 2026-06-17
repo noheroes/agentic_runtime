@@ -17,8 +17,8 @@ def _write_memory(directory: Path, slug: str, name: str, description: str, mtype
     )
 
 
-def _ctx(agent_id: str | None = "main", user_text: str = "") -> ToolUseContext:
-    ctx = ToolUseContext(session_id="s1", agent_id=agent_id)
+def _ctx(agent_id: str | None = None, user_text: str = "", is_subagent: bool = False) -> ToolUseContext:
+    ctx = ToolUseContext(session_id="s1", agent_id=agent_id, is_subagent=is_subagent)
     if user_text:
         ctx.messages.append({"role": "user", "content": user_text})
     return ctx
@@ -96,13 +96,24 @@ def test_recall_ignores_system_reminder_when_picking_query(tmp_path: Path):
 # Scoping por agente
 # ---------------------------------------------------------------------------
 
-def test_scoping_agent_a_does_not_see_b(tmp_path: Path):
+def test_scoping_subagent_a_does_not_see_b(tmp_path: Path):
+    # El aislamiento por agent_id aplica a SUBAGENTES (is_subagent=True); el agente
+    # principal usa el scope estable 'main'.
     _write_memory(tmp_path / "agent_a", "x", "secreto-a", "login token de A")
     provider = _provider(tmp_path)
-    seen_by_b = provider.active_context(_ctx(agent_id="agent_b", user_text="login token"))
-    seen_by_a = provider.active_context(_ctx(agent_id="agent_a", user_text="login token"))
+    seen_by_b = provider.active_context(_ctx(agent_id="agent_b", user_text="login token", is_subagent=True))
+    seen_by_a = provider.active_context(_ctx(agent_id="agent_a", user_text="login token", is_subagent=True))
     assert seen_by_b == []
     assert [m["content"] for m in seen_by_a if "secreto-a" in m["content"]]
+
+
+def test_main_agent_uses_stable_scope_regardless_of_agent_id(tmp_path: Path):
+    # Dos despachos del agente principal con agent_id (uuid) distinto comparten 'main'.
+    _write_memory(tmp_path / "main", "auth", "auth-flow", "login y tokens de sesión")
+    provider = _provider(tmp_path)
+    run1 = provider.active_context(_ctx(agent_id="agent_uuid_1", user_text="login de sesión"))
+    run2 = provider.active_context(_ctx(agent_id="agent_uuid_2", user_text="login de sesión"))
+    assert run1 and run1 == run2  # misma memoria, scope estable
 
 
 # ---------------------------------------------------------------------------
