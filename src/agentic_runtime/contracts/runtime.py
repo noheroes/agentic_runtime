@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from ..events.protocol import Event, EventHandler
     from ..execution.tasks.status import TaskStatus
+    from ..voice.protocol import AudioInput
 
 
 @dataclass
@@ -23,6 +24,9 @@ class RuntimeTask:
     fork_context: bool = False
     parent_execution_id: str = ""
     owner_id: str | None = None  # token opaco de identidad, lo setea el consumidor
+    # Entrada por voz: si se adjunta audio y el STT está activo, el runtime lo
+    # transcribe y usa la transcripción como prompt (`prompt` queda de fallback).
+    audio_prompt: "AudioInput | None" = None
 
 
 @runtime_checkable

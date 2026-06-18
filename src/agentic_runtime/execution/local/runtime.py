@@ -14,10 +14,11 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
+from ...context.presentation import IdentityPresentation
 from ...context.tool_use import ToolUseContext
 from ...contracts.permissions import PermissionContext
 from ...events.bus import EventBus
-from ...events.event_types import ToolCallEvent, ToolResultEvent
+from ...events.event_types import DoneEvent, TokenEvent, ToolCallEvent, ToolResultEvent
 from ...events.protocol import Event, EventHandler
 from ...hooks import HookEvent, HookRunner
 from ...loop.agent_loop import AgentLoop
@@ -67,6 +68,8 @@ class LocalAgentRuntime:
         background_result_max_chars: int = 2000,
         model_id: str = "",
         initial_allowed_tools: Optional[list[str]] = None,
+        stt: Any = None,
+        tts: Any = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._model_caller = model_caller
@@ -83,6 +86,9 @@ class LocalAgentRuntime:
         self._max_chars = background_result_max_chars
         self._model_id = model_id
         self._initial_allowed_tools = list(initial_allowed_tools or [])
+        # Primitivas de voz ya resueltas por el factory (None = canal inactivo).
+        self._stt = stt
+        self._tts = tts
         self._default_timeout = default_timeout
 
     @property
@@ -189,6 +195,50 @@ class LocalAgentRuntime:
             )
         return ctx, None, 0
 
+    async def _resolve_prompt(self, task: "RuntimeTask", ctx: ToolUseContext) -> str:
+        """Entrada por voz: si hay audio y el STT está activo, lo transcribe y usa
+        la transcripción como prompt del turno. Ante fallo o transcripción vacía,
+        cae al `task.prompt` — la voz no debe tumbar la task."""
+        audio = task.audio_prompt
+        if self._stt is None or audio is None:
+            return task.prompt
+        try:
+            text = await self._stt.transcribe(audio, ctx)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("STT: transcripción falló: %s", exc)
+            return task.prompt
+        return text or task.prompt
+
+    def _wire_tts(self, bus: EventBus, ctx: ToolUseContext) -> None:
+        """Salida por voz: deriva el stream del asistente a la primitiva TTS de
+        forma incremental. Solo el agente principal habla (los subagentes son
+        internos). El texto pasa por el choke point de `PathPresentation` antes de
+        salir — nunca se leen en voz alta rutas reales de infra."""
+        if self._tts is None or ctx.is_subagent:
+            return
+        presentation = ctx.presentation or IdentityPresentation()
+
+        async def _on_token(event: Event) -> None:
+            text = presentation.sanitize_output(getattr(event, "content", ""))
+            if not text:
+                return
+            try:
+                await self._tts.speak(text, ctx)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TTS: speak falló: %s", exc)
+
+        async def _on_done(event: Event) -> None:
+            # Fin del turno de habla (no un corte por tool_calls) → el integrador vacía.
+            if getattr(event, "stop_reason", None) == "tool_calls":
+                return
+            try:
+                await self._tts.flush(ctx)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TTS: flush falló: %s", exc)
+
+        bus.subscribe(TokenEvent, _on_token)
+        bus.subscribe(DoneEvent, _on_done)
+
     def _make_bus(self, task_id: str, on_event: EventHandler | None = None) -> EventBus:
         bus = EventBus()
 
@@ -244,6 +294,8 @@ class LocalAgentRuntime:
         session = Session(session_id=ctx.session_id)
         session.metadata.subagent_depth = subagent_depth
         bus = self._make_bus(task_id, on_event)
+        # Salida por voz: el TTS se suscribe al stream antes de arrancar el loop.
+        self._wire_tts(bus, ctx)
 
         loop = AgentLoop(
             model_caller=self._model_caller,
@@ -255,8 +307,11 @@ class LocalAgentRuntime:
             model_id=task.model_override or self._model_id,
         )
 
+        # Entrada por voz: el prompt efectivo puede venir de transcribir el audio.
+        prompt = await self._resolve_prompt(task, ctx)
+
         try:
-            await loop.run(task.prompt, ctx)
+            await loop.run(prompt, ctx)
         except asyncio.CancelledError:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.kill(task_id)

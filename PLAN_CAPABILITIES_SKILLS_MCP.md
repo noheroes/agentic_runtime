@@ -611,27 +611,39 @@ la voz es ese patrón con STT añadido en la entrada. No expone `catalog()`/`too
 
 ### Tareas
 
-Estado: `[ ] no iniciado`
+Estado: `[x] COMPLETO` — primitivas + plomería en el runtime, activables por config.
 
-- [ ] Definir `VoiceIOAdapter` (STT in / TTS out) como capa del consumidor sobre el runtime.
-- [ ] STT: entregar la transcripción como prompt del turno.
-- [ ] TTS: suscribirse a `TokenEvent` del `EventBus` y sintetizar incremental.
-- [ ] Barge-in: la señal de voz entrante dispara `ctx.stop` / `SignalBus`.
-- [ ] Saneo: el texto que va a TTS pasa por el mismo choke point de `PathPresentation` — nunca
-      leer en voz alta rutas reales de infra (la fuga por voz es la peor).
+Refinamiento sobre el plan original: el runtime SÍ aporta las primitivas (puertos) y la
+plomería; la implementación real (motor STT/TTS) la inyecta el integrador y cada canal
+se activa/desactiva por configuración. Lo que NO hace el runtime es reproducir audio ni
+conocer códecs — solo transcribe→prompt y deriva la salida saneada a la primitiva.
 
-Criterios:
+- [x] Puertos `SpeechToTextProtocol`/`TextToSpeechProtocol` + `AudioInput` en `voice/protocol.py`
+      (capability de borde de I/O — sin tools ni catálogo, NO pasa por `CapabilityManager`).
+- [x] STT: `RuntimeTask.audio_prompt` lo transcribe el runtime a prompt del turno
+      (`LocalAgentRuntime._resolve_prompt`); ante fallo/vacío cae a `task.prompt`.
+- [x] TTS: suscrito al `TokenEvent` del `EventBus` (`_wire_tts`), sintetiza incremental y hace
+      `flush` al cerrar el turno de habla (no en cortes por `tool_calls`).
+- [x] Barge-in: cubierto por la primitiva existente — el integrador llama `runtime.cancel(task_id)`
+      (setea `ctx.stop` → el loop corta el stream). No requiere puerto nuevo.
+- [x] Saneo: el texto a TTS pasa por `ctx.presentation.sanitize_output` (`PathPresentation`).
+- [x] Config: `VoiceConfig(stt, tts, stt_enabled, tts_enabled)` en `RuntimeConfig`. Canal activo
+      sii primitiva inyectada Y flag on; el gate vive en el factory (el runtime recibe puerto o None).
 
-- El runtime no cambia: STT/TTS viven en el borde del consumidor sobre primitivas existentes.
+Criterios (cumplidos):
+
+- El runtime no reproduce audio: STT/TTS son puertos del integrador; el runtime solo conecta plomería.
 - TTS recibe tokens ya saneados (fake-path), igual que las cards de la UI.
-- Barge-in cancela la generación de forma responsiva.
+- Barge-in cancela la generación de forma responsiva vía `cancel`/`ctx.stop`.
+- Los subagentes no hablan (solo el agente principal deriva al TTS).
 
-### Tests STT/TTS
+### Tests STT/TTS (`tests/test_voice_io.py`, 8 casos)
 
-- [ ] STT entrega prompt: una transcripción produce un turno de usuario equivalente al texto.
-- [ ] TTS incremental: cada `TokenEvent` se entrega al sintetizador sin esperar el fin del turno.
-- [ ] Barge-in: señal entrante durante generación dispara `ctx.stop` y corta el stream.
-- [ ] Saneo: una ruta real en el texto de salida no llega al TTS (pasa por `PathPresentation`).
+- [x] STT entrega prompt: una transcripción adjunta llega al modelo COMO prompt del turno.
+- [x] TTS incremental: cada `TokenEvent` se entrega al sintetizador sin esperar el fin + `flush` final.
+- [x] Config: con `stt_enabled=False`/`tts_enabled=False` el canal no se invoca.
+- [x] Saneo: una ruta real en la salida no llega al TTS (pasa por `PathPresentation`).
+- [x] Subagentes no hablan; sin `flush` en turnos cortados por `tool_calls`.
 
 ## MemoryProvider (capability de memoria del agente)
 
@@ -1175,4 +1187,28 @@ Al terminar:
 - Divergencias del plan escrito ya corregidas en §MemoryProvider: quitada la tool `remember` y el blob
   bajo `ltm_key`/`StorageProtocol` — guardado canónico = `write_file` + prompt; memoria en filesystem.
 - Probado: suite **348 passed, 0 skipped**, `ruff` limpio.
+
+### 2026-06-18 — Voz (STT/TTS): primitivas de borde + plomería, activables por config
+
+- **Naturaleza**: capability de borde de I/O — NO aporta tools ni catálogo, NO pasa por el
+  `CapabilityManager`. Paquete propio `voice/{protocol,__init__}` con los puertos
+  `SpeechToTextProtocol`/`TextToSpeechProtocol` y `AudioInput`. El runtime aporta primitivas +
+  plomería; el motor real lo inyecta el integrador.
+- **STT (entrada → enunciado)**: `RuntimeTask.audio_prompt: AudioInput | None`. En `_run_loop`,
+  `LocalAgentRuntime._resolve_prompt` transcribe el audio y usa la transcripción como prompt del
+  turno; ante fallo o transcripción vacía cae a `task.prompt` (la voz no tumba la task). `fork()` no
+  usa `prompt` y `loop.run` es el único que lo inserta → sin doble-append en el path de subagente.
+- **TTS (salida incremental)**: `_wire_tts` suscribe el `EventBus` del task; cada `TokenEvent` se
+  sanea por `ctx.presentation.sanitize_output` (`PathPresentation` — nunca rutas reales en voz alta)
+  y se deriva con `speak`; `flush` al cerrar el turno de habla (NO en cortes por `tool_calls`). Solo
+  el agente principal habla (`is_subagent` gate).
+- **Config on/off**: `VoiceConfig(stt, tts, stt_enabled, tts_enabled)` en `RuntimeConfig`. El gate
+  vive en el factory (`stt = voice.stt if stt y enabled else None`); el runtime recibe puerto o None.
+  Activar/desactivar un canal no exige retirar la primitiva inyectada.
+- **Barge-in**: cubierto por la primitiva existente `runtime.cancel(task_id)` → `ctx.stop` → el loop
+  corta el stream. No requirió puerto nuevo.
+- Tests: `tests/test_voice_io.py` (8) — STT→prompt, STT off, sin audio, TTS incremental+flush, TTS
+  off, saneo por presentation, subagente no habla, sin flush en `tool_calls`.
+- Probado: suite **354 passed, 2 skipped** (los 2 skipped = E2E office-skills sin deps opcionales),
+  `ruff` limpio.
 

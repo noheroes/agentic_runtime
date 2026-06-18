@@ -57,11 +57,27 @@ class ModelsConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """I/O por voz (STT/TTS). Las primitivas las inyecta el integrador; cada canal
+    se activa/desactiva por config sin retirar la implementación inyectada.
+
+    - `stt`: `SpeechToTextProtocol` — transcribe el audio de la task a prompt.
+    - `tts`: `TextToSpeechProtocol` — recibe la salida saneada, incremental.
+    Un canal está ACTIVO sii su primitiva está inyectada y su flag `*_enabled`."""
+
+    stt: Any = None
+    tts: Any = None
+    stt_enabled: bool = True
+    tts_enabled: bool = True
+
+
+@dataclass
 class RuntimeConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     capabilities: CapabilitiesConfig = field(default_factory=CapabilitiesConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     model_caller: Any = None      # ModelCallerProtocol inyectado por el consumidor
     hook_runner: Any = None       # HookRunner inyectado por el consumidor
     task_registry: Any = None     # TaskRegistryProtocol inyectado por el consumidor
@@ -162,6 +178,12 @@ class RuntimeFactory:
         # Entorno de ejecución de tools — default in-process (canónico CLI/IDE)
         exec_env = config.exec_env or LocalExecEnvironment()
 
+        # Voz: cada canal queda activo sii su primitiva está inyectada y habilitada.
+        # El gate vive aquí; el runtime solo recibe la primitiva o None.
+        voice = config.voice
+        stt = voice.stt if (voice.stt is not None and voice.stt_enabled) else None
+        tts = voice.tts if (voice.tts is not None and voice.tts_enabled) else None
+
         return LocalAgentRuntime(
             model_caller=config.model_caller,
             tool_registry=tool_registry,
@@ -177,6 +199,8 @@ class RuntimeFactory:
             background_result_max_chars=config.background_result_max_chars,
             model_id=config.model_id,
             initial_allowed_tools=config.initial_allowed_tools,
+            stt=stt,
+            tts=tts,
         )
 
 
