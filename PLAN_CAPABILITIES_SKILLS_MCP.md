@@ -2,7 +2,8 @@
 
 Estado general: `[ ] no iniciado` `[~] en progreso` `[x] completado`
 
-Estado actual: `[ ] no iniciado`
+Estado actual: `[x] completado` (Skills S0–S5, MCP M0–M5+auth, MemoryProvider F1–F3 y Voz STT/TTS
+cerrados; cableado C1/C2 absorbido en M2 y C3 en S5/compaction. Verde: 354 passed, 2 skipped.)
 
 ## Objetivo
 
@@ -253,20 +254,6 @@ Criterios:
 **Cableado clave:** `AgentLoop` ahora aplica `result.context_modifier(ctx)` tras cada dispatch (mutación
 in-place). Esto también activa los modifiers de worktree/plan_mode/todo_write/config, antes muertos.
 
-#### Fase S2 - Context modifier de skills
-
-Estado: `[ ] no iniciado`
-
-- [ ] `SkillTool` devuelve `context_modifier`.
-- [ ] El modifier agrega allowed tools al `PermissionContext`.
-- [ ] El modifier agrega skill activa al `AppState`.
-- [ ] El runtime no deriva tools desde `invoked_skills`.
-
-Criterios:
-
-- `models/gpt_5_4/runtime.py` no contiene `_allowed_tools_for_invoked_skills`.
-- Tests verifican que allowed tools aparecen por permisos/contexto.
-
 #### Fase S3 - Catalogo organico
 
 Estado: `[x] completado`
@@ -315,37 +302,6 @@ Criterios:
 - Tras compactacion no se pierde skill activa. ✓ (`compact_context` reemite el contenido).
 - Tras compactacion no se induce reinvocacion. ✓ (test asserta ausencia de 'reinvoc'). El `Compactor`
   consumirá `manager.compact_context()` — no importa `SkillsProvider` directamente.
-
-#### Fase S4 - Slash commands
-
-Estado: `[ ] no iniciado`
-
-Prerequisito: primitivas fork del runtime (provistas por el complementary plan).
-
-- [ ] Sacar `skills.dispatcher` del loop.
-- [ ] Procesar slash commands mediante provider/command processor.
-- [ ] Mantener compatibilidad con `/skill args`.
-- [ ] Fork/background pasan por `ForkContext` via `RuntimeContextForker` — ver Primitivas Fork Y Background.
-
-Criterios:
-
-- `core/loop.py` no importa `skills.dispatcher`.
-- Slash skill produce los mismos eventos que antes o equivalentes documentados.
-- La capability no decide como se hereda el contexto del fork — lo decide `ForkPolicy`.
-
-#### Fase S5 - Compaction
-
-Estado: `[ ] no iniciado`
-
-- [ ] SkillsProvider aporta compact context.
-- [ ] El texto debe seguir referencia: "continue to follow these guidelines".
-- [ ] Eliminar "re-invoke" de compactor base.
-- [ ] Guardar contenido de skills invocadas, no solo nombres.
-
-Criterios:
-
-- Tras compactacion no se pierde skill activa.
-- Tras compactacion no se induce reinvocacion.
 
 ### Tests Skills
 
@@ -563,19 +519,6 @@ Evidencia M5: `McpProvider.{disconnect,remove,reconnect}_server` (+ `McpState.re
 Tests: `test_mcp_management.py` (4: add/connect, disconnect conserva config y cierra client, remove
 elimina todo, reconnect refresca client+tools). Cuando se agregue una API HTTP, sus rutas delegan aquí.
 
-#### Fase M5 - MCP management API
-
-Estado: `[ ] no iniciado`
-
-- [ ] API `/mcp` llama service/provider.
-- [ ] API no toca `loop._registry`.
-- [ ] Toggle/add/delete actualiza provider state.
-- [ ] Tool pool refresh se hace via capability manager.
-
-Criterios:
-
-- `api/routes/mcp.py` no modifica registry directamente.
-
 ### Tests MCP
 
 - [x] Provider conecta server y expone tools (`test_mcp_client`).
@@ -786,7 +729,7 @@ nunca implementar semántica de fork, copia de mensajes ni background propias.
 
 ### Fase C0 - Integracion inicial
 
-Estado: `[~] en progreso`
+Estado: `[x] completado`
 
 Tareas:
 
@@ -815,7 +758,8 @@ Pruebas:
 
 ### Fase C1 - Chat integration
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado` (absorbido en M2 — este repo no tiene `chat.py`; el catálogo lo sirve el
+manager por turno, no una capa de chat. Las tareas de abajo eran del canónico de referencia.)
 
 Tareas:
 
@@ -838,7 +782,8 @@ Pruebas:
 
 ### Fase C2 - Loop integration
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado` (cableado en M2, aprobado R4 — el loop ensambla pool+schemas por turno vía
+`build_tool_pool`, aplica `context_modifier` tras cada dispatch y delega `agent_id`/background al runtime.)
 
 Prerequisito: primitivas fork/background/`agent_id` del runtime (provistas por el complementary plan).
 
@@ -868,7 +813,8 @@ Pruebas:
 
 ### Fase C3 - Compaction integration
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado` (cerrado en S5 — la compactación consume `manager.compact_context()`; ningún
+provider se importa directo en el compactor.)
 
 Tareas:
 

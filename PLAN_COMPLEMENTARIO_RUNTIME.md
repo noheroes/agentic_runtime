@@ -1,7 +1,9 @@
 # Plan Complementario — Enmienda del Runtime Agentico y Models
 
 Estado general: `[ ] no iniciado` `[~] en progreso` `[x] completado`
-Estado actual: `[ ] no iniciado`
+Estado actual: `[x] completado` (todas las fases R0–R7, BORDES B1–B4 y Track MODELS M0–M3
+cerradas; única deferral aprobada: round-trip de transporte de mistral, bloqueado por el pin
+del SDK `mistralai` — cubierto build-side, ver Fase M1).
 
 Complementa `PLAN_RUNTIME_AGENTICO.md`. Ese plan marca todo `[x] completado`; la
 auditoría 2026-06-13 (ver más abajo) demuestra que **no lo está**. Este plan enmienda
@@ -257,7 +259,7 @@ Verificar (sin red, con `FauxProvider`/stub caller y sinks stub):
 - Paridad de comportamiento documentada contra `legacy_runtime.py` (qué se preserva, qué
   cambia a propósito).
 
-### Fase R5 — `create_runtime()` ensambla el runtime nuevo y se elimina el legacy
+### Fase R5 — `create_runtime()` ensambla el runtime nuevo y se elimina el legacy  [x] completado
 
 Depende de: R2.
 
@@ -277,7 +279,7 @@ Verificar:
 - [ ] El flujo de `scripts/e2e_runtime_test.py` se reduce a `create_runtime()` + un prompt. → R7.
 - [x] El runtime legacy ya no existe.
 
-### Fase R6 — Check de acoplamiento final
+### Fase R6 — Check de acoplamiento final  [x] completado
 
 Tareas:
 - [x] Test de acoplamiento estático: `agentic_runtime` (incluyendo `tests/`, `scripts/` y
@@ -291,7 +293,7 @@ Verificar:
 - `pyproject.toml` de `agentic_runtime` no declara `agent_core` (nunca lo declaró).
 - Suite completa del paquete verde.
 
-### Fase R7 — Evidencia de ejecución E2E + suite de integración completa
+### Fase R7 — Evidencia de ejecución E2E + suite de integración completa  [x] completado
 
 Depende de: R5 (todo pasa por `create_runtime()`).
 
@@ -339,7 +341,7 @@ Verificar:
 
 ## 5. Track MODELS
 
-### Fase M0 — Resolver el shadow de `types.py`
+### Fase M0 — Resolver el shadow de `types.py`  [x] completado
 
 Depende de: G4.
 
@@ -354,7 +356,7 @@ Verificar:
 - [x] `uv run python -m pytest tests/` corre desde el directorio del paquete sin ImportError
       (12 passed, sin env). `agentic_runtime` sigue verde (174 passed). E2E faux exit 0.
 
-### Fase M1 — Tests de providers con `FauxProvider`
+### Fase M1 — Tests de providers con `FauxProvider`  [x] completado (transporte de mistral diferido, ver nota)
 
 Objetivo: cubrir la lógica de traducción (lo más propenso a bugs) sin gastar red.
 
