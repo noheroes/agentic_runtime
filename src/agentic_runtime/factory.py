@@ -137,7 +137,9 @@ class RuntimeFactory:
         if caps.memory_store is not None or caps.memory_root is not None:
             from .capabilities.memory import FilesystemMemoryStore, MemoryProvider
 
-            store = caps.memory_store or FilesystemMemoryStore(caps.memory_root)
+            store = caps.memory_store
+            if store is None and caps.memory_root is not None:
+                store = FilesystemMemoryStore(caps.memory_root)
             providers.append(MemoryProvider(store))
 
         providers.extend(caps.extra_providers)

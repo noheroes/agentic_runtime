@@ -11,6 +11,7 @@ from .state import SkillsState
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
     from ...tools.protocol import ToolProtocol
+    from .store import SkillStore
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class SkillsProvider:
 
     name = "skills"
 
-    def __init__(self, state: SkillsState | None = None, *, skill_store: "object | None" = None) -> None:
+    def __init__(self, state: SkillsState | None = None, *, skill_store: "SkillStore | None" = None) -> None:
         self._state = state or SkillsState()
         # Puerto de persistencia de skills (dónde se registran / se escribe el SKILL.md).
         # Lo provee/inyecta quien integra el runtime; se lee en startup().

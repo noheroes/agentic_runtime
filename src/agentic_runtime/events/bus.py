@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Type
+from typing import Awaitable, Callable, Type, TypeVar
 
 from .protocol import Event, EventHandler
+
+T = TypeVar("T", bound=Event)
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +23,10 @@ class EventBus:
         self._handlers: dict[Type[Event], list[EventHandler]] = defaultdict(list)
         self._global_handlers: list[EventHandler] = []
 
-    def subscribe(self, event_type: Type[Event], handler: EventHandler) -> None:
-        self._handlers[event_type].append(handler)
+    def subscribe(self, event_type: Type[T], handler: Callable[[T], Awaitable[None]]) -> None:
+        # El registro es homogéneo en runtime (se invoca por tipo exacto); el cast
+        # implícito a EventHandler es seguro porque `emit` solo entrega `event_type`.
+        self._handlers[event_type].append(handler)  # type: ignore[arg-type]
 
     def subscribe_all(self, handler: EventHandler) -> None:
         """Suscribe un handler a TODOS los eventos, sin importar el tipo.

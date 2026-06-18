@@ -88,6 +88,8 @@ class McpClient:
         stack = AsyncExitStack()
         try:
             if transport == "stdio":
+                if self._config.command is None:
+                    raise ValueError(f"MCP server {self._config.name!r}: transport stdio requiere 'command'")
                 params = StdioServerParameters(
                     command=self._config.command,
                     args=list(self._config.args),
@@ -99,7 +101,8 @@ class McpClient:
 
                 from .auth import build_auth
 
-                artifacts = build_auth(self._config, server_url=self._config.url or "", deps=self._auth_deps)
+                url = self._config.url or ""
+                artifacts = build_auth(self._config, server_url=url, deps=self._auth_deps)
                 headers = {**dict(self._config.headers), **artifacts.headers} or None
                 httpx_auth = artifacts.httpx_auth
                 if transport == "sse":
@@ -107,7 +110,7 @@ class McpClient:
 
                     streams = await stack.enter_async_context(
                         sse_client(
-                            self._config.url, headers=headers,
+                            url, headers=headers,
                             httpx_client_factory=_http_client_factory(self._config.ssl_verify),
                             auth=httpx_auth,
                         )
@@ -122,7 +125,7 @@ class McpClient:
                         )
                     )
                     streams = await stack.enter_async_context(
-                        streamable_http_client(self._config.url, http_client=http_client)
+                        streamable_http_client(url, http_client=http_client)
                     )
                 read, write = streams[0], streams[1]
 

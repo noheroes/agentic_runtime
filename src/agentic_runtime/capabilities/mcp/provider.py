@@ -138,8 +138,8 @@ class McpProvider:
             self._state.set_status(name, ServerStatus.FAILED, error=str(exc))
             try:
                 await client.aclose()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as close_exc:  # noqa: BLE001
+                logger.debug("mcp: aclose tras fallo de %r también falló: %s", name, close_exc)
             return False
 
         self._state.set_client(name, client)

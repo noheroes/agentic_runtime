@@ -86,14 +86,17 @@ def _build_oauth(config: "McpServerConfig", server_url: str, deps: AuthDeps) -> 
 
     from mcp.client.auth import OAuthClientProvider
     from mcp.shared.auth import OAuthClientMetadata
+    from pydantic import AnyUrl
 
+    redirect_uris = [AnyUrl(u) for u in config.redirect_uris] or [AnyUrl("http://localhost:8765/callback")]
     metadata = OAuthClientMetadata(
         client_name=config.client_name or "agentic-runtime",
-        redirect_uris=list(config.redirect_uris) or ["http://localhost:8765/callback"],
+        redirect_uris=redirect_uris,
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
         scope=config.scope,
-        token_endpoint_auth_method="none",
+        # método OAuth (no es una credencial)
+        token_endpoint_auth_method="none",  # nosec B106
     )
     provider = OAuthClientProvider(
         server_url=server_url,

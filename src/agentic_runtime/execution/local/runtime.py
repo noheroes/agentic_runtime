@@ -289,6 +289,7 @@ class LocalAgentRuntime:
         t0 = time.monotonic()
         ctx, parent_session_id, subagent_depth = self._build_child(task, parent_snapshot)
         ctx.is_subagent = parent_snapshot is not None
+        ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
         ctx.presentation = self._presentation
         ctx.exec_env = self._exec_env
         session = Session(session_id=ctx.session_id)
@@ -354,7 +355,7 @@ class LocalAgentRuntime:
             return
         # El agent_id aleatorio discrimina el subtree solo para subagentes (kind);
         # el main vive en la raíz de la sesión.
-        agent_id = ctx.agent_id if ctx.is_subagent else "main"
+        agent_id = (ctx.agent_id if ctx.is_subagent else "main") or "main"
         key = StorageKeys.transcript_key(task.owner_id, ctx.session_id, agent_id)
         try:
             await self._storage.upload(key, session.model_dump_json().encode(), "application/json")
