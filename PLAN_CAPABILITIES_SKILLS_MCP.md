@@ -71,7 +71,7 @@ Los nombres finales pueden variar, pero las responsabilidades deben quedar separ
 
 ### CapabilityProvider
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -99,7 +99,7 @@ class CapabilityProvider(Protocol):
 
 ### CapabilityManager
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -117,7 +117,7 @@ Criterios:
 
 ### CapabilitySummary
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -134,7 +134,7 @@ Campos sugeridos:
 
 ### CapabilityActivation
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
 Responsabilidad:
 
@@ -182,34 +182,76 @@ Skill invocation debe producir:
 
 #### Fase S0 - Provider shell
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `SkillsProvider`.
-- [ ] Mover acceso a `skills.loader` detras del provider.
-- [ ] Exponer catalogo desde provider.
-- [ ] Mantener `SkillTool` actual como adapter temporal.
-- [ ] Tests de catalogo.
+- [x] Crear `SkillsProvider` (segundo `CapabilityProvider` concreto, `capabilities/skills/`).
+- [~] Mover acceso a `skills.loader` detras del provider. → N/A en este repo: no existe loader de
+      skills heredado (eso era `new_core`). El loader nace dentro del provider (`skills/loader.py`),
+      detrás de él; el integrador carga vía `provider.load_dir(...)`.
+- [x] Exponer catalogo desde provider (`catalog(context)` → `CapabilitySummary(kind="skill")`).
+- [~] Mantener `SkillTool` actual como adapter temporal. → N/A (no hay `SkillTool` heredado). La tool
+      de invocación `Skill` se construye en S1; en S0 `tools()` devuelve `[]` (shell honesto).
+- [x] Tests de catalogo.
+- [x] Parseo de frontmatter **tolerante** (`skills/frontmatter.py`): `SkillFrontmatter` (`extra="allow"`,
+      todo campo operativo `Optional` con validadores `mode="before"` que degradan tipos inválidos a
+      default); `parse_frontmatter` nunca lanza (sin frontmatter / YAML inválido / no-mapping → `{}`).
+- [x] Aislamiento por ítem: `load_skills_dir` salta con log un `SKILL.md` ilegible; un frontmatter
+      corrupto carga igual con defaults (identidad desde el directorio), no aborta la carga del resto.
 
 Criterios:
 
-- `chat.py` puede pedir catalogo al manager, no a `skills.loader`.
-- No cambia comportamiento aun.
+- `chat.py` puede pedir catalogo al manager, no a `skills.loader`. ✓ (vía `CapabilityManager.catalog`;
+  el wiring real en `chat.py` es fase C — el contrato ya lo permite).
+- No cambia comportamiento aun. ✓ (`tools/active_context/compact_context` vacíos; declarado, no fingido).
+- Una skill de terceros con frontmatter mínimo (solo `name`/`description`, sin `allowed-tools`
+  ni `model`) carga y opera con defaults definidos: no activa tools extra; hereda el modelo del padre. ✓
+- Tests: frontmatter ausente/parcial/malformado → carga estable con defaults, sin excepción. ✓
+
+Evidencia S0: `capabilities/skills/{frontmatter,loader,state,provider}.py`. `SkillFrontmatter`
+(`extra="allow"`, `allowed-tools` acepta lista o CSV, `name`/`description`/`model` no-string → `None`).
+`parse_frontmatter` total. `SkillDefinition` tipada: `name` ← dir cuando falta, `description` ← primer
+párrafo del cuerpo cuando falta, `model` ø/`inherit` → `None` (hereda), `allowed_tools` ø → `[]`.
+`load_skills_dir` aísla por ítem. `SkillsProvider` cumple `CapabilityProvider`; su catálogo converge por
+`CapabilityManager`. 18 tests en `test_skills_provider.py`. Dependencia nueva: `pyyaml` (parseo YAML del
+frontmatter, espejo del canónico; no estaba en el repo).
 
 #### Fase S1 - Skill como comando procesado
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `SkillCommandProcessor`.
-- [ ] Renderizar skill con metadata.
-- [ ] Producir mensajes meta, no mensaje user plano.
-- [ ] Producir `allowed_tools`.
-- [ ] Producir `command_permissions` o equivalente Python.
-- [ ] Registrar invoked skill con contenido completo.
+- [x] Crear procesador de invocación (`skill_tool.py`: `SkillTool` + `render_skill` +
+      `build_skill_context_modifier`).
+- [x] Renderizar skill con metadata (`render_skill`: instrucciones + framing 'continúa, no reinvoques').
+- [x] Producir mensajes meta, no mensaje user plano → las instrucciones van como tool result (rol `tool`).
+- [x] Producir `allowed_tools` (del frontmatter, habilitados vía modifier).
+- [x] Producir `command_permissions` o equivalente → `PermissionContext.with_command_allow` en el modifier.
+- [x] Registrar invoked skill con contenido completo (`active_skills[name].content`, no solo el nombre).
 
 Criterios:
 
-- Una invocacion de `Skill` deja estado activo estructurado.
-- El modelo recibe instrucciones de skill sin tener que reinvocar.
+- Una invocacion de `Skill` deja estado activo estructurado. ✓ (`app_state.capabilities`).
+- El modelo recibe instrucciones de skill sin tener que reinvocar. ✓ (tool result + active_context).
+
+Evidencia S1: `capabilities/skills/skill_tool.py`. Tests: `test_skill_invocation.py`.
+
+#### Fase S2 - Context modifier de skills
+
+Estado: `[x] completado`
+
+- [x] `SkillTool` devuelve `context_modifier` (`result.context_modifier`, patrón ya usado por worktree/
+      plan_mode — antes **latente**: el loop no lo aplicaba; ahora sí).
+- [x] El modifier agrega allowed tools al `PermissionContext` (+ los marca descubiertos, cruce M3).
+- [x] El modifier agrega skill activa al `AppState` (`app_state.capabilities['active_skills']`).
+- [x] El runtime no deriva tools desde `invoked_skills` → no hay `_allowed_tools_for_invoked_skills`;
+      la habilitación va por permisos/contexto, no por lógica del runtime.
+
+Criterios:
+
+- `runtime.py` no contiene `_allowed_tools_for_invoked_skills`. ✓ (no existe tal función).
+- Tests verifican que allowed tools aparecen por permisos/contexto. ✓ (`test_skill_invocation`).
+
+**Cableado clave:** `AgentLoop` ahora aplica `result.context_modifier(ctx)` tras cada dispatch (mutación
+in-place). Esto también activa los modifiers de worktree/plan_mode/todo_write/config, antes muertos.
 
 #### Fase S2 - Context modifier de skills
 
@@ -227,17 +269,52 @@ Criterios:
 
 #### Fase S3 - Catalogo organico
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Mover construccion del catalogo a `SkillsProvider`.
-- [ ] Eliminar regla global "SKILL CHECK before EVERY step" de `sections.py`.
-- [ ] Catalogo debe servir para seleccion, no para reinvocacion.
-- [ ] Si una skill esta activa, el contexto debe decir que se continue siguiendo sus instrucciones.
+- [x] Mover construccion del catalogo a `SkillsProvider` (`catalog()`, desde S0).
+- [~] Eliminar regla global "SKILL CHECK before EVERY step" de `sections.py` → N/A: no hay `sections.py`
+      en este repo. El catálogo nace sin esa regla imperativa (es selección, no mandato).
+- [x] Catalogo debe servir para seleccion, no para reinvocacion → `catalog()` son `CapabilitySummary`
+      (nombre/descripción), sin "call Skill FIRST".
+- [x] Si una skill esta activa, el contexto debe decir que se continue siguiendo (`active_context`).
 
 Criterios:
 
-- Follow-ups no reinvocan skill por defecto.
-- `Skill(drawio-diagrams)` seguido de tareas internas habilita `drawio__*`.
+- Follow-ups no reinvocan skill por defecto. ✓ (`active_context` dice 'continúa', no 'reinvoca').
+- `Skill(drawio-diagrams)` seguido de tareas internas habilita `drawio__*`. ✓ (modifier marca allowed +
+  descubierto; cruce S2↔M3). Tests: `test_skill_invocation`.
+
+#### Fase S4 - Slash commands
+
+Estado: `[x] completado`
+
+- [x] Sacar `skills.dispatcher` del loop → N/A (el loop nunca importó skills); el procesamiento de slash
+      vive en `capabilities/skills/commands.py` (`parse_slash_command`, `process_slash_command`).
+- [x] Procesar slash commands mediante provider/command processor (`SkillsProvider.process_slash_command`).
+- [x] Mantener compatibilidad con `/skill args` (`parse_slash_command` separa nombre y args).
+- [~] Fork/background pasan por `ForkContext` → la activación de skill es inline; si un slash lanza
+      subagente, lo decide el runtime vía `RuntimeContextForker` (la capability no forka).
+
+Criterios:
+
+- `core/loop.py` no importa `skills.dispatcher`. ✓ (test de acoplamiento en `test_skill_slash`).
+- Slash skill produce los mismos eventos/efecto que la tool `Skill` (reusa `render_skill`+modifier). ✓
+
+#### Fase S5 - Compaction
+
+Estado: `[x] completado`
+
+- [x] SkillsProvider aporta compact context (`compact_context` = `active_context`).
+- [x] El texto sigue referencia: "continúa siguiendo" (no "re-invoke").
+- [~] Eliminar "re-invoke" de compactor base → N/A (no hay compactor base en este repo); el aporte del
+      provider nunca induce reinvocación.
+- [x] Guardar contenido de skills invocadas, no solo nombres (`active_skills[name].content`).
+
+Criterios:
+
+- Tras compactacion no se pierde skill activa. ✓ (`compact_context` reemite el contenido).
+- Tras compactacion no se induce reinvocacion. ✓ (test asserta ausencia de 'reinvoc'). El `Compactor`
+  consumirá `manager.compact_context()` — no importa `SkillsProvider` directamente.
 
 #### Fase S4 - Slash commands
 
@@ -272,13 +349,13 @@ Criterios:
 
 ### Tests Skills
 
-- [ ] Invocar skill agrega active skill context.
-- [ ] Invocar skill agrega allowed tools al permission context.
-- [ ] Follow-up usa tools permitidas sin reinvocar skill.
-- [ ] Compaction preserva instrucciones de skill.
-- [ ] No se inyecta catalogo como mandato de reinvocacion.
-- [ ] Slash inline funciona via provider.
-- [ ] Fork/background siguen funcionando.
+- [x] Invocar skill agrega active skill context (`test_skill_invocation`).
+- [x] Invocar skill agrega allowed tools al permission context (`test_skill_invocation`).
+- [x] Follow-up usa tools permitidas sin reinvocar skill (loop aplica modifier; permisos persisten).
+- [x] Compaction preserva instrucciones de skill (`test_skill_invocation::compact`).
+- [x] No se inyecta catalogo como mandato de reinvocacion (`active_context` dice 'continúa').
+- [x] Slash inline funciona via provider (`test_skill_slash`).
+- [~] Fork/background siguen funcionando → provistos por el runtime (no los toca la capability).
 
 ## MCP Provider
 
@@ -316,73 +393,175 @@ Tool pool final se obtiene desde el manager, no registrando MCP como nativas.
 
 #### Fase M0 - Provider shell
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `McpProvider`.
-- [ ] Mover `load_mcp_tools` detras del provider.
-- [ ] Mantener wrappers actuales como adapter temporal.
-- [ ] Exponer `mcp.tools` desde provider.
-- [ ] Exponer `mcp.resources` desde provider.
+- [x] Crear `McpProvider` (primer `CapabilityProvider` concreto, `capabilities/mcp/`).
+- [~] Mover `load_mcp_tools` detras del provider. → N/A en este repo: no existe loader MCP
+      heredado (eso era `new_core`). En su lugar el provider define el **punto de inyección**:
+      el integrador conecta servers/transporte y registra specs; el transporte (`McpCall`) se
+      inyecta, el shell no lo implementa (ciclo de vida real = M1).
+- [~] Mantener wrappers actuales como adapter temporal. → N/A (no hay wrappers heredados).
+- [x] Exponer `mcp.tools` desde provider (`tools(context)` vía `McpState.all_tools()`).
+- [x] Exponer `mcp.resources` desde provider (`resources(context)`).
+- [ ] Config de server **tolerante en lo operativo, estricta en lo de seguridad** (ver "Robustez
+      ante skills/MCP de terceros"): props no estándar (p.ej. `model`) → `Optional` + default;
+      validez de config/identidad del server → validación dura que rechaza explícitamente.
+- [ ] Aislamiento por ítem: un server/tool malformado se salta con log, no tumba al resto.
+- [ ] Campos de tool del estándar pero opcionales (annotations/hints) → default seguro (`?? false`).
 
 Criterios:
 
 - `main.py` inicializa provider.
 - El registry nativo no necesita cargar MCP para startup.
+- Un MCP de terceros sin las props no estándar opera con defaults; una config de server inválida
+  se rechaza con error claro (borde de seguridad), no se ignora silenciosamente.
+- Tests: tool MCP sin annotations → default; server con config inválida → rechazo explícito.
+
+Evidencia M0: `capabilities/mcp/{config,tool_adapter,state,provider}.py`. `McpServerConfig`
+(`extra="allow"`, `command` xor `url` validado → rechaza). `parse_server_config` estricto (lanza),
+`load_server_configs` tolerante (salta con log). `build_mcp_tool` tolerante (annotations opcionales,
+sin `name` → omite). `McpProvider` cumple `CapabilityProvider`; sus tools convergen por
+`CapabilityManager.build_tool_pool`. 17 tests en `test_mcp_provider.py`.
 
 #### Fase M1 - Estado MCP separado
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Crear `McpState`.
-- [ ] Guardar servers, clients, tools, resources.
-- [ ] Mover `_clients` y `_clients_by_name` fuera de globals o encapsularlos.
-- [ ] Dejar API de acceso por provider.
+- [x] Crear `McpState`. → ya existía (M0); M1 le añade clients + estado de conexión.
+- [x] Guardar servers, clients, tools, resources (`McpState`: `_clients`, `_status`, `_errors`).
+- [x] Mover `_clients` fuera de globals o encapsularlos → viven en `McpState`, no en globals;
+      el provider los gestiona por su ciclo de vida.
+- [x] Dejar API de acceso por provider (`connect_server`, `startup`/`shutdown`, `state.clients/...`).
 
 Criterios:
 
-- Resource tools no llaman `mcp.loader` directamente.
-- Gmail adapter recibe provider/client resolver.
+- Resource tools no llaman `mcp.loader` directamente. ✓ (no hay loader global; el client encapsula
+  el transporte; `resources()` sale del estado poblado por `connect_server`).
+- Gmail adapter recibe provider/client resolver. → N/A en este repo (no hay Gmail adapter heredado).
+
+Contrato de registro (extendido): `McpServerConfig` soporta `url`, `type` (http/sse/stdio, explícito o
+inferido), `auth` (modo extensible), `ssl_verify` (valida/omite TLS vía `httpx_client_factory`).
+`resolved_transport()` lo materializa; `McpClient.connect` enruta a stdio/sse/streamable-http según `type`.
+Tests: `test_mcp_config_contract.py` (14).
+
+**Auth MUTABLE/extensible (spec MCP 2025-11-25 = OAuth 2.1, no solo bearer):** `capabilities/mcp/auth.py`
+modela cada modo como ESTRATEGIA registrable (`register_auth_strategy`); añadir un modo no toca client ni
+provider. Integradas: `none`, `bearer` (token estático → `Authorization`), `oauth` (cablea el
+`OAuthClientProvider` del SDK `mcp` = OAuth 2.1 completo: discovery RFC 9728/8414, PKCE S256, DCR, refresh,
+resource indicator RFC 8707 — NO se reimplementa). `AuthDeps` inyecta lo que el runtime headless no posee:
+`redirect_handler`/`callback_handler` (los provee **quien integra el runtime**) y `token_storage`
+(`StorageBackedTokenStorage` sobre `StorageProtocol` por defecto, inyectable). Estricto en seguridad:
+bearer exige token; bearer/oauth no aplican a stdio (credenciales por `env`, como manda la spec).
+`McpProvider`/`factory` exponen los puntos de inyección. Tests: `test_mcp_auth.py` (11).
+
+Evidencia M1: `capabilities/mcp/client.py` (`McpClient`: transporte stdio/streamable-http vía SDK `mcp`,
+`connect`/`list_tools`/`list_resources`/`call`/`read_resource`/`aclose`; `McpToolError` mapea
+`isError`→error sin re-llamar). `McpState` con `ServerStatus` (configured/pending/connected/failed) +
+`pending_servers`/`failed_servers`/`connected_servers`. `McpProvider.connect_server` descubre y registra
+tools/resources con aislamiento por ítem; `startup` conecta todos, un server caído se marca FAILED y no
+aborta el resto; `shutdown` cierra todos los clients. Transporte inyectable (`client_factory`) para tests.
+6 tests en `test_mcp_client.py` (cliente fake). No unit-testeado el transporte real (necesita un server
+MCP vivo — se cubrirá con la referencia real al integrar).
 
 #### Fase M2 - Tool pool MCP
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado` (incluye cableado C1/C2 — aprobado explícitamente, R4)
 
-- [ ] Sacar MCP wrappers del registry nativo.
-- [ ] `McpProvider.tools(context)` devuelve tools activas.
-- [ ] `ToolPoolAssembler` combina native + MCP.
-- [ ] Deduplicar con prioridad native.
-- [ ] Orden estable siguiendo referencia.
+- [x] Sacar MCP wrappers del registry nativo → nunca estuvieron ahí; el dispatcher ya NO usa el
+      registry nativo para ejecutar. Las MCP viven solo en el provider.
+- [x] `McpProvider.tools(context)` devuelve tools activas (desde `McpState`).
+- [x] `ToolPoolAssembler` combina native + MCP → `CapabilityManager.build_tool_pool` + `ToolPool.assemble`.
+- [x] Deduplicar con prioridad native (en `assemble_tool_pool`, ya desde C0).
+- [x] Orden estable siguiendo referencia (native prefijo, ambos sorted por nombre — cache-estable).
+
+**Alineamiento canónico (contrastado, ver memoria de decisión):** el canónico resuelve la ejecución
+con `findToolByName(toolUseContext.options.tools, name)` — el MISMO pool ensamblado que anuncia, no un
+registry aparte. Adaptación aprobada: el loop ensambla `ctx.tool_pool` por turno
+(`manager.build_tool_pool(registry.list_available(mode), ctx)`), deriva los schemas de él, y el
+`ToolDispatcher` resuelve la ejecución desde `ctx.tool_pool.find(name)`. El `ToolRegistry` pasó a ser
+solo **input** del ensamblado (análogo `getAllBaseTools()`), ya no lookup de ejecución.
 
 Criterios:
 
-- `registry.py` no interpreta nombres con `__`.
-- `main.py` no registra MCP wrappers en registry nativo.
+- `registry.py` no interpreta nombres con `__`. ✓ (nunca lo hizo; el dispatcher ya no lo consulta).
+- `main.py` no registra MCP wrappers en registry nativo. ✓ (no hay main.py; el provider las posee y
+  convergen por el manager).
+
+Evidencia M2/cableado: `ToolPool.find` (findToolByName), `ToolDispatcher` sin registry (resuelve de
+`ctx.tool_pool`), `AgentLoop` (`tool_registry`+`capability_manager`: `_build_tool_pool`+`_schemas_for_turn`),
+`LocalAgentRuntime` (`startup`/`shutdown` conectan/cierran providers), `factory._build_capability_manager`
+(registra McpProvider/SkillsProvider desde `CapabilitiesConfig.mcp_servers`/`skill_dirs`/`extra_providers`).
+Tests: `test_capability_wiring.py` (4: anuncio+ejecución de tool MCP desde pool con registry nativo vacío,
+factory registra provider, startup conecta). Migrados a pool: dispatcher/agent_loop/path_presentation/
+runtime_v2/runtime_e2e/runtime_factory. Suite 255 passed. Lint limpio.
 
 #### Fase M3 - Deferred loading
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Mover `discovered_deferred_tools` a `McpState` o `CapabilityState`.
-- [ ] `ToolSearch` debe llamar `CapabilityManager.activate(...)`.
-- [ ] Skills allowed-tools debe activar MCP tools via permission/context, no via runtime.
-- [ ] El runtime no recibe `deferred_loading_enabled` como logica MCP.
+- [x] Mover `discovered_deferred_tools` a `CapabilityState` → estado de descubrimiento en
+      `ctx.app_state.capabilities["discovered_tools"]`, scopeado por agente (`tools/deferred.py`:
+      `discovered_tool_names`/`mark_tools_discovered`). No vive en `session.metadata`.
+- [x] `ToolSearch` descubre (activa): marca las matched en el estado del contexto y devuelve sus
+      schemas; en turnos siguientes se anuncian. (No llama un `manager.activate` aparte — la activación
+      ES el descubrimiento, como en el canónico vía historial; aquí materializado en el contexto.)
+- [~] Skills allowed-tools activa MCP tools via permission/context → la activación va por
+      descubrimiento (ToolSearch) + permiso, no por el runtime. El cruce skill→MCP se cierra en S2.
+- [x] El runtime/loop no recibe `deferred_loading_enabled` como lógica MCP → la proyección diferida
+      vive en `_schemas_for_turn` del loop sobre `is_deferred_tool`, agnóstica de MCP.
+
+**Alineamiento canónico:** `isDeferredTool` (MCP siempre diferido; ToolSearch nunca) → `is_deferred_tool`.
+`claude.ts` arma el anuncio = no-diferidas + ToolSearch + diferidas DESCUBIERTAS, y descarta ToolSearch
+si no hay diferidas → replicado en `_schemas_for_turn`. **Deferred es visibilidad, no disponibilidad**:
+la tool diferida sigue ejecutable desde `ctx.tool_pool` aunque no se anuncie (test que lo prueba).
 
 Criterios:
 
-- `runtime.py` no conoce deferred MCP.
-- ToolSearch no escribe session metadata MCP directamente.
+- `runtime.py` no conoce deferred MCP. ✓ (lógica en loop/deferred, sobre `is_deferred_tool`).
+- ToolSearch no escribe session metadata MCP directamente. ✓ (escribe `ctx.app_state.capabilities`).
+
+Evidencia M3: `tools/deferred.py` (`is_deferred_tool`, `discovered_tool_names`, `mark_tools_discovered`),
+`McpTool.deferred = True`, `AgentLoop._schemas_for_turn` (proyección), `ToolSearchTool.execute`
+(descubre + devuelve schemas, busca solo diferidas). Tests: `test_deferred_loading.py` (7). Suite 262.
 
 #### Fase M4 - MCP resources
 
-Estado: `[ ] no iniciado`
+Estado: `[x] completado`
 
-- [ ] Convertir `MCPListResources` y `MCPReadResource` en tools del provider o adapters inyectados.
-- [ ] Resource access usa provider.
-- [ ] Evitar imports directos a `mcp.loader`.
+- [x] Convertir `MCPListResources` y `MCPReadResource` en tools del provider
+      (`capabilities/mcp/resource_tools.py`: `ListMcpResourcesTool`, `ReadMcpResourceTool`).
+- [x] Resource access usa el provider/estado (`McpState`), enruta la lectura al client dueño del uri.
+- [x] Evitar imports directos a `mcp.loader` → no hay loader global; las tools toman `McpState`.
 
 Criterios:
 
-- `tools/mcp_resource_tools.py` no depende del loader global o queda dentro del provider.
+- `mcp_resource_tools` no depende de un loader global → queda dentro del provider, sobre `McpState`. ✓
+
+Evidencia M4: `resource_tools.py` (read-only, no diferidas → se anuncian; `requires_permission=False`).
+`McpState.all_resources` ahora anota cada resource con su `server`; `find_resource_server(uri)` enruta.
+`McpProvider.tools()` añade las resource tools SOLO si hay resources (espejo de las special tools
+condicionales del canónico). Tests: `test_mcp_resources.py` (6).
+
+#### Fase M5 - MCP management API
+
+Estado: `[x] completado` (adaptado: sin API HTTP en este repo)
+
+- [~] API `/mcp` llama service/provider → N/A: no hay `api/routes/` en este repo. En su lugar se
+      implementó la **capa service** (los métodos que una API llamaría) en el provider.
+- [x] API no toca `loop._registry` → ninguna operación toca registry; todo va por `McpState`.
+- [x] Toggle/add/delete actualiza provider state (`add_server`, `disconnect_server`, `remove_server`,
+      `reconnect_server`).
+- [x] Tool pool refresh vía capability manager → automático: el loop reensambla `ctx.tool_pool` por
+      turno desde el manager, así que add/remove/reconnect se reflejan sin refresh explícito.
+
+Criterios:
+
+- `api/routes/mcp.py` no modifica registry directamente → N/A (no existe); la capa service del provider
+  no toca registry. ✓
+
+Evidencia M5: `McpProvider.{disconnect,remove,reconnect}_server` (+ `McpState.remove_client`).
+Tests: `test_mcp_management.py` (4: add/connect, disconnect conserva config y cierra client, remove
+elimina todo, reconnect refresca client+tools). Cuando se agregue una API HTTP, sus rutas delegan aquí.
 
 #### Fase M5 - MCP management API
 
@@ -399,14 +578,14 @@ Criterios:
 
 ### Tests MCP
 
-- [ ] Provider conecta server y expone tools.
-- [ ] Tool pool incluye MCP activo.
-- [ ] Tool pool no incluye MCP diferido no activado.
-- [ ] ToolSearch activa MCP via manager.
-- [ ] Toggle MCP actualiza provider sin tocar registry interno.
-- [ ] Resource read/list funciona por provider.
-- [ ] Timeout MCP sigue usando configuracion.
-- [ ] Wrapper no hace doble llamada en error.
+- [x] Provider conecta server y expone tools (`test_mcp_client`).
+- [x] Tool pool incluye MCP activo (ejecutable desde pool — `test_capability_wiring`/`test_deferred_loading`).
+- [x] Tool pool no incluye MCP diferido no activado (anuncio — `test_deferred_loading`).
+- [x] ToolSearch activa (descubre) MCP (`test_deferred_loading`).
+- [x] Toggle MCP actualiza provider sin tocar registry interno (`test_mcp_management`).
+- [x] Resource read/list funciona por provider (`test_mcp_resources`).
+- [x] Timeout MCP sigue usando configuracion (`test_mcp_provider::test_provider_uses_server_timeout`).
+- [x] Wrapper no hace doble llamada en error (`test_mcp_client::...single_call`).
 
 ## STT/TTS Provider (capability de I/O por voz)
 
@@ -432,27 +611,39 @@ la voz es ese patrón con STT añadido en la entrada. No expone `catalog()`/`too
 
 ### Tareas
 
-Estado: `[ ] no iniciado`
+Estado: `[x] COMPLETO` — primitivas + plomería en el runtime, activables por config.
 
-- [ ] Definir `VoiceIOAdapter` (STT in / TTS out) como capa del consumidor sobre el runtime.
-- [ ] STT: entregar la transcripción como prompt del turno.
-- [ ] TTS: suscribirse a `TokenEvent` del `EventBus` y sintetizar incremental.
-- [ ] Barge-in: la señal de voz entrante dispara `ctx.stop` / `SignalBus`.
-- [ ] Saneo: el texto que va a TTS pasa por el mismo choke point de `PathPresentation` — nunca
-      leer en voz alta rutas reales de infra (la fuga por voz es la peor).
+Refinamiento sobre el plan original: el runtime SÍ aporta las primitivas (puertos) y la
+plomería; la implementación real (motor STT/TTS) la inyecta el integrador y cada canal
+se activa/desactiva por configuración. Lo que NO hace el runtime es reproducir audio ni
+conocer códecs — solo transcribe→prompt y deriva la salida saneada a la primitiva.
 
-Criterios:
+- [x] Puertos `SpeechToTextProtocol`/`TextToSpeechProtocol` + `AudioInput` en `voice/protocol.py`
+      (capability de borde de I/O — sin tools ni catálogo, NO pasa por `CapabilityManager`).
+- [x] STT: `RuntimeTask.audio_prompt` lo transcribe el runtime a prompt del turno
+      (`LocalAgentRuntime._resolve_prompt`); ante fallo/vacío cae a `task.prompt`.
+- [x] TTS: suscrito al `TokenEvent` del `EventBus` (`_wire_tts`), sintetiza incremental y hace
+      `flush` al cerrar el turno de habla (no en cortes por `tool_calls`).
+- [x] Barge-in: cubierto por la primitiva existente — el integrador llama `runtime.cancel(task_id)`
+      (setea `ctx.stop` → el loop corta el stream). No requiere puerto nuevo.
+- [x] Saneo: el texto a TTS pasa por `ctx.presentation.sanitize_output` (`PathPresentation`).
+- [x] Config: `VoiceConfig(stt, tts, stt_enabled, tts_enabled)` en `RuntimeConfig`. Canal activo
+      sii primitiva inyectada Y flag on; el gate vive en el factory (el runtime recibe puerto o None).
 
-- El runtime no cambia: STT/TTS viven en el borde del consumidor sobre primitivas existentes.
+Criterios (cumplidos):
+
+- El runtime no reproduce audio: STT/TTS son puertos del integrador; el runtime solo conecta plomería.
 - TTS recibe tokens ya saneados (fake-path), igual que las cards de la UI.
-- Barge-in cancela la generación de forma responsiva.
+- Barge-in cancela la generación de forma responsiva vía `cancel`/`ctx.stop`.
+- Los subagentes no hablan (solo el agente principal deriva al TTS).
 
-### Tests STT/TTS
+### Tests STT/TTS (`tests/test_voice_io.py`, 8 casos)
 
-- [ ] STT entrega prompt: una transcripción produce un turno de usuario equivalente al texto.
-- [ ] TTS incremental: cada `TokenEvent` se entrega al sintetizador sin esperar el fin del turno.
-- [ ] Barge-in: señal entrante durante generación dispara `ctx.stop` y corta el stream.
-- [ ] Saneo: una ruta real en el texto de salida no llega al TTS (pasa por `PathPresentation`).
+- [x] STT entrega prompt: una transcripción adjunta llega al modelo COMO prompt del turno.
+- [x] TTS incremental: cada `TokenEvent` se entrega al sintetizador sin esperar el fin + `flush` final.
+- [x] Config: con `stt_enabled=False`/`tts_enabled=False` el canal no se invoca.
+- [x] Saneo: una ruta real en la salida no llega al TTS (pasa por `PathPresentation`).
+- [x] Subagentes no hablan; sin `flush` en turnos cortados por `tool_calls`.
 
 ## MemoryProvider (capability de memoria del agente)
 
@@ -461,14 +652,25 @@ Criterios:
 Memoria que el agente guarda para recordar entre sesiones — sobrevive compactación y reinicio.
 Construida **sobre** primitivas del runtime, no dentro de él.
 
-### Naturaleza — capability sobre primitivas runtime
+### Naturaleza — capability que se ACTIVA, no solo que almacena
 
 La memoria es una capability (como Skills/MCP): pone la **opinión** (qué guardar, recall, ranking,
-inyección). El runtime solo aporta los primitivos:
+activación). Lo esencial: **la memoria "no va sola"** — hay que replicar *qué la activa* para que el
+modelo **decida usarla**. Se activa por **dos superficies**, y **NO hay tool de memoria** — el modelo
+guarda con `write_file` y lee con `read_file` (guardado canónico):
 
-- **Persistencia**: `StorageProtocol` + `StorageKeys.ltm_key(user_id)` — **ya existe** en el runtime.
-- **Sobrevivir compactación**: contrato `CompactionProvider` / `collect_compaction_context`.
-- **Extracción en background**: `RuntimeContextForker` + `BackgroundNotificationChannel`.
+1. **Bloque en el system prompt** (`MemoryProvider.system_prompt_section`): instrucciones permanentes
+   + taxonomía tipada (`user`/`feedback`/`project`/`reference`) + qué NO guardar + cómo guardar (2
+   pasos: escribir fichero + puntero en `MEMORY.md`) + cuándo acceder + **el índice `MEMORY.md`
+   inyectado**. Texto estable entre turnos (cache-friendly).
+2. **Recall por turno** (`MemoryProvider.active_context`): ≤5 memorias relevantes por `name`/
+   `description`, que el loop rinde como `<system-reminder>` (role:"user"), con dedup contra la
+   historia. Excluye `MEMORY.md` (ya va en el system prompt).
+
+La memoria vive en un **directorio de filesystem** (como `base_dir` de skills), no como blob bajo
+`ltm_key`: el modelo **escribe con `write_file`** y el provider lee ese dir para índice + recall, así
+sobrevive a reinicio (en disco). El runtime solo aporta primitivos: el hook `provider→system-prompt`
+ensamblado por el loop, el canal de recall (`active_context`) y `compact_context`.
 
 Distinción clave: la cascada config/`agent.md` (CLAUDE.md) es **instrucción humana** al system
 prompt; esta memoria es **conocimiento auto-generado por el agente**. Son providers distintos que
@@ -476,35 +678,85 @@ alimentan el prompt, no el mismo.
 
 ### Por qué NO en el runtime
 
-"Qué recordar", ranking de recall, prompts de extracción y thresholds son opiniones que varían por
-producto (un CLI quiere un `MEMORY.md` simple; cloud quiere LTM con ranking semántico). Mismo
-razonamiento que fake-path: el runtime expone el primitivo (storage), la capability implementa la
-opinión. `ltm_key` ya vive en el runtime como **clave**, sin lógica de memoria al lado.
+"Qué recordar", ranking de recall y la voz del bloque de activación son opiniones que varían por
+producto. El runtime expone los primitivos (hook system-prompt, recall, compactación, filesystem); la
+capability implementa la opinión. El loop NO importa `capabilities.memory`.
 
 ### Tareas
 
-Estado: `[ ] no iniciado`
+Estado: `[x] COMPLETO` (F1 plumbing + F2 provider + F3 E2E)
 
-- [ ] Crear `MemoryProvider` como `CapabilityProvider`.
-- [ ] Tool `remember` (save) que persiste vía `StorageProtocol` bajo `ltm_key`.
-- [ ] Recall con ranking (recencia/relevancia) — opinión del provider.
-- [ ] `active_context(context)` inyecta memorias relevantes al inicio del turno, scopeado por `agent_id`.
-- [ ] `compact_context(context)` preserva memorias activas tras compactación.
-- [ ] (Opcional) extracción background al fin del turno vía `RuntimeContextForker`.
+- [x] **F1 plumbing**: hook OPCIONAL `system_prompt_section` (tolerante vía `getattr`, fuera del
+  contrato estructural) + `CapabilityManager.system_prompt_sections` + kwarg `system_sections` en
+  `ModelCallerProtocol`/`AgenticModelsCaller` + cableado de `active_context` en el loop (rinde
+  `<system-reminder>` con dedup; activa también Skills S3, antes latente).
+- [x] **F2 provider**: `capabilities/memory/{store,prompt,recall,provider}`. `MemoryStore` (Protocol)
+  + `FilesystemMemoryStore` (scope `<root>/<agent_id|'main'>`). SIN tools propias (`tools/catalog →
+  []`). Recall determinista (keyword + recencia). Factory `CapabilitiesConfig.memory_root/
+  memory_store`; seed `RuntimeConfig.initial_allowed_tools` (p.ej. `write_file`).
+- [x] **F3 E2E**: ciclo activación → recall → guardado (`write_file`) → reinicio, scripted.
 
-Criterios:
+Criterios (cumplidos):
 
-- El runtime no tiene lógica de memoria — solo storage + contrato de compactación.
-- La memoria sobrevive reinicio (persistida) y compactación (`compact_context`).
-- Recall determinista dado el mismo estado y `agent_id`.
+- El runtime no tiene lógica de memoria — solo el hook system-prompt, recall y compactación.
+- La memoria sobrevive reinicio (en disco) y compactación (`compact_context`).
+- Recall determinista dado el mismo estado y scope. El agente principal usa scope estable `'main'`
+  (su `agent_id` es un uuid por despacho); los subagentes se aíslan por `agent_id`.
 
 ### Tests Memory
 
-- [ ] Save persiste: tras "reinicio" (releer storage) la memoria sigue disponible.
-- [ ] `active_context` inyecta memorias relevantes al inicio del turno.
-- [ ] `compact_context` preserva memorias activas tras compactación.
-- [ ] Recall scopeado por `agent_id`: un hijo no ve memorias de otro agente salvo política.
-- [ ] Test de acoplamiento: el runtime no importa lógica de memoria.
+- [x] Activación contiene instrucciones + índice `MEMORY.md`; dir vacío → "índice vacío".
+- [x] Recall relevante/irrelevante; excluye `MEMORY.md`; ignora `<system-reminder>` al elegir query.
+- [x] Scoping: un subagente no ve memorias de otro; el agente principal usa scope estable.
+- [x] `compact_context` preserva las memorias relevantes.
+- [x] Ranking determinista (keyword + recencia, `limit`).
+- [x] Test de acoplamiento: el loop no importa `capabilities.memory`.
+- [x] E2E: activación llega al caller, recall como `<system-reminder>`, `write_file` guarda ficheros
+  reales, un provider nuevo sobre el mismo dir los encuentra.
+
+## Robustez Ante Skills/MCP De Terceros
+
+> Decisión de diseño validada contra el canónico (2026-06-16). Aplica a `SkillsProvider` (S0) y
+> `McpProvider` (M0). Motivada por la fragilidad observada en `agent_core` (versión preliminar,
+> todo mezclado): el enforcement de directivas del frontmatter era débil.
+
+### El hecho
+
+La spec de Agent Skills de Anthropic estandariza pocas directivas (`name`, `description`); y la spec
+de Model Context Protocol tampoco incluye varias props que el canónico usa (p.ej. `model`). Es decir,
+**propiedades operativas importantes NO son parte del estándar**. Como hoy hay registros y listas de
+terceros que consolidan skills/MCP, no controlamos esas propiedades: en skills/MCP de terceros
+simplemente no vendrán. El objetivo es **comportamiento estable con skills/MCP propios o de terceros**.
+
+### Cómo lo resuelve el canónico (patrón a replicar)
+
+Patrón único en skills y MCP: *schema abierto + parseo tolerante por campo con default definido +
+aislamiento por ítem; rigor solo en los bordes de seguridad/identidad.*
+
+1. **Schema abierto** — nunca rechaza claves desconocidas (`FrontmatterData` cierra con
+   `[key: string]: unknown`); estándar y extensiones operativas conviven.
+2. **Parseo total que nunca lanza** — sin frontmatter → `{}`; YAML inválido → reintento → log + `{}`.
+3. **Cada campo operativo degrada a un default que DEFINE comportamiento, no a error**:
+   `allowed-tools` ø → no activa tools extra; `model` ø/`inherit` → hereda el del padre;
+   `description` ø → se deriva del cuerpo; `effort`/`shell` inválidos → log + default.
+4. **Aislamiento por ítem** — un skill/server malformado se salta con log; el resto carga.
+5. **Rigor solo en seguridad/identidad** — validez de config de server se valida y **rechaza**
+   (no se ignora); skills remotas MCP nunca ejecutan shell inline. Tolerancia en lo operativo,
+   estrictez en lo que compromete seguridad.
+
+### La pregunta de diseño correcta
+
+No es "¿cómo forzar que traigan `allowed-tools`/`model`?" sino **"¿qué hace el sistema cuando NO
+vienen?"** — y la respuesta debe estar fijada por campo, con un default seguro y documentado.
+
+### Criterios de aceptación (S0/M0)
+
+- Modelo de metadata tipado (Pydantic): todo campo operativo `Optional` + default explícito; el
+  parser nunca lanza por campo ausente/malformado.
+- Tabla estándar-vs-operativo documentada en el provider, con el default-comportamiento de cada
+  campo operativo.
+- Aislamiento por ítem (un ítem malo no aborta la carga).
+- Estrictez reservada a bordes de seguridad/identidad (config de server, ejecución remota).
 
 ## Primitivas Fork Y Background (provistas por el runtime)
 
@@ -534,15 +786,19 @@ nunca implementar semántica de fork, copia de mensajes ni background propias.
 
 ### Fase C0 - Integracion inicial
 
-Estado: `[ ] no iniciado`
+Estado: `[~] en progreso`
 
 Tareas:
 
-- [ ] Crear `CapabilityManager` con lista de providers registrados.
-- [ ] Registrar `SkillsProvider` y `McpProvider` en el manager.
-- [ ] Exponer `catalog(context) -> list[CapabilitySummary]`.
-- [ ] Exponer `tools(context) -> list[Tool]`.
-- [ ] Exponer `compact_context(context) -> list[dict]`.
+- [x] Crear `CapabilityManager` con lista de providers registrados.
+- [x] Registrar `SkillsProvider` y `McpProvider` en el manager (vía `factory._build_capability_manager`
+      desde `CapabilitiesConfig`; cableado al loop por turno — M2).
+- [x] Exponer `catalog(context) -> list[CapabilitySummary]`.
+- [x] Exponer `tools(context) -> list[Tool]`.
+- [x] Exponer `compact_context(context) -> list[dict]`.
+- [x] Convergencia native + capability preparada: `manager.build_tool_pool(native_tools, context)`
+      produce el `ToolPool` que el runtime consume; la fusión la hace `ToolPool.assemble()`
+      (built-ins como prefijo contiguo, dedup native-gana, deny) — paridad con `assembleToolPool`.
 
 Criterios:
 
@@ -733,14 +989,226 @@ Al terminar:
   sobre el runtime nuevo. Falta cablear en el runtime las primitivas `PathPresentation` y
   `ToolExecEnvironment` (sandbox bwrap) — ver complementary plan.
 
-### YYYY-MM-DD
+### 2026-06-15 — C0: CapabilityManager + contratos (sin mover comportamiento)
 
-Estado:
+- Implementado el esqueleto de la capa de capabilities como el plan pide *empezar*: contratos
+  estables (`capabilities/contracts.py`) + coordinador (`capabilities/manager.py`). Nada de
+  comportamiento del runtime cambia todavía — esto es la junta a la que después se enchufan
+  Skills/MCP. Por eso C0 queda `[~]`: el manager existe y está testeado, pero registrar
+  `SkillsProvider`/`McpProvider` no es posible aún (no existen; son M0/S0).
+- **Por qué Pydantic en `CapabilitySummary`/`CapabilityActivation` y no dict**: regla de salida
+  tipada. El catálogo que ve el modelo y el resultado de activar una capability viajan por bordes
+  del runtime; un dict suelto ahí es justo lo que el plan quiere erradicar.
+- **Por qué `CapabilityProvider` como `Protocol` (no clase base)**: el manager coordina por
+  contrato y no debe importar ningún provider concreto (criterio C0: "sin importar ninguno
+  directamente en el runtime"). Test de acoplamiento lo fija: el source de `manager.py` no
+  menciona `SkillsProvider`/`McpProvider`.
+- **Decisión de convivencia**: el `capabilities/` previo (`CapabilitiesResolver`/`protocol.py`)
+  es un primitivo anterior y distinto (resuelve schemas para el resolver); se dejó intacto y los
+  contratos nuevos se agregaron al lado. Reconciliar/unificar ambos se difiere a cuando MCP/Skills
+  providers existan y se vea el solapamiento real — no antes (evita refactor especulativo).
+- **Dedup de tools**: por nombre, primera aparición gana = prioridad por orden de registro. Es la
+  misma semántica que `assemble_tool_pool` (native gana), coherente para cuando el assembler
+  consuma `manager.tools()`.
+- **Convergencia native ↔ capability (preparada, igual que el canónico)**: skills/MCP los registra
+  *quien embebe el runtime* (no el runtime). Para que las tools de esas capabilities y las nativas
+  ya registradas converjan como en `claude-code`, se replicó su punto único `assembleToolPool`:
+  - Canónico: native (`getTools()`) y MCP (`appState.mcp.tools`) viven separadas y se fusionan SOLO
+    en `assembleToolPool(permissionContext, mcpTools)` — el caller pasa `mcpTools`; ese punto no
+    importa el estado MCP. Invariantes: built-ins como **prefijo contiguo** (prompt-cache; el server
+    pone el breakpoint tras la última built-in), **dedup por nombre native-gana**, deny a ambos. No
+    se identifica MCP por `__`: partición explícita (`isMcpTool`).
+  - Aquí: `tools/pool.py::assemble_tool_pool` ya replicaba esa semántica; faltaba el puente desde el
+    manager. Se agregó `CapabilityManager.build_tool_pool(native_tools, context) -> ToolPool`, que
+    es "el resultado que el runtime consume" (criterio C0). La fusión la hace `ToolPool.assemble()`,
+    único punto. Dirección de dependencia capabilities → tools, nunca al revés (igual que allí).
+- Probado: `test_capability_manager.py` (12 casos): 8 del manager (unión sin duplicados, provider
+  sin tools, catálogo de todos, compact en orden, `agent_id=None` no rompe, startup/shutdown,
+  acoplamiento) + 4 de convergencia (particiones, prefijo contiguo native, native-gana en colisión,
+  deny a ambas particiones). Suite completa **205 passed, 5 skipped** (193 → +12). Lint limpio.
+- No probado: integración real con providers concretos (no existen aún) y cableado en el loop
+  (consumir `build_tool_pool` por turno = Fase C2, requiere tests antes/después). C1/C2/C3 dependen
+  de M0+/S0+.
+- Siguiente: M0 (McpProvider shell) según Orden Recomendado — MCP antes que Skills. Será el primer
+  `CapabilityProvider` concreto que el integrador podrá registrar y cuyas tools convergerán por
+  `build_tool_pool`.
 
-- Implementado:
-- En progreso:
-- Bloqueado:
-- Probado:
-- No probado:
-- Notas:
+### 2026-06-16 — Decisión de diseño: robustez ante skills/MCP de terceros (S0/M0)
+
+- **Por qué ahora**: cerrar la idea antes de construir los providers. En `agent_core` (preliminar,
+  todo mezclado) se constató enforcement débil de las directivas del frontmatter. Propiedades
+  operativas clave (skill: `allowed-tools`; MCP: `model`) NO están en los estándares de Anthropic
+  Skills / MCP, y como skills/MCP se consumen de registros de terceros, no controlamos su presencia.
+- **Qué se hizo**: revisión directa del canónico (`skills/loadSkillsDir.ts`, `utils/frontmatterParser.ts`,
+  `services/mcp/config.ts`, `services/mcp/client.ts`) y se destiló el patrón: schema abierto +
+  parseo tolerante por campo con default que define comportamiento + aislamiento por ítem + rigor
+  solo en bordes de seguridad/identidad. Se agregó la sección "Robustez Ante Skills/MCP De Terceros"
+  y criterios de aceptación a S0 y M0.
+- **Insight central**: la pregunta no es cómo forzar las props no estándar, sino qué hace el sistema
+  cuando faltan — respuesta fijada por campo (`allowed-tools` ø → no activa nada; `model` ø → hereda).
+- **Asimetría clave**: tolerante en lo operativo, estricto en seguridad (config de server inválida se
+  rechaza; skill remota MCP nunca ejecuta shell inline). `CapabilitySummary` ya nació alineado
+  (campos opcionales con default); falta que S0/M0 hereden el contrato de robustez.
+- Doc-only; no se tocó código (los providers no existen aún). Sin tests nuevos en esta entrada.
+
+### 2026-06-16 — M0: McpProvider shell (primer CapabilityProvider concreto)
+
+- Implementado `capabilities/mcp/`: `config.py` (`McpServerConfig` schema abierto + identidad
+  estricta), `tool_adapter.py` (`McpTool` + `build_mcp_tool` tolerante), `state.py` (`McpState`
+  separado del registry nativo, patrón `appState.mcp.*`), `provider.py` (`McpProvider`).
+- **Por qué se adaptó el M0 del plan**: sus bullets ("mover `load_mcp_tools`", "mantener wrappers")
+  describían `new_core`, donde MCP vivía disperso. En este repo NO existe loader MCP heredado, así
+  que no hay nada que "mover". M0 aquí = construir el shell desde cero con el contrato de robustez,
+  definiendo el **punto de inyección**: el integrador conecta servers y registra specs; el transporte
+  (`McpCall`) se inyecta. El shell no abre conexiones (eso es M1). Sin transporte fake.
+- **Robustez aplicada (no teórica)**: identidad/seguridad estricta — `add_server` lanza si la config
+  es inválida (`command` xor `url`); operativo tolerante — `extra="allow"` conserva props de terceros,
+  `load_servers` salta inválidos con log, `build_mcp_tool` degrada annotations ausentes a default
+  seguro (tercero no anotado: requiere permiso, no background). Asimetría tal cual el canónico.
+- **Decisión de permisos**: tools MCP de terceros siempre `requires_permission=True` (no confiables);
+  solo `readOnlyHint` las marca `safe_for_background`. Conservador por defecto.
+- **Convergencia verificada**: `McpProvider` cumple `CapabilityProvider`; sus tools fluyen por
+  `CapabilityManager.build_tool_pool` y quedan como sufijo tras las nativas (paridad assembleToolPool).
+- Probado: `test_mcp_provider.py` (17): contrato, identidad estricta, schema abierto, tolerancia en
+  bloque, adapter tolerante (sin name/annotations/inputSchema malformado), execute (ok + error de
+  transporte envuelto), catálogo `mcp_tool`, resources, timeout por server, convergencia con C0.
+  Suite **222 passed, 5 skipped** (205 → +17). Lint limpio.
+- No probado: transporte/cliente real (M1), deferred loading (M3), API de management (M5), resources
+  como tools del provider (M4). Cableado en loop/factory pendiente (no se registró el provider en
+  `factory.py` aún — lo hará el integrador / fase de wiring).
+- Siguiente: S0 (SkillsProvider shell) — mismo contrato de robustez — o M1 (estado/cliente MCP).
+
+### 2026-06-16 — S0: SkillsProvider shell (segundo CapabilityProvider concreto)
+
+- Implementado `capabilities/skills/`: `frontmatter.py` (`SkillFrontmatter` schema abierto + parseo
+  total), `loader.py` (`SkillDefinition` tipada + `load_skill_text`/`load_skill_file`/`load_skills_dir`),
+  `state.py` (`SkillsState` separado del registry), `provider.py` (`SkillsProvider`).
+- **Por qué se adaptó el S0 del plan**: igual que M0, sus bullets ("mover `skills.loader`", "mantener
+  `SkillTool`") describían `new_core`. En este repo no hay loader de skills ni `SkillTool` heredados:
+  S0 aquí = construir el shell desde cero con el contrato de robustez. El loader nace **dentro** del
+  provider; la tool `Skill` (invocación) es S1, por eso `tools()`/`active_context()`/`compact_context()`
+  devuelven `[]` hoy — declarado, no fingido (no fuerza avance aparente).
+- **Robustez aplicada (no teórica)**: la pregunta "¿qué hace el sistema cuando NO vienen?" resuelta por
+  campo — `name` ø/no-string → identidad desde el nombre del directorio; `description` ø → primer
+  párrafo del cuerpo; `model` ø/`inherit` → `None` (hereda el del padre); `allowed-tools` ø → `[]` (no
+  activa nada), acepta lista o CSV. `parse_frontmatter` nunca lanza (sin frontmatter / YAML inválido /
+  no-mapping → `{}`). Aislamiento por ítem en `load_skills_dir`. **Sin borde estricto**: a diferencia de
+  M0 (config de server), la identidad de skill siempre se resuelve desde el directorio, así que no hay
+  nada que rechazar — la tabla estándar-vs-operativo queda documentada en el docstring del provider.
+- **Decisión sobre YAML**: el frontmatter ES YAML y el contrato exige "YAML inválido → log + {}";
+  escribir un parser a mano sería frágil/heurístico (R1). Se añadió `pyyaml` como dependencia (no estaba
+  en el repo) — herramienta correcta, espejo del canónico; no es cambio arquitectónico.
+- **Convergencia verificada**: `SkillsProvider` cumple `CapabilityProvider`; su catálogo fluye por
+  `CapabilityManager.catalog`. Al no aportar tools en S0, el pool sigue siendo solo el nativo.
+- Probado: `test_skills_provider.py` (18): contrato, frontmatter ausente/abierto-sin-cierre/YAML
+  inválido/no-mapping/schema abierto/no-string/allowed-tools lista+CSV, defaults por campo, override de
+  `name`, `model: inherit`→None, aislamiento por ítem en dir, catálogo, shell honesto vacío, convergencia
+  con C0. Suite **245 passed, 0 skipped** (227 → +18). Lint limpio.
+- No probado / pendiente: invocación de skill como comando procesado (S1), context modifier de
+  allowed-tools (S2), catálogo orgánico sin "SKILL CHECK before EVERY step" (S3), slash commands (S4),
+  compactación (S5). Cableado en `chat.py`/loop/`factory.py` = fases C — el provider aún NO está en
+  `factory.py`.
+- Siguiente: registrar `SkillsProvider`+`McpProvider` en el manager vía `factory.py` y consumir
+  `build_tool_pool` por turno en el loop (fases C1/C2), o M1 (cliente MCP real), o S1 (invocación).
+
+### 2026-06-16 — Cierre MCP (M1–M5)+auth, Skills (S1–S5), cableado, persistencia y E2E real
+
+- **MCP M1–M5**: cliente real (`client.py`: stdio/Streamable HTTP vía SDK `mcp`; `streamable_http_client`
+  nuevo recibe un `httpx.AsyncClient` que arma headers+verify+auth), ciclo de vida + `ServerStatus`,
+  deferred loading (`tools/deferred.py`), resources como tools del provider, gestión (disconnect/remove/
+  reconnect). Contrato de registro: url/type(http/sse/stdio)/ssl_verify.
+- **Auth MUTABLE/extensible** (`mcp/auth.py`): estrategias registrables none/bearer/oauth. oauth cablea
+  el `OAuthClientProvider` del SDK (OAuth 2.1 spec 2025-11-25: discovery/PKCE/DCR/refresh/RFC8707; NO
+  reimplementado). Handlers interactivos + `TokenStorage` (`StorageBackedTokenStorage` sobre
+  `StorageProtocol`) **inyectados por el integrador** (headless no abre navegador). stdio usa env.
+- **Cableado (alineado al canónico, R4)**: ejecución resuelve del pool ensamblado por turno
+  (`ToolDispatcher`←`ctx.tool_pool.find`, = `findToolByName`); `AgentLoop` arma pool+schemas; el registry
+  nativo es solo input. `LocalAgentRuntime.startup/shutdown` conectan/cierran providers. **El loop aplica
+  `result.context_modifier`** (antes latente).
+- **Skills S1–S5**: `SkillTool`+`render_skill`+estado activo; modifier habilita allowed-tools (+descubre,
+  cruce M3); catálogo/active_context/compact; slash (`commands.py`). **base_dir** (`skillRoot` del
+  canónico): el render antepone "Base directory for this skill: <dir>" → el modelo accede a subcarpetas
+  bundled (scripts/, templates/, assets/) por ruta. Subcarpetas sin manejo especial.
+- **Persistencia (puertos inyectables, default sobre StorageProtocol)**: `McpConfigStore`/
+  `StorageBackedMcpConfigStore` y `SkillStore`/`StorageBackedSkillStore`. Dónde se guarda el registro/
+  contenido = responsabilidad del integrador; el contrato del runtime NO se deforma para tragar formatos
+  externos — el integrador **extrae y mapea** (ver memoria `integrator-maps-to-contract`). Providers
+  cargan del store en `startup`; `register_server`/`register_skill` persisten.
+- Probado: suite **322 passed, 0 skipped**, lint limpio. E2E real (`test_capability_registration_e2e`):
+  Streamable HTTP REAL sobre TLS self-signed + `ssl_verify=False` → conecta + skill activa tool MCP +
+  ejecución real `HOLA MUNDO`; contraprueba `ssl_verify=True` rechaza self-signed. Verificación ad-hoc
+  (no committeada): conexión REAL al Obsidian MCP del usuario (`https://localhost:5583/mcp`, mapeo docker
+  27124→5583, bearer+ssl_verify=False) → 17 tools, `vault_list` devolvió el vault real. Skills reales
+  docx/xlsx de `/tmp/skills` cargan (frontmatter rico tolerante, allowed-tools:bash, base_dir→scripts/).
+- No probado: ejecución de los scripts docx/xlsx vía bash (requiere deps python-docx/pandas/etc. en el
+  entorno de bash = responsabilidad del integrador; no están en este entorno). OAuth real contra un AS.
+- Notas: el endpoint MCP de Obsidian está en `/mcp` (la url del registro debe incluir el path). Falta
+  cerrar la fase Capability Manager (C0 `[~]`→hecho) y posiblemente un E2E de ambos skills operando en el
+  loop. Pendiente del corte: STT/TTS y Memoria.
+
+### 2026-06-16 — E2E real de ambos skills ejecutando sus scripts en el loop
+
+- Cierra el "No probado" anterior: `test_skills_office_loop_e2e_real.py` ejercita la cadena completa de
+  DOS skills de oficina — `Skill(officedocx/officexlsx)` habilita `bash` (allowed-tools) + surface
+  `base_dir`, y **bash ejecuta de verdad** el script bundled (`scripts/make_docx.py`/`make_xlsx.py`)
+  generando `.docx`/`.xlsx` REALES. Verificación por contenido reabriendo los ficheros con
+  `python-docx`/`openpyxl` (tokens únicos: solo el script pudo escribirlos). Lo único guionizado es la
+  decisión del modelo; el caller scripted parsea el `base_dir` que el loop surface (espejo del modelo real)
+  para componer el comando bash. Asienta que `bash` solo queda permitido tras invocar la skill.
+- Skills registradas como DIRECTORIO en disco (`skill_dirs`) → `base_dir`=`skillRoot` real (sin él no se
+  localizan los scripts). Deps de las skills (`python-docx`/`openpyxl`) en grupo `skills-e2e` del pyproject:
+  son las `deps` que el integrador provee para esas skills, NO del runtime; el test se omite si faltan.
+- Probado: suite **323 passed, 0 skipped**, lint limpio.
+
+### 2026-06-17 — MemoryProvider: memoria del agente activada (system-prompt + recall)
+
+- **F1 plumbing** (commit `55fa283`): hook OPCIONAL `system_prompt_section` (documentado fuera del
+  contrato estructural para no romper providers existentes/de terceros; el manager lo invoca tolerante
+  vía `getattr`) + `CapabilityManager.system_prompt_sections`. Kwarg opcional `system_sections` en
+  `ModelCallerProtocol`/`AgenticModelsCaller` (el caller los concatena al system prompt base; el
+  runtime ensambla, el caller transporta). El loop cablea `active_context` por turno y lo rinde como
+  `role:"user"` envuelto en `<system-reminder>` con dedup contra la historia — esto **activa también
+  Skills S3**, antes latente. El kwarg se pasa solo si hay secciones (robustez ante callers de terceros).
+- **F2 provider** (commit `c0886c9`): paquete `capabilities/memory/{store,prompt,recall,provider}`,
+  espejo estructural de skills, **SIN tools propias**. `FilesystemMemoryStore` en disco, scope
+  `<root>/<agent_id|'main'>`; frontmatter YAML tolerante propio (`metadata.type`), no deforma
+  `SkillFrontmatter`. `build_memory_activation` (instrucciones + taxonomía + cómo-guardar con
+  `write_file` + índice). `rank_memories` determinista (keyword + recencia). Factory gana
+  `CapabilitiesConfig.memory_root/memory_store`; `RuntimeConfig.initial_allowed_tools` siembra permisos
+  en el ctx del agente principal (`_build_child`) — la memoria NO se auto-concede `write_file`.
+- Decisión de scope: el agente principal usa scope estable `'main'` (su `agent_id` es un uuid por
+  despacho, inservible como clave de memoria entre sesiones); los subagentes se aíslan por `agent_id`
+  (discriminado por `is_subagent`). Corrige la lectura literal de `<agent_id|'main'>` del plan.
+- **F3 E2E** (`test_memory_loop_e2e.py`, siempre corre): ciclo completo activación → recall → guardado
+  → reinicio sin LLM real. El caller scripted recibe la sección de memoria en `system_sections`, ve el
+  recall pre-sembrado como `<system-reminder>`, llama `write_file` para crear `feedback_estilo.md` +
+  actualizar `MEMORY.md` (ficheros REALES en disco), y un `MemoryProvider` nuevo sobre el mismo dir los
+  encuentra. Lo único guionizado es la decisión del modelo.
+- Divergencias del plan escrito ya corregidas en §MemoryProvider: quitada la tool `remember` y el blob
+  bajo `ltm_key`/`StorageProtocol` — guardado canónico = `write_file` + prompt; memoria en filesystem.
+- Probado: suite **348 passed, 0 skipped**, `ruff` limpio.
+
+### 2026-06-18 — Voz (STT/TTS): primitivas de borde + plomería, activables por config
+
+- **Naturaleza**: capability de borde de I/O — NO aporta tools ni catálogo, NO pasa por el
+  `CapabilityManager`. Paquete propio `voice/{protocol,__init__}` con los puertos
+  `SpeechToTextProtocol`/`TextToSpeechProtocol` y `AudioInput`. El runtime aporta primitivas +
+  plomería; el motor real lo inyecta el integrador.
+- **STT (entrada → enunciado)**: `RuntimeTask.audio_prompt: AudioInput | None`. En `_run_loop`,
+  `LocalAgentRuntime._resolve_prompt` transcribe el audio y usa la transcripción como prompt del
+  turno; ante fallo o transcripción vacía cae a `task.prompt` (la voz no tumba la task). `fork()` no
+  usa `prompt` y `loop.run` es el único que lo inserta → sin doble-append en el path de subagente.
+- **TTS (salida incremental)**: `_wire_tts` suscribe el `EventBus` del task; cada `TokenEvent` se
+  sanea por `ctx.presentation.sanitize_output` (`PathPresentation` — nunca rutas reales en voz alta)
+  y se deriva con `speak`; `flush` al cerrar el turno de habla (NO en cortes por `tool_calls`). Solo
+  el agente principal habla (`is_subagent` gate).
+- **Config on/off**: `VoiceConfig(stt, tts, stt_enabled, tts_enabled)` en `RuntimeConfig`. El gate
+  vive en el factory (`stt = voice.stt if stt y enabled else None`); el runtime recibe puerto o None.
+  Activar/desactivar un canal no exige retirar la primitiva inyectada.
+- **Barge-in**: cubierto por la primitiva existente `runtime.cancel(task_id)` → `ctx.stop` → el loop
+  corta el stream. No requirió puerto nuevo.
+- Tests: `tests/test_voice_io.py` (8) — STT→prompt, STT off, sin audio, TTS incremental+flush, TTS
+  off, saneo por presentation, subagente no habla, sin flush en `tool_calls`.
+- Probado: suite **354 passed, 2 skipped** (los 2 skipped = E2E office-skills sin deps opcionales),
+  `ruff` limpio.
 

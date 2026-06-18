@@ -14,6 +14,22 @@ from ..events.event_types import DoneEvent, ErrorEvent, TokenEvent, ToolCallEven
 from .protocol import ModelCallerProtocol  # noqa: F401 — satisfies Protocol
 
 
+def _compose_system_prompt(
+    base: str | None,
+    sections: list[str] | None,
+) -> str | None:
+    """Ensambla el system prompt base (integrador) + secciones (runtime).
+
+    El runtime ensambla, el caller solo transporta. Mantener las secciones al final
+    y en orden estable preserva un buen prefijo de caché entre turnos. Sin secciones
+    el resultado es el base intacto (backward-compatible).
+    """
+    parts = [p for p in [base, *(sections or [])] if p]
+    if not parts:
+        return None
+    return "\n\n".join(parts)
+
+
 def _dict_messages_to_context(
     messages: list[dict],
     tools: list[dict],
@@ -118,8 +134,11 @@ class AgenticModelsCaller:
         *,
         stop: Optional[asyncio.Event] = None,
         model_id: str = "",
+        system_sections: Optional[list[str]] = None,
     ) -> AsyncGenerator[Any, None]:
-        return self._stream(messages, tools, stop=stop, model_id=model_id)
+        return self._stream(
+            messages, tools, stop=stop, model_id=model_id, system_sections=system_sections
+        )
 
     async def _stream(
         self,
@@ -128,12 +147,13 @@ class AgenticModelsCaller:
         *,
         stop: Optional[asyncio.Event] = None,
         model_id: str = "",
+        system_sections: Optional[list[str]] = None,
     ) -> AsyncGenerator[Any, None]:
         from agentic_models import stream
         from agentic_models.model_types import StreamOptions
 
         context = _dict_messages_to_context(
-            messages, tools, self._system_prompt
+            messages, tools, _compose_system_prompt(self._system_prompt, system_sections)
         )
 
         opts = self._options

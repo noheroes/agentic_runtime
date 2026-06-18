@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 class LoopProtocol(Protocol):
     """Contrato mínimo de un loop agentico."""
 
-    async def run(self, prompt: str, session: Any, ctx: "ToolUseContext") -> None: ...
+    async def run(self, prompt: str, ctx: "ToolUseContext") -> None: ...
 
 
 @runtime_checkable

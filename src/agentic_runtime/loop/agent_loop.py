@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from ..capabilities.resolver import CapabilitiesResolver
 from ..context.tool_use import ToolUseContext
@@ -10,10 +10,29 @@ from ..events.bus import EventBus
 from ..events.event_types import DoneEvent, ErrorEvent, Event, TokenEvent, ToolCallEvent, ToolResultEvent
 from ..models.protocol import ModelCallerProtocol
 from ..tools.dispatcher import ToolDispatcher
+from ..tools.pool import ToolPool
+
+if TYPE_CHECKING:
+    from ..capabilities.manager import CapabilityManager
+    from ..tools.protocol import ToolProtocol
+    from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 _MAX_TURNS = 50  # techo de seguridad para evitar loops infinitos
+
+
+def _tool_schema(tool: "ToolProtocol") -> dict:
+    return {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
+
+
+def _as_reminder(content: str) -> str:
+    """Envuelve el contenido de recall en `<system-reminder>` (espejo del canónico).
+
+    El caller descarta `role:"system"`, así que el recall viaja como `role:"user"`;
+    el marcado `<system-reminder>` le dice al modelo que es contexto del sistema, no
+    una intervención del usuario."""
+    return f"<system-reminder>\n{content.strip()}\n</system-reminder>"
 
 
 class AgentLoop:
@@ -33,17 +52,83 @@ class AgentLoop:
         self,
         *,
         model_caller: Optional[ModelCallerProtocol] = None,
+        tool_registry: "Optional[ToolRegistry]" = None,
+        capability_manager: "Optional[CapabilityManager]" = None,
         capabilities_resolver: Optional[CapabilitiesResolver] = None,
         tool_dispatcher: Optional[ToolDispatcher] = None,
         event_bus: Optional[EventBus] = None,
         model_id: str = "",
     ) -> None:
         self._model_caller = model_caller
+        self._tool_registry = tool_registry
+        self._capability_manager = capability_manager
         self._capabilities_resolver = capabilities_resolver
         self._tool_dispatcher = tool_dispatcher
         self._event_bus = event_bus
         self._model_id = model_id
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
+
+    def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
+        """Ensambla el pool del turno (= `assembleToolPool`): native (filtrado por
+        kind) + capability. El registry nativo es solo input; un subagente unattended
+        recibe solo tools `safe_for_background` (B3)."""
+        native: list["ToolProtocol"] = []
+        if self._tool_registry is not None:
+            mode = "background" if ctx.is_subagent else "foreground"
+            native = self._tool_registry.list_available(mode=mode)
+        if self._capability_manager is not None:
+            return self._capability_manager.build_tool_pool(native, ctx)
+        return ToolPool(native_tools=native)
+
+    def _inject_recall(self, ctx: ToolUseContext) -> None:
+        """Inyecta el recall del manager como `<system-reminder>` (role:"user").
+
+        Dedup: no reinyecta un contenido ya presente en `ctx.messages` (espejo de
+        `collectSurfacedMemories`). El manager agrega los `active_context` de todos
+        los providers; el loop los rinde — los providers no conocen el formato de
+        reminder ni el rol final."""
+        if self._capability_manager is None:
+            return
+        existing = {m.get("content") for m in ctx.messages if m.get("role") == "user"}
+        for msg in self._capability_manager.active_context(ctx):
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            rendered = _as_reminder(content)
+            if rendered in existing:
+                continue
+            ctx.messages.append({"role": "user", "content": rendered})
+            existing.add(rendered)
+
+    def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
+        """Schemas anunciados al modelo, derivados del pool ensamblado.
+
+        - Permiso: una tool que requiere permiso solo se anuncia si está permitida
+          (`assemble()` ya quitó las denegadas) — modelo autónomo, sin prompt.
+        - Diferidas (M3, espejo de `claude.ts`): las tools diferidas (MCP) NO se
+          anuncian hasta que ToolSearch las descubre; ToolSearch solo se anuncia si
+          hay diferidas que descubrir. La ejecución no se ve afectada (viven en el pool).
+        """
+        from ..tools.deferred import discovered_tool_names, is_deferred_tool
+        from ..tools.native.tool_search import TOOL_SEARCH_TOOL_NAME
+
+        allowed = ctx.permission_context.allowed_names()
+        pool = ctx.tool_pool.assemble(ctx.permission_context)
+        deferred_names = {t.name for t in pool if is_deferred_tool(t)}
+        tool_search_active = bool(deferred_names)
+        discovered = discovered_tool_names(ctx)
+
+        schemas: list[dict] = []
+        for tool in pool:
+            if tool.requires_permission and tool.name not in allowed:
+                continue
+            if tool.name == TOOL_SEARCH_TOOL_NAME:
+                if not tool_search_active:
+                    continue  # sin diferidas, no hay nada que buscar
+            elif tool.name in deferred_names and tool.name not in discovered:
+                continue  # diferida no descubierta → oculta hasta ToolSearch
+            schemas.append(_tool_schema(tool))
+        return schemas
 
     async def _emit(self, event: Event) -> None:
         if self._event_bus is not None:
@@ -84,22 +169,45 @@ class AgentLoop:
 
             ctx.turn_count += 1
 
-            # Resuelve capabilities para este turno
-            if self._capabilities_resolver is not None:
+            # Resuelve tools del turno. Modelo alineado al canónico: se ensambla un
+            # único pool (native + capability) en ctx.tool_pool y los schemas se
+            # derivan de él; la ejecución (dispatcher) resuelve del MISMO pool.
+            if self._tool_registry is not None or self._capability_manager is not None:
+                ctx.tool_pool = self._build_tool_pool(ctx)
+                tool_schemas = self._schemas_for_turn(ctx)
+            elif self._capabilities_resolver is not None:
+                # Path legacy (solo schemas): el dispatcher resuelve de ctx.tool_pool,
+                # así que NO ejecuta tools por esta vía — solo las anuncia.
                 resolved = await self._capabilities_resolver.resolve(ctx)
                 tool_schemas = resolved.tool_schemas
             else:
                 tool_schemas = []
+
+            # Secciones de system prompt aportadas por los providers (memoria, etc.):
+            # el runtime las ensambla; el caller las concatena al system prompt base.
+            system_sections: list[str] = []
+            if self._capability_manager is not None:
+                system_sections = self._capability_manager.system_prompt_sections(ctx)
+                # Canal de recall por turno: cada mensaje de `active_context` se rinde
+                # como `role:"user"` envuelto en `<system-reminder>`, con dedup contra
+                # la historia ya presente (la compactación, al recortar, rehabilita el
+                # re-surface). Activa también Skills S3 sin tocar su provider.
+                self._inject_recall(ctx)
+
             logger.debug(
                 "AgentLoop turno %d: invocando modelo (%d tools, %d mensajes)",
                 ctx.turn_count, len(tool_schemas), len(ctx.messages),
             )
-            # Llama al modelo
+            # Llama al modelo. `system_sections` se pasa solo si hay secciones:
+            # robustez ante callers de terceros que aún no adoptan el kwarg (un
+            # caller compatible con `ModelCallerProtocol` lo acepta con default None).
+            complete_kwargs: dict[str, Any] = {"stop": ctx.stop, "model_id": self._model_id}
+            if system_sections:
+                complete_kwargs["system_sections"] = system_sections
             stream = await self._model_caller.complete(
                 ctx.messages,
                 tool_schemas,
-                stop=ctx.stop,
-                model_id=self._model_id,
+                **complete_kwargs,
             )
 
             # Consume eventos del stream
@@ -164,6 +272,15 @@ class AgentLoop:
                     result=result.output,
                     is_error=getattr(result, "is_error", False),
                 ))
+                # Aplica el context_modifier que la tool haya producido (skills →
+                # allowed-tools/skill activa; worktree/plan_mode → estado nativo).
+                # Convención: el modifier muta ctx in-place y lo retorna (no forka).
+                modifier = getattr(result, "context_modifier", None)
+                if modifier is not None:
+                    try:
+                        ctx = modifier(ctx) or ctx
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("AgentLoop: context_modifier de %s falló: %s", tc.tool_name, exc)
                 logger.debug(
                     "AgentLoop turno %d: tool %s(%s) -> %s",
                     ctx.turn_count, tc.tool_name, tc.tool_input,

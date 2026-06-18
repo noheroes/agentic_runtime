@@ -107,7 +107,8 @@ def _serper_search(tool_name: str, query: str, n: int, api_key: str) -> ToolResu
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT) as resp:
+        # URL https fija (endpoint Serper), sin entrada de usuario en el esquema
+        with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT) as resp:  # nosec B310
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         return ToolResult.error(tool_name, f"Serper HTTP {e.code}: {e.reason}")

@@ -63,7 +63,8 @@ def test_create_runtime_extra_tools_registered(tmp_path):
         tools=ToolsConfig(extras=[MyTool()]),
     )
     runtime = create_runtime(config=config)
-    assert runtime._tool_dispatcher._registry.resolve("my_custom_tool") is not None
+    # El registry nativo es input al ensamblado del pool (ya no es lookup de ejecución).
+    assert runtime._tool_registry.resolve("my_custom_tool") is not None
 
 
 # ---------------------------------------------------------------------------

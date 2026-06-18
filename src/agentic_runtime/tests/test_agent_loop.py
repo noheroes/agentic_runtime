@@ -7,7 +7,6 @@ from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
-from agentic_runtime.capabilities.resolver import CapabilitiesResolver
 
 
 # ---------------------------------------------------------------------------
@@ -57,10 +56,9 @@ def _make_ctx(stop: asyncio.Event | None = None) -> ToolUseContext:
 async def test_loop_single_turn_no_tools():
     caller = _make_caller(TokenEvent(content="hello"), DoneEvent(stop_reason="stop"))
     reg = _make_registry()
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
+    dispatcher = ToolDispatcher()
 
-    loop = AgentLoop(model_caller=caller, capabilities_resolver=resolver, tool_dispatcher=dispatcher)
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=dispatcher)
     ctx = _make_ctx()
 
     await loop.run("hola", ctx)
@@ -78,10 +76,9 @@ async def test_loop_accumulates_assistant_tokens():
         DoneEvent(stop_reason="stop"),
     )
     reg = _make_registry()
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
+    dispatcher = ToolDispatcher()
 
-    loop = AgentLoop(model_caller=caller, capabilities_resolver=resolver, tool_dispatcher=dispatcher)
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=dispatcher)
     ctx = _make_ctx()
 
     await loop.run("hola", ctx)
@@ -97,10 +94,9 @@ async def test_loop_executes_tool_call():
         DoneEvent(stop_reason="stop"),
     )
     reg = _make_registry(EchoTool())
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
+    dispatcher = ToolDispatcher()
 
-    loop = AgentLoop(model_caller=caller, capabilities_resolver=resolver, tool_dispatcher=dispatcher)
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=dispatcher)
     ctx = _make_ctx()
 
     await loop.run("usa echo", ctx)
@@ -124,9 +120,8 @@ async def test_loop_aborts_on_stop_event():
             return _gen()
 
     reg = _make_registry()
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
-    loop = AgentLoop(model_caller=TrackingCaller(), capabilities_resolver=resolver, tool_dispatcher=dispatcher)
+    dispatcher = ToolDispatcher()
+    loop = AgentLoop(model_caller=TrackingCaller(), tool_registry=reg, tool_dispatcher=dispatcher)
 
     await loop.run("hola", _make_ctx(stop=stop))
 
@@ -137,9 +132,8 @@ async def test_loop_aborts_on_stop_event():
 async def test_loop_handles_error_event():
     caller = _make_caller(ErrorEvent(message="LLM explotó"))
     reg = _make_registry()
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
-    loop = AgentLoop(model_caller=caller, capabilities_resolver=resolver, tool_dispatcher=dispatcher)
+    dispatcher = ToolDispatcher()
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=dispatcher)
 
     # No debe lanzar excepción
     await loop.run("hola", _make_ctx())
@@ -163,9 +157,8 @@ async def test_loop_multi_turn_tool_calls():
             return _gen()
 
     reg = _make_registry(EchoTool())
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
-    loop = AgentLoop(model_caller=MultiTurnCaller(), capabilities_resolver=resolver, tool_dispatcher=dispatcher)
+    dispatcher = ToolDispatcher()
+    loop = AgentLoop(model_caller=MultiTurnCaller(), tool_registry=reg, tool_dispatcher=dispatcher)
     ctx = _make_ctx()
 
     await loop.run("ejecuta dos veces", ctx)
@@ -189,8 +182,7 @@ async def test_loop_emits_events_to_bus():
         DoneEvent(stop_reason="stop"),
     )
     reg = _make_registry(EchoTool())
-    resolver = CapabilitiesResolver(tool_registry=reg)
-    dispatcher = ToolDispatcher(registry=reg)
+    dispatcher = ToolDispatcher()
     bus = EventBus()
 
     seen: list[str] = []
@@ -206,7 +198,7 @@ async def test_loop_emits_events_to_bus():
     bus.subscribe(DoneEvent, _rec("done"))
 
     loop = AgentLoop(
-        model_caller=caller, capabilities_resolver=resolver,
+        model_caller=caller, tool_registry=reg,
         tool_dispatcher=dispatcher, event_bus=bus,
     )
     await loop.run("hola", _make_ctx())

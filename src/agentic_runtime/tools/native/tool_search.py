@@ -42,28 +42,38 @@ class ToolSearchTool:
     timeout_seconds = 10.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+        from ..deferred import is_deferred_tool, mark_tools_discovered
+
         query = input.get("query", "").strip()
         max_results = int(input.get("max_results", 5))
 
-        all_tools = ctx.tool_pool.assemble()
+        # Solo las diferidas necesitan descubrirse; las no-diferidas ya se anuncian.
+        deferred = [t for t in ctx.tool_pool.assemble(ctx.permission_context) if is_deferred_tool(t)]
 
         if query.startswith("select:"):
             name = query[len("select:"):].strip()
-            matches = [t for t in all_tools if t.name == name]
+            matches = [t for t in deferred if t.name == name]
         else:
             terms = query.lower().split()
             def score(tool) -> int:
                 haystack = f"{tool.name} {tool.description}".lower()
                 return sum(1 for term in terms if term in haystack)
-            scored = [(score(t), t) for t in all_tools if score(t) > 0]
+            scored = [(score(t), t) for t in deferred if score(t) > 0]
             scored.sort(key=lambda x: -x[0])
             matches = [t for _, t in scored[:max_results]]
+
+        # Descubrir = activar: las matched pasan a anunciarse en los próximos turnos
+        # y su schema completo se devuelve aquí para que el modelo las invoque ya.
+        mark_tools_discovered(ctx, [t.name for t in matches])
 
         return ToolResult(
             tool_name=self.name,
             output=json.dumps({
                 "query": query,
-                "matches": [t.name for t in matches],
-                "total_available": len(all_tools),
+                "matches": [
+                    {"name": t.name, "description": t.description, "parameters": t.input_schema}
+                    for t in matches
+                ],
+                "total_deferred_tools": len(deferred),
             }),
         )

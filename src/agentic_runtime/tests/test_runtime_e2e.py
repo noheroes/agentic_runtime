@@ -333,7 +333,6 @@ async def test_e2e_d5_b_custom_backend_via_factory(tmp_path):
 @pytest.mark.asyncio
 async def test_e2e_d5_c_hand_composed_primitives(tmp_path):
     """(c) Primitivas compuestas a mano producen un runtime funcional."""
-    from agentic_runtime.capabilities.resolver import CapabilitiesResolver
     from agentic_runtime.execution.tasks.registry import InMemoryTaskRegistry
     from agentic_runtime.storage.filesystem import FilesystemStorage
     from agentic_runtime.tools import ToolRegistry
@@ -344,8 +343,8 @@ async def test_e2e_d5_c_hand_composed_primitives(tmp_path):
     caller = ScriptedCaller([[TokenEvent(content="compuesto"), DoneEvent(stop_reason="stop")]])
     runtime = LocalAgentRuntime(
         model_caller=caller,
-        capabilities_resolver=CapabilitiesResolver(tool_registry=reg),
-        tool_dispatcher=ToolDispatcher(registry=reg),
+        tool_registry=reg,
+        tool_dispatcher=ToolDispatcher(),
         task_registry=InMemoryTaskRegistry(),
         storage=FilesystemStorage(root=tmp_path),
     )

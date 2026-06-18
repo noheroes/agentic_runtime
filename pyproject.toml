@@ -7,12 +7,23 @@ dependencies = [
     "agentic-models",
     "openai>=2.29.0",
     "mcp>=1.26.0",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "mypy>=1.13",
+    "bandit>=1.8",
+]
+# Dependencias de las SKILLS de oficina (docx/xlsx) que ejercita el E2E real de
+# ejecución en el loop. NO son del runtime: son las `deps` que el integrador
+# provee para esas skills concretas. Aisladas en su propio grupo para dejar
+# explícito que el runtime no depende de ellas — solo el test que las corre.
+skills-e2e = [
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
 ]
 
 [build-system]
@@ -25,3 +36,21 @@ include = ["agentic_runtime*"]
 
 [tool.uv.sources]
 agentic-models = { path = "../agentic_models", editable = true }
+
+# Lint = ruff + mypy + bandit. Correr los tres (vía `uv run`, para que mypy/bandit
+# vean las deps del proyecto):
+#   uvx ruff check src/agentic_runtime
+#   uv run mypy src/agentic_runtime
+#   uv run bandit -c pyproject.toml -r src/agentic_runtime -q
+[tool.mypy]
+python_version = "3.12"
+# El código de librería se tipa; los tests no son objeto del chequeo de tipos.
+files = ["src/agentic_runtime"]
+exclude = ['(^|/)(tests|scripts)/']
+ignore_missing_imports = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.bandit]
+# Los asserts viven en los tests (B101) y los tests no son superficie de ataque.
+exclude_dirs = ["src/agentic_runtime/tests", "src/agentic_runtime/scripts"]
