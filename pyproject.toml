@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Generic agentic loop runtime primitives"
 requires-python = ">=3.12"
 dependencies = [
-    "agentic-models",
+    "agentic-models==0.1.0",
     "openai>=2.29.0",
     "mcp>=1.26.0",
     "pyyaml>=6.0",
@@ -34,8 +34,11 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 include = ["agentic_runtime*"]
 
-[tool.uv.sources]
-agentic-models = { path = "../agentic_models", editable = true }
+# `agentic-models` se consume como WHEEL versionado (no editable, no path a
+# fuente): se construye en `agentic_models/wheels/` con `uv build --wheel -o
+# wheels/` y se resuelve desde esa carpeta como índice plano.
+[tool.uv]
+find-links = ["../agentic_models/wheels"]
 
 # Lint = ruff + mypy + bandit. Correr los tres (vía `uv run`, para que mypy/bandit
 # vean las deps del proyecto):
