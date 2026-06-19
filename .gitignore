@@ -6,6 +6,8 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 uv.lock
+build/
+wheels/
 
 # Secretos / config local de tests E2E reales (NUNCA commitear)
 .env
