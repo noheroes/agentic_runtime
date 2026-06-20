@@ -305,6 +305,7 @@ class LocalAgentRuntime:
             capabilities_resolver=self._capabilities_resolver,
             tool_dispatcher=self._tool_dispatcher,
             event_bus=bus,
+            hook_runner=self._hook_runner,
             model_id=task.model_override or self._model_id,
         )
 
