@@ -107,12 +107,12 @@ async def test_subagent_stop_hook_fired_on_completion():
 async def test_dispatch_with_parent_snapshot_notifies_parent():
     caller = _make_caller(TokenEvent(content="resultado hijo"), DoneEvent(stop_reason="stop"))
     runtime = _make_runtime(caller)
-    snap = ForkSnapshot(session_id="parent-sid", subagent_depth=0)
+    snap = ForkSnapshot(session_id="parent-sid", user_id="parent-uid", subagent_depth=0)
     task_id = await runtime.dispatch(
         RuntimeTask(prompt="trabaja", description="bg"), parent_snapshot=snap
     )
     await _await_task(runtime, task_id)
-    notifs = drain_notifications("parent-sid")
+    notifs = drain_notifications("parent-uid", "parent-sid")
     assert len(notifs) == 1
     assert notifs[0].status == "completed"
     assert notifs[0].final_text == "resultado hijo"
@@ -124,4 +124,4 @@ async def test_no_parent_snapshot_no_notification():
     runtime = _make_runtime(caller)
     task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="t"))
     await _await_task(runtime, task_id)
-    assert drain_notifications("parent-sid") == []
+    assert drain_notifications("parent-uid", "parent-sid") == []
