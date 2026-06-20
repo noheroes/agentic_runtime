@@ -92,10 +92,12 @@ def _parse_header(path: Path) -> MemoryHeader | None:
 
 
 class FilesystemMemoryStore:
-    """Memoria en disco, scopeada por agente: `<root>/<agent_id|'main'>/`.
+    """Memoria en disco, scopeada por una clave opaca: `<root>/<scope|'main'>/`.
 
-    El modelo escribe los ficheros con `Write` (guardado canónico, sin tool propia)
-    y actualiza el índice `MEMORY.md`; este store solo lee índice + cabeceras.
+    La clave la compone quien llama (el `MemoryProvider` la arma como
+    `<user_id>/<agent>`); el store solo la namespacea. El modelo escribe los ficheros
+    con `Write` (guardado canónico, sin tool propia) y actualiza el índice `MEMORY.md`;
+    este store solo lee índice + cabeceras.
     """
 
     def __init__(self, root: str | Path) -> None:

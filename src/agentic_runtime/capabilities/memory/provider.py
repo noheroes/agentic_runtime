@@ -50,18 +50,23 @@ class MemoryProvider:
         self._store = store
 
     @staticmethod
-    def _scope(context: "ToolUseContext") -> str | None:
-        """Clave de scope de la memoria a partir del contexto.
+    def _scope(context: "ToolUseContext") -> str:
+        """Clave de scope de la memoria: `<user_id>/<agent>`.
 
-        El agente principal usa un scope ESTABLE (`'main'`, vía `None`) para que la
-        memoria persista entre sesiones — su `agent_id` es un uuid distinto por
-        despacho, inservible como clave de memoria. Los subagentes se aíslan por su
+        Se scopea primero por USUARIO (identidad de ciclo de vida) para que un runtime
+        multi-tenant no mezcle memorias entre usuarios. Dentro del usuario, el agente
+        principal usa el slot ESTABLE `'main'` (su `agent_id` es un uuid distinto por
+        despacho, inservible como clave persistente) y los subagentes se aíslan por su
         `agent_id` (A no ve memorias de B)."""
-        return context.agent_id if context.is_subagent else None
+        user = context.user_id or "anon"
+        agent = context.agent_id if context.is_subagent else "main"
+        return f"{user}/{agent}"
 
     async def startup(self) -> None:
-        # Crea el dir del agente principal para que el destino de `write_file` exista.
-        self._store.ensure_dir(None)
+        # No-op: el dir de cada `<user_id>/<agent>` se crea de forma perezosa por turno
+        # (`system_prompt_section` → `ensure_dir`); en multi-tenant no se conocen los
+        # usuarios al arrancar, así que no hay un dir único que pre-crear aquí.
+        ...
 
     async def shutdown(self) -> None: ...
 

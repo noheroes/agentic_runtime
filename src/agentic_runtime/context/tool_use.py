@@ -29,6 +29,7 @@ class ToolUseContext(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     session_id: str
+    user_id: str | None = None  # identidad de ciclo de vida (peer de session_id); hereda al hijo vía ForkSnapshot
     agent_id: str | None = None
     is_subagent: bool = False  # kind: subagente unattended → toolset filtrado a safe_for_background
     subagent_depth: int = 0  # profundidad de anidamiento; la tool Agent la usa como tope

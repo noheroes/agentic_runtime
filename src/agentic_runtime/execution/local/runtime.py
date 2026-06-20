@@ -185,7 +185,11 @@ class LocalAgentRuntime:
             )
             return ctx, parent_snapshot.session_id, parent_snapshot.subagent_depth + 1
         agent_id = f"agent_{uuid.uuid4().hex[:12]}"
-        ctx = ToolUseContext(session_id=f"sess_{uuid.uuid4().hex[:12]}", agent_id=agent_id)
+        # Identidad inyectable por el consumidor; el interno solo se genera si no viene
+        # (simétrico para user_id y session_id), de modo que el runtime corra solo.
+        session_id = task.session_id or f"sess_{uuid.uuid4().hex[:12]}"
+        user_id = task.owner_id or f"user_{uuid.uuid4().hex[:12]}"
+        ctx = ToolUseContext(session_id=session_id, user_id=user_id, agent_id=agent_id)
         # Seed de permisos del agente principal: sin esto, tools `requires_permission`
         # (p.ej. `write_file`, que la memoria necesita para guardar) quedan fuera del
         # pool en un agente autónomo. Los subagentes los heredan vía snapshot.
@@ -269,12 +273,14 @@ class LocalAgentRuntime:
             "status": status, "result": result, "duration_ms": duration_ms,
         })
 
-    def _notify(self, parent_session_id: str | None, task: "RuntimeTask",
-                task_id: str, status: str, text: str, final_text: str) -> None:
+    def _notify(self, parent_user_id: str | None, parent_session_id: str | None,
+                task: "RuntimeTask", task_id: str, status: str, text: str,
+                final_text: str) -> None:
         if parent_session_id is None:
             return
         put_notification(BackgroundNotification(
-            parent_session_id=parent_session_id, task_id=task_id, status=status,
+            parent_user_id=parent_user_id or "", parent_session_id=parent_session_id,
+            task_id=task_id, status=status,
             description=task.description, notification_text=text,
             final_text=final_text, parent_execution_id=task.parent_execution_id,
         ))
@@ -318,14 +324,14 @@ class LocalAgentRuntime:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.kill(task_id)
             await self._fire_stop(task_id, task, "killed", None, duration_ms)
-            self._notify(parent_session_id, task, task_id, "killed",
+            self._notify(ctx.user_id, parent_session_id, task, task_id, "killed",
                          "Agent was killed (timeout or manual cancel)", "")
             raise
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.fail(task_id, str(exc), duration_ms=duration_ms)
             await self._fire_stop(task_id, task, "failed", None, duration_ms)
-            self._notify(parent_session_id, task, task_id, "failed", f"Error: {exc}", "")
+            self._notify(ctx.user_id, parent_session_id, task, task_id, "failed", f"Error: {exc}", "")
             logger.warning("agent %s failed: %s", task_id, exc)
             return
 
@@ -346,18 +352,22 @@ class LocalAgentRuntime:
                 await summarize_if_needed(final_text, self._max_chars, self._small_llm)
                 if final_text else "(no output)"
             )
-            self._notify(parent_session_id, task, task_id, "completed",
+            self._notify(ctx.user_id, parent_session_id, task, task_id, "completed",
                          notification_text, final_text)
 
         await self._persist(task, ctx, session)
 
     async def _persist(self, task: "RuntimeTask", ctx: ToolUseContext, session: Session) -> None:
-        if self._storage is None or not task.owner_id:
+        if self._storage is None:
             return
+        # La identidad de usuario vive en el ctx (raíz: del task o autogenerada;
+        # subagente: heredada del snapshot del padre), no en task.owner_id —que un
+        # subagente no trae—, de modo que su transcript caiga bajo el mismo usuario.
+        user_id = ctx.user_id or "anon"
         # El agent_id aleatorio discrimina el subtree solo para subagentes (kind);
         # el main vive en la raíz de la sesión.
         agent_id = (ctx.agent_id if ctx.is_subagent else "main") or "main"
-        key = StorageKeys.transcript_key(task.owner_id, ctx.session_id, agent_id)
+        key = StorageKeys.transcript_key(user_id, ctx.session_id, agent_id)
         try:
             await self._storage.upload(key, session.model_dump_json().encode(), "application/json")
         except Exception as exc:

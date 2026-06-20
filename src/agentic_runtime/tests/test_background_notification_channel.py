@@ -42,6 +42,7 @@ def _reset_channel():
 
 def _notif(**kw) -> BackgroundNotification:
     defaults = dict(
+        parent_user_id="u1",
         parent_session_id="s1",
         task_id="t1",
         status="completed",
@@ -59,20 +60,20 @@ def _notif(**kw) -> BackgroundNotification:
 # ---------------------------------------------------------------------------
 
 def test_drain_empty_returns_empty():
-    assert drain_notifications("no-such-session") == []
+    assert drain_notifications("u1", "no-such-session") == []
 
 
 def test_put_and_drain_single():
     n = _notif()
     put_notification(n)
-    result = drain_notifications("s1")
+    result = drain_notifications("u1", "s1")
     assert result == [n]
 
 
 def test_drain_clears_channel():
     put_notification(_notif())
-    drain_notifications("s1")
-    assert drain_notifications("s1") == []
+    drain_notifications("u1", "s1")
+    assert drain_notifications("u1", "s1") == []
 
 
 def test_drain_preserves_arrival_order():
@@ -82,15 +83,15 @@ def test_drain_preserves_arrival_order():
     put_notification(n1)
     put_notification(n2)
     put_notification(n3)
-    result = drain_notifications("s1")
+    result = drain_notifications("u1", "s1")
     assert [r.task_id for r in result] == ["t1", "t2", "t3"]
 
 
 def test_channel_isolates_sessions():
     put_notification(_notif(parent_session_id="sA", task_id="tA"))
     put_notification(_notif(parent_session_id="sB", task_id="tB"))
-    result_a = drain_notifications("sA")
-    result_b = drain_notifications("sB")
+    result_a = drain_notifications("u1", "sA")
+    result_b = drain_notifications("u1", "sB")
     assert len(result_a) == 1 and result_a[0].task_id == "tA"
     assert len(result_b) == 1 and result_b[0].task_id == "tB"
 

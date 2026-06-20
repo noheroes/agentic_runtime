@@ -17,8 +17,9 @@ def _write_memory(directory: Path, slug: str, name: str, description: str, mtype
     )
 
 
-def _ctx(agent_id: str | None = None, user_text: str = "", is_subagent: bool = False) -> ToolUseContext:
-    ctx = ToolUseContext(session_id="s1", agent_id=agent_id, is_subagent=is_subagent)
+def _ctx(agent_id: str | None = None, user_text: str = "", is_subagent: bool = False,
+         user_id: str = "u1") -> ToolUseContext:
+    ctx = ToolUseContext(session_id="s1", user_id=user_id, agent_id=agent_id, is_subagent=is_subagent)
     if user_text:
         ctx.messages.append({"role": "user", "content": user_text})
     return ctx
@@ -33,7 +34,7 @@ def _provider(tmp_path: Path) -> MemoryProvider:
 # ---------------------------------------------------------------------------
 
 def test_activation_contains_instructions_and_index(tmp_path: Path):
-    main_dir = tmp_path / "main"
+    main_dir = tmp_path / "u1" / "main"
     main_dir.mkdir(parents=True)
     (main_dir / ENTRYPOINT).write_text("- [auth](auth.md) — login y tokens\n", encoding="utf-8")
 
@@ -52,7 +53,7 @@ def test_activation_empty_dir_says_empty(tmp_path: Path):
 
 def test_activation_ensures_dir_exists(tmp_path: Path):
     _provider(tmp_path).system_prompt_section(_ctx())
-    assert (tmp_path / "main").is_dir()  # destino de write_file existe
+    assert (tmp_path / "u1" / "main").is_dir()  # destino de write_file existe
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,7 @@ def test_activation_ensures_dir_exists(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_recall_relevant_memory(tmp_path: Path):
-    _write_memory(tmp_path / "main", "auth", "auth-flow", "login y tokens de sesión")
+    _write_memory(tmp_path / "u1" / "main", "auth", "auth-flow", "login y tokens de sesión")
     msgs = _provider(tmp_path).active_context(_ctx(user_text="problema con el login de sesión"))
     assert len(msgs) == 1
     assert msgs[0]["role"] == "system"
@@ -68,13 +69,13 @@ def test_recall_relevant_memory(tmp_path: Path):
 
 
 def test_recall_irrelevant_query_empty(tmp_path: Path):
-    _write_memory(tmp_path / "main", "auth", "auth-flow", "login y tokens")
+    _write_memory(tmp_path / "u1" / "main", "auth", "auth-flow", "login y tokens")
     msgs = _provider(tmp_path).active_context(_ctx(user_text="receta de tarta de manzana"))
     assert msgs == []
 
 
 def test_recall_excludes_index(tmp_path: Path):
-    main_dir = tmp_path / "main"
+    main_dir = tmp_path / "u1" / "main"
     main_dir.mkdir(parents=True)
     (main_dir / ENTRYPOINT).write_text(
         "---\nname: MEMORY\ndescription: login token sesión\n---\nindex\n", encoding="utf-8"
@@ -84,7 +85,7 @@ def test_recall_excludes_index(tmp_path: Path):
 
 
 def test_recall_ignores_system_reminder_when_picking_query(tmp_path: Path):
-    _write_memory(tmp_path / "main", "auth", "auth-flow", "login y tokens de sesión")
+    _write_memory(tmp_path / "u1" / "main", "auth", "auth-flow", "login y tokens de sesión")
     ctx = _ctx(user_text="problema con el login de sesión")
     # El loop pudo inyectar un recordatorio como user; no debe usarse como query.
     ctx.messages.append({"role": "user", "content": "<system-reminder>\nrecordatorio\n</system-reminder>"})
@@ -99,7 +100,7 @@ def test_recall_ignores_system_reminder_when_picking_query(tmp_path: Path):
 def test_scoping_subagent_a_does_not_see_b(tmp_path: Path):
     # El aislamiento por agent_id aplica a SUBAGENTES (is_subagent=True); el agente
     # principal usa el scope estable 'main'.
-    _write_memory(tmp_path / "agent_a", "x", "secreto-a", "login token de A")
+    _write_memory(tmp_path / "u1" / "agent_a", "x", "secreto-a", "login token de A")
     provider = _provider(tmp_path)
     seen_by_b = provider.active_context(_ctx(agent_id="agent_b", user_text="login token", is_subagent=True))
     seen_by_a = provider.active_context(_ctx(agent_id="agent_a", user_text="login token", is_subagent=True))
@@ -109,7 +110,7 @@ def test_scoping_subagent_a_does_not_see_b(tmp_path: Path):
 
 def test_main_agent_uses_stable_scope_regardless_of_agent_id(tmp_path: Path):
     # Dos despachos del agente principal con agent_id (uuid) distinto comparten 'main'.
-    _write_memory(tmp_path / "main", "auth", "auth-flow", "login y tokens de sesión")
+    _write_memory(tmp_path / "u1" / "main", "auth", "auth-flow", "login y tokens de sesión")
     provider = _provider(tmp_path)
     run1 = provider.active_context(_ctx(agent_id="agent_uuid_1", user_text="login de sesión"))
     run2 = provider.active_context(_ctx(agent_id="agent_uuid_2", user_text="login de sesión"))
@@ -121,7 +122,7 @@ def test_main_agent_uses_stable_scope_regardless_of_agent_id(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_compact_context_preserves_relevant(tmp_path: Path):
-    _write_memory(tmp_path / "main", "auth", "auth-flow", "login y tokens de sesión")
+    _write_memory(tmp_path / "u1" / "main", "auth", "auth-flow", "login y tokens de sesión")
     provider = _provider(tmp_path)
     ctx = _ctx(user_text="login de sesión")
     assert provider.compact_context(ctx) == provider.active_context(ctx)

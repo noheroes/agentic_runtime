@@ -23,7 +23,11 @@ class RuntimeTask:
     timeout_seconds: float | None = None
     fork_context: bool = False
     parent_execution_id: str = ""
-    owner_id: str | None = None  # token opaco de identidad, lo setea el consumidor
+    # Identidad de ciclo de vida que inyecta el consumidor (p.ej. el BFF). Ambos son
+    # opcionales: si no se pasan, el runtime los autogenera (`user_<hex>` / `sess_<hex>`)
+    # de forma simétrica, de modo que el runtime sea ejecutable por sí solo.
+    owner_id: str | None = None    # = user_id
+    session_id: str | None = None  # inyectable; el interno solo se genera si no viene
     # Entrada por voz: si se adjunta audio y el STT está activo, el runtime lo
     # transcribe y usa la transcripción como prompt (`prompt` queda de fallback).
     audio_prompt: "AudioInput | None" = None

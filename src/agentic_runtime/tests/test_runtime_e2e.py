@@ -216,12 +216,14 @@ async def test_e2e_cancel_kills_running_task(tmp_path):
 async def test_e2e_background_subagent_notifies_and_persists(tmp_path):
     caller = ScriptedCaller([[TokenEvent(content="resultado hijo"), DoneEvent(stop_reason="stop")]])
     runtime = _runtime(tmp_path, caller)
-    snap = ForkSnapshot(session_id="e2e-bg-sid")
-    task = RuntimeTask(prompt="trabaja", description="bg", owner_id="user1")
+    # La identidad de usuario del hijo viaja por el snapshot del padre (no por
+    # task.owner_id, que un subagente no trae): así su transcript cae bajo user1.
+    snap = ForkSnapshot(session_id="e2e-bg-sid", user_id="user1")
+    task = RuntimeTask(prompt="trabaja", description="bg")
     task_id = await runtime.dispatch(task, parent_snapshot=snap)
     await _await_task(runtime, task_id)
 
-    notifs = drain_notifications("e2e-bg-sid")
+    notifs = drain_notifications("user1", "e2e-bg-sid")
     assert len(notifs) == 1
     assert notifs[0].status == "completed"
     assert notifs[0].final_text == "resultado hijo"
@@ -241,12 +243,13 @@ async def test_e2e_fork_isolates_parent_messages(tmp_path):
     runtime = _runtime(tmp_path, caller)
     snap = ForkSnapshot(
         session_id="e2e-fork-sid",
+        user_id="user1",
         messages=({"role": "user", "content": "SECRETO_DEL_PADRE"},),
     )
     task = RuntimeTask(prompt="trabaja aislado", description="fork", fork_context=False)
     task_id = await runtime.dispatch(task, parent_snapshot=snap)
     await _await_task(runtime, task_id)
-    drain_notifications("e2e-fork-sid")  # no contaminar el canal global
+    drain_notifications("user1", "e2e-fork-sid")  # no contaminar el canal global
 
     first_turn = caller.seen_messages[0]
     assert not any("SECRETO_DEL_PADRE" in str(m.get("content", "")) for m in first_turn)

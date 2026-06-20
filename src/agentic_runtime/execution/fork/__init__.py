@@ -33,6 +33,7 @@ class ForkSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     session_id: str
+    user_id: str | None = None
     subagent_depth: int = 0
     messages: tuple[Any, ...] = ()
     permissions: PermissionContext = Field(default_factory=PermissionContext)
@@ -74,6 +75,7 @@ class RuntimeContextForker:
 
         return ToolUseContext(
             session_id=snap.session_id,
+            user_id=snap.user_id,
             agent_id=agent_id,
             messages=messages,
             tool_pool=tool_pool,
