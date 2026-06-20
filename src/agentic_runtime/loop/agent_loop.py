@@ -8,6 +8,7 @@ from ..capabilities.resolver import CapabilitiesResolver
 from ..context.tool_use import ToolUseContext
 from ..events.bus import EventBus
 from ..events.event_types import DoneEvent, ErrorEvent, Event, TokenEvent, ToolCallEvent, ToolResultEvent
+from ..hooks import HookEvent
 from ..models.protocol import ModelCallerProtocol
 from ..tools.dispatcher import ToolDispatcher
 from ..tools.pool import ToolPool
@@ -57,6 +58,7 @@ class AgentLoop:
         capabilities_resolver: Optional[CapabilitiesResolver] = None,
         tool_dispatcher: Optional[ToolDispatcher] = None,
         event_bus: Optional[EventBus] = None,
+        hook_runner: Optional[Any] = None,
         model_id: str = "",
     ) -> None:
         self._model_caller = model_caller
@@ -65,6 +67,7 @@ class AgentLoop:
         self._capabilities_resolver = capabilities_resolver
         self._tool_dispatcher = tool_dispatcher
         self._event_bus = event_bus
+        self._hook_runner = hook_runner
         self._model_id = model_id
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
 
@@ -257,9 +260,32 @@ class AgentLoop:
                 if self._tool_dispatcher is None:
                     ctx.messages.append({"role": "tool", "tool_call_id": tc.call_id, "content": "[no dispatcher]"})
                     continue
+                # PreToolUse — gate inyectado por el consumidor (espejo de `canUseTool`
+                # del canónico). El runtime dispara el punto; la POLÍTICA vive en el
+                # hook del integrador: leer `app_state.native["plan_mode"]` para denegar
+                # escrituras (candado de plan mode) o resolver una aprobación HITL y
+                # conceder el permiso mutando `app_state.permissions`. Se honra
+                # `block` → denegar sin ejecutar, y `modified_input` → reemplazar el input
+                # (deny/updatedInput del gate canónico). `stop`/`additional_context` no se
+                # consumen en este punto.
+                tool_input = tc.tool_input
+                if self._hook_runner is not None:
+                    decision = await self._hook_runner.run(HookEvent.PRE_TOOL_USE, {
+                        "tool_name": tc.tool_name,
+                        "tool_input": tool_input,
+                        "call_id": tc.call_id,
+                        "ctx": ctx,
+                    })
+                    if decision.modified_input is not None:
+                        tool_input = decision.modified_input
+                    if decision.block:
+                        content = decision.message or f"permiso denegado para '{tc.tool_name}'"
+                        ctx.messages.append({"role": "tool", "tool_call_id": tc.call_id, "content": content})
+                        await self._emit(ToolResultEvent(call_id=tc.call_id, result=content, is_error=True))
+                        continue
                 result = await self._tool_dispatcher.dispatch(
                     tool_name=tc.tool_name,
-                    tool_input=tc.tool_input,
+                    tool_input=tool_input,
                     ctx=ctx,
                 )
                 ctx.messages.append({
