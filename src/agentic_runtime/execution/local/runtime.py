@@ -68,6 +68,7 @@ class LocalAgentRuntime:
         background_result_max_chars: int = 2000,
         model_id: str = "",
         initial_allowed_tools: Optional[list[str]] = None,
+        root_context_modifier: Any = None,
         stt: Any = None,
         tts: Any = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
@@ -86,6 +87,8 @@ class LocalAgentRuntime:
         self._max_chars = background_result_max_chars
         self._model_id = model_id
         self._initial_allowed_tools = list(initial_allowed_tools or [])
+        # Seam de autoría per-request del ctx raíz por el consumidor (ver RuntimeConfig).
+        self._root_context_modifier = root_context_modifier
         # Primitivas de voz ya resueltas por el factory (None = canal inactivo).
         self._stt = stt
         self._tts = tts
@@ -298,6 +301,11 @@ class LocalAgentRuntime:
         ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
         ctx.presentation = self._presentation
         ctx.exec_env = self._exec_env
+        # Autoría per-request del consumidor SOLO en la raíz (los subagentes heredan su
+        # estado por el ForkSnapshot). Corre tras fijar los defaults para que el
+        # consumidor pueda sembrar `app_state.native` y/o sobrescribir `presentation`.
+        if self._root_context_modifier is not None and parent_snapshot is None:
+            ctx = self._root_context_modifier(ctx, task)
         session = Session(session_id=ctx.session_id)
         session.metadata.subagent_depth = subagent_depth
         bus = self._make_bus(task_id, on_event)
