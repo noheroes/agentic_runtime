@@ -97,6 +97,13 @@ class RuntimeConfig:
     # (`app_state.native` + `ctx.presentation`), sin replicar su bolsa monolítica. Los
     # subagentes NO lo reciben: su estado viaja por el ForkSnapshot.
     root_context_modifier: Any = None
+    # Seam per-request de hooks de inicio de run para el agente RAÍZ:
+    # `(task) -> list[Callable[[], Awaitable[None]]]`. `_run_loop` registra los hooks
+    # devueltos en el `AgentLoop` de la raíz (`parent_snapshot is None`), que los dispara
+    # al arrancar `run()` (turn-start). Espeja el drain de notificaciones background que
+    # el canónico hace DENTRO del loop; el consumidor (paquete separado) no puede alcanzar
+    # el loop, así que lo inyecta aquí. Devuelve `[]` para sesiones desconocidas.
+    root_turn_start_hooks: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +216,7 @@ class RuntimeFactory:
             model_id=config.model_id,
             initial_allowed_tools=config.initial_allowed_tools,
             root_context_modifier=config.root_context_modifier,
+            root_turn_start_hooks=config.root_turn_start_hooks,
             stt=stt,
             tts=tts,
         )

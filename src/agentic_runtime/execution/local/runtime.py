@@ -69,6 +69,7 @@ class LocalAgentRuntime:
         model_id: str = "",
         initial_allowed_tools: Optional[list[str]] = None,
         root_context_modifier: Any = None,
+        root_turn_start_hooks: Any = None,
         stt: Any = None,
         tts: Any = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
@@ -89,6 +90,8 @@ class LocalAgentRuntime:
         self._initial_allowed_tools = list(initial_allowed_tools or [])
         # Seam de autoría per-request del ctx raíz por el consumidor (ver RuntimeConfig).
         self._root_context_modifier = root_context_modifier
+        # Seam per-request de hooks de inicio de run de la raíz (ver RuntimeConfig).
+        self._root_turn_start_hooks = root_turn_start_hooks
         # Primitivas de voz ya resueltas por el factory (None = canal inactivo).
         self._stt = stt
         self._tts = tts
@@ -322,6 +325,14 @@ class LocalAgentRuntime:
             hook_runner=self._hook_runner,
             model_id=task.model_override or self._model_id,
         )
+
+        # Hooks de inicio de run per-request del consumidor — SOLO en la raíz (los
+        # subagentes drenan su propio canal por su fork). Espeja el drain canónico
+        # dentro del loop; el seam los registra en el AgentLoop que el consumidor no
+        # puede alcanzar (ver RuntimeConfig.root_turn_start_hooks).
+        if self._root_turn_start_hooks is not None and parent_snapshot is None:
+            for hook in self._root_turn_start_hooks(task) or []:
+                loop.register_turn_start_hook(hook)
 
         # Entrada por voz: el prompt efectivo puede venir de transcribir el audio.
         prompt = await self._resolve_prompt(task, ctx)
