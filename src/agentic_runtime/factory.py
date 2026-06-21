@@ -90,6 +90,13 @@ class RuntimeConfig:
     # modelo pueda guardar memorias). La memoria NO se auto-concede el permiso — es una
     # decisión del integrador, espejo de cómo el canónico permite `Write`.
     initial_allowed_tools: list[str] = field(default_factory=list)
+    # Seam de autoría per-request del ctx RAÍZ por el consumidor: `(ctx, task) -> ctx`,
+    # aplicado en `_run_loop` solo para el agente principal (parent_snapshot is None).
+    # Espeja la autoría per-request del `ToolUseContext` del canónico (canUseTool/
+    # handleElicitation/app_state) sobre los puntos de extensión ya existentes
+    # (`app_state.native` + `ctx.presentation`), sin replicar su bolsa monolítica. Los
+    # subagentes NO lo reciben: su estado viaja por el ForkSnapshot.
+    root_context_modifier: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +208,7 @@ class RuntimeFactory:
             background_result_max_chars=config.background_result_max_chars,
             model_id=config.model_id,
             initial_allowed_tools=config.initial_allowed_tools,
+            root_context_modifier=config.root_context_modifier,
             stt=stt,
             tts=tts,
         )
