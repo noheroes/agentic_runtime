@@ -167,12 +167,16 @@ class AgenticModelsCaller:
             opts = replace(opts, signal=stop)
 
         # Resolución del modelo por request: model_id manda; el del constructor es el default.
-        # Un model_id desconocido es un error explícito (get_model lanza ModelNotFoundError),
-        # no se cae silenciosamente al default.
+        # La identidad canónica de agentic_models es (provider, id): el mismo id existe en
+        # varios providers. El puente es mono-provider por construcción (un solo api_key, un
+        # solo modelo default), así que se resuelve DENTRO del provider del modelo del
+        # constructor — resolver solo por id es ambiguo y podría devolver un Model de otro
+        # provider cuyo api_key no corresponde. Un model_id desconocido en ese provider es un
+        # error explícito (get_by_provider lanza ModelNotFoundError), no se cae al default.
         model = self._model
         if model_id:
-            from agentic_models import get_model
-            model = get_model(model_id)
+            from agentic_models import get_registry
+            model = get_registry().get_by_provider(self._model.provider, model_id)
 
         event_stream = stream(model, context, opts)
 
