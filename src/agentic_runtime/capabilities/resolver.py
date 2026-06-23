@@ -37,7 +37,6 @@ class CapabilitiesResolver:
         self._extra_sources.append(source)
 
     async def resolve(self, ctx: ToolUseContext) -> ResolvedCapabilities:
-        allowed = ctx.permission_context.allowed_names()
         denied = ctx.permission_context.denied_names()
 
         # Filtro por KIND (no por el flag mutable is_backgrounded): un subagente es
@@ -49,11 +48,15 @@ class CapabilitiesResolver:
             else self._tool_registry.all_tools()
         )
 
-        # Tools nativas — sin timeout externo
+        # Tools nativas — sin timeout externo. Visibilidad homologada al canónico
+        # (getTools/filterToolsByDenyRules): solo deny oculta del anuncio. requires_permission
+        # NO participa de la visibilidad — su gate vive en ejecución (dispatcher + hook
+        # PRE_TOOL_USE), igual que checkPermissions. Anunciar una tool que pide permiso es
+        # lo que hace alcanzable la aprobación HITL del integrador.
         native_schemas = [
             {"name": t.name, "description": t.description, "parameters": t.input_schema}
             for t in candidate_tools
-            if not t.requires_permission or (t.name in allowed and t.name not in denied)
+            if t.name not in denied
         ]
 
         # Fuentes externas con timeout parcial — si tardan, se devuelve lo disponible

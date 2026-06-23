@@ -71,18 +71,41 @@ async def test_resolver_includes_native_tools():
 
 
 @pytest.mark.asyncio
-async def test_resolver_respects_permission_context():
+async def test_resolver_announces_permissioned_tool_without_seeding():
+    # Homologado al canónico (getTools): la visibilidad NO depende de requires_permission.
+    # Una tool que requiere permiso se anuncia igual; el gate vive en ejecución (dispatcher
+    # + hook PRE_TOOL_USE), no en el anuncio.
     reg = ToolRegistry()
     reg.register(NativeTool())
     reg.register(PermissionedNativeTool())
     resolver = CapabilitiesResolver(tool_registry=reg)
-    ctx = ToolUseContext(session_id="s1")  # sin permisos
+    ctx = ToolUseContext(session_id="s1")  # sin sembrar permisos
 
     resolved = await resolver.resolve(ctx)
 
     tool_names = [t["name"] for t in resolved.tool_schemas]
     assert "native_tool" in tool_names
-    assert "permissioned_native" not in tool_names
+    assert "permissioned_native" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_resolver_hides_denied_tool():
+    # Único eje de visibilidad (canónico filterToolsByDenyRules): deny oculta del anuncio,
+    # con o sin requires_permission.
+    from agentic_runtime.contracts.permissions import PermissionContext
+
+    reg = ToolRegistry()
+    reg.register(NativeTool())
+    reg.register(PermissionedNativeTool())
+    resolver = CapabilitiesResolver(tool_registry=reg)
+    ctx = ToolUseContext(session_id="s1")
+    ctx.app_state.permissions = PermissionContext(always_deny=["native_tool"])
+
+    resolved = await resolver.resolve(ctx)
+
+    tool_names = [t["name"] for t in resolved.tool_schemas]
+    assert "native_tool" not in tool_names
+    assert "permissioned_native" in tool_names
 
 
 @pytest.mark.asyncio

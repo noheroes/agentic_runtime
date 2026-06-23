@@ -257,19 +257,21 @@ async def test_e2e_fork_isolates_parent_messages(tmp_path):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6. Capabilities — tool sin permiso no se expone
+# 6. Capabilities — una tool que requiere permiso se anuncia (visibilidad ⟂ permiso)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_e2e_capabilities_hides_unpermitted_tool(tmp_path):
+async def test_e2e_capabilities_announces_permissioned_tool(tmp_path):
+    # Homologado al canónico: el anuncio ignora requires_permission. El gate de la tool
+    # guarded vive en ejecución (dispatcher), no en su visibilidad.
     caller = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
     runtime = _runtime(tmp_path, caller, tools=(EchoTool(), GuardedTool()))
     task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="caps"))
     await _await_task(runtime, task_id)
 
     exposed = caller.seen_tools[0]
-    assert "echo" in exposed           # sin permiso requerido → visible
-    assert "guarded" not in exposed    # requiere permiso no otorgado → oculto
+    assert "echo" in exposed       # sin permiso requerido → visible
+    assert "guarded" in exposed    # requiere permiso pero se anuncia igual
 
 
 # ──────────────────────────────────────────────────────────────────────────────
