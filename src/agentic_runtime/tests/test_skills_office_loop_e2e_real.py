@@ -179,10 +179,11 @@ async def test_office_skills_run_scripts_in_loop_and_produce_real_files(tmp_path
     finally:
         await runtime.shutdown()
 
-    # --- el loop habilitó bash SOLO tras invocar la skill (allowed-tools) ---
+    # --- anuncio homologado al canónico: bash (requires_permission) se anuncia desde el
+    #     inicio; su gate vive en ejecución (dispatcher + hook), no en la visibilidad ---
     assert "Skill" in caller.turns[0]
-    assert "bash" not in caller.turns[0]          # bash requiere permiso: oculto al inicio
-    assert "bash" in caller.turns[1]              # tras Skill(officedocx), bash anunciado
+    assert "bash" in caller.turns[0]              # gated pero visible: visibilidad ⟂ permiso
+    assert "bash" in caller.turns[1]              # sigue anunciado tras Skill(officedocx)
     assert "bash" in caller.turns[3]              # idem tras Skill(officexlsx)
 
     # --- bash ejecutó de verdad los scripts (sin error) ---

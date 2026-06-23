@@ -106,8 +106,11 @@ class AgentLoop:
     def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
         """Schemas anunciados al modelo, derivados del pool ensamblado.
 
-        - Permiso: una tool que requiere permiso solo se anuncia si está permitida
-          (`assemble()` ya quitó las denegadas) — modelo autónomo, sin prompt.
+        - Visibilidad homologada al canónico (getTools): el anuncio solo filtra por deny
+          (`assemble()` ya quitó las denegadas) y por las diferidas no descubiertas.
+          `requires_permission` NO controla visibilidad — una tool que pide permiso se
+          anuncia igual; su gate vive en ejecución (dispatcher + hook PRE_TOOL_USE, espejo
+          de checkPermissions), que es lo que hace alcanzable la aprobación HITL.
         - Diferidas (M3, espejo de `claude.ts`): las tools diferidas (MCP) NO se
           anuncian hasta que ToolSearch las descubre; ToolSearch solo se anuncia si
           hay diferidas que descubrir. La ejecución no se ve afectada (viven en el pool).
@@ -115,7 +118,6 @@ class AgentLoop:
         from ..tools.deferred import discovered_tool_names, is_deferred_tool
         from ..tools.native.tool_search import TOOL_SEARCH_TOOL_NAME
 
-        allowed = ctx.permission_context.allowed_names()
         pool = ctx.tool_pool.assemble(ctx.permission_context)
         deferred_names = {t.name for t in pool if is_deferred_tool(t)}
         tool_search_active = bool(deferred_names)
@@ -123,8 +125,6 @@ class AgentLoop:
 
         schemas: list[dict] = []
         for tool in pool:
-            if tool.requires_permission and tool.name not in allowed:
-                continue
             if tool.name == TOOL_SEARCH_TOOL_NAME:
                 if not tool_search_active:
                     continue  # sin diferidas, no hay nada que buscar
