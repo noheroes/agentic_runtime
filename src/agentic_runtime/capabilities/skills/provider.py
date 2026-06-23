@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ..contracts import CapabilitySummary
-from .loader import SkillDefinition, load_skill_text, load_skills_dir
+from .loader import SkillDefinition, default_is_enabled, load_skill_text, load_skills_dir
 from .state import SkillsState
 
 if TYPE_CHECKING:
@@ -41,11 +41,21 @@ class SkillsProvider:
 
     name = "skills"
 
-    def __init__(self, state: SkillsState | None = None, *, skill_store: "SkillStore | None" = None) -> None:
+    def __init__(
+        self,
+        state: SkillsState | None = None,
+        *,
+        skill_store: "SkillStore | None" = None,
+        is_enabled: Callable[[SkillDefinition], bool] | None = None,
+    ) -> None:
         self._state = state or SkillsState()
         # Puerto de persistencia de skills (dónde se registran / se escribe el SKILL.md).
         # Lo provee/inyecta quien integra el runtime; se lee en startup().
         self._skill_store = skill_store
+        # Predicado de enablement (espejo del `isEnabled` canónico): default declarativo
+        # por frontmatter (`enabled`). El integrador puede inyectar otro (p.ej. feature
+        # flags). Una skill deshabilitada no se lista ni es invocable.
+        self._is_enabled = is_enabled or default_is_enabled
 
     @property
     def state(self) -> SkillsState:
@@ -72,7 +82,7 @@ class SkillsProvider:
         instrucciones, o None si no aplica. El loop NO importa esto — lo usa el integrador."""
         from .commands import process_slash_command
 
-        return process_slash_command(text, self._state, context)
+        return process_slash_command(text, self._state, context, is_enabled=self._is_enabled)
 
     async def register_skill(self, name: str, content: str) -> SkillDefinition:
         """Registra un skill EN runtime: lo escribe en el store (si hay) y lo carga.
@@ -81,6 +91,19 @@ class SkillsProvider:
         if self._skill_store is not None:
             await self._skill_store.write(name, content)
         return self.add_skill_text(name, content)
+
+    async def unregister(self, name: str) -> bool:
+        """Borra un skill: lo quita del store (si hay) y del estado vivo (`SkillsState`).
+
+        Inverso de `register_skill`. Sin esto, un skill borrado del store seguiría
+        invocable en el catálogo vivo hasta reiniciar (gap de un server long-running).
+        Devuelve si estaba cargado en el estado."""
+        if self._skill_store is not None:
+            try:
+                await self._skill_store.remove(name)
+            except Exception as exc:  # noqa: BLE001 — el unload del estado no debe fallar por el store
+                logger.warning("skills: no se pudo borrar %r del store: %s", name, exc)
+        return self._state.remove(name)
 
     # --- contrato CapabilityProvider -------------------------------------
 
@@ -115,15 +138,17 @@ class SkillsProvider:
                 provider=self.name,
             )
             for skill in self._state.all_skills()
+            if self._is_enabled(skill)
         ]
 
     def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
-        # La tool `Skill` (invocación) solo si hay skills que invocar (S1).
-        if not self._state.all_skills():
+        # La tool `Skill` (invocación) solo si hay skills HABILITADAS que invocar (S1):
+        # si todas están deshabilitadas, no se ofrece una tool que rechazaría todo.
+        if not any(self._is_enabled(s) for s in self._state.all_skills()):
             return []
         from .skill_tool import SkillTool
 
-        return [SkillTool(self._state)]
+        return [SkillTool(self._state, is_enabled=self._is_enabled)]
 
     def active_context(self, context: "ToolUseContext") -> list[dict]:
         """Skills activas en este contexto → mensajes 'continúa siguiendo' (S3).

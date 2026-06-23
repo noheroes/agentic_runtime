@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ...tools.protocol import ToolCategory, ToolResult
-from .loader import SkillDefinition
+from .loader import SkillDefinition, default_is_enabled
 from .state import SkillsState
 
 if TYPE_CHECKING:
@@ -93,14 +93,24 @@ class SkillTool:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    def __init__(self, state: SkillsState) -> None:
+    def __init__(
+        self,
+        state: SkillsState,
+        *,
+        is_enabled: Callable[[SkillDefinition], bool] | None = None,
+    ) -> None:
         self._state = state
+        # Predicado de enablement (espejo del `isEnabled` canónico): una skill
+        # deshabilitada no es invocable ni aparece en la lista de disponibles.
+        self._is_enabled = is_enabled or default_is_enabled
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         command = (input.get("command") or "").strip()
         skill = self._state.get(command)
-        if skill is None:
-            available = ", ".join(s.name for s in self._state.all_skills()) or "(ninguna)"
+        if skill is None or not self._is_enabled(skill):
+            available = ", ".join(
+                s.name for s in self._state.all_skills() if self._is_enabled(s)
+            ) or "(ninguna)"
             return ToolResult.error(
                 self.name, f"skill '{command}' no encontrada. Disponibles: {available}"
             )

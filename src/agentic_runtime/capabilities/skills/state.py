@@ -24,6 +24,10 @@ class SkillsState:
     def get(self, name: str) -> SkillDefinition | None:
         return self._skills.get(name)
 
+    def remove(self, name: str) -> bool:
+        """Quita una skill del catálogo vivo. Devuelve si estaba presente."""
+        return self._skills.pop(name, None) is not None
+
     @property
     def skills(self) -> dict[str, SkillDefinition]:
         return dict(self._skills)
