@@ -30,6 +30,20 @@ class SkillDefinition(BaseModel):
     # localizar archivos bundled (scripts/, templates/) por ruta. Vacío si la skill se
     # registró solo como contenido (sin directorio en disco).
     base_dir: str = ""
+    # Enablement declarativa (frontmatter `enabled`, default true). La consume el
+    # predicado por defecto del provider; deshabilitada → fuera del catálogo y no invocable.
+    enabled: bool = True
+    # Versión declarada (frontmatter `version`): passthrough de trazabilidad para el
+    # integrador (p.ej. manifest de sesión). El runtime no la interpreta.
+    version: str = ""
+
+
+def default_is_enabled(skill: "SkillDefinition") -> bool:
+    """Predicado de enablement por defecto: la skill declara su estado en el frontmatter.
+
+    Espejo del `isEnabled` canónico (un predicado de código, no un toggle persistido).
+    El integrador puede inyectar otro predicado (p.ej. feature flags) en el provider."""
+    return skill.enabled
 
 
 def _first_paragraph(body: str) -> str:
@@ -62,6 +76,8 @@ def load_skill_text(
         model=model,
         source_path=source_path,
         base_dir=base_dir,
+        enabled=front.enabled,
+        version=front.version,
     )
 
 
@@ -98,4 +114,10 @@ def load_skills_dir(root: Path) -> list[SkillDefinition]:
     return skills
 
 
-__all__ = ["SkillDefinition", "load_skill_file", "load_skill_text", "load_skills_dir"]
+__all__ = [
+    "SkillDefinition",
+    "default_is_enabled",
+    "load_skill_file",
+    "load_skill_text",
+    "load_skills_dir",
+]

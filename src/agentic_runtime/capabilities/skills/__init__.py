@@ -1,6 +1,7 @@
 from .frontmatter import SkillFrontmatter, parse_frontmatter
 from .loader import (
     SkillDefinition,
+    default_is_enabled,
     load_skill_file,
     load_skill_text,
     load_skills_dir,
@@ -22,6 +23,7 @@ __all__ = [
     "SlashCommand",
     "StorageBackedSkillStore",
     "build_skill_context_modifier",
+    "default_is_enabled",
     "parse_slash_command",
     "process_slash_command",
     "load_skill_file",

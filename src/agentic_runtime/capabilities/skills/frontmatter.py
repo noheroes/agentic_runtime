@@ -28,12 +28,33 @@ class SkillFrontmatter(BaseModel):
     description: str | None = None
     allowed_tools: list[str] = Field(default_factory=list, alias="allowed-tools")
     model: str | None = None
+    enabled: bool = True
+    version: str = ""
 
     @field_validator("name", "description", "model", mode="before")
     @classmethod
     def _coerce_optional_str(cls, value: object) -> str | None:
         # Un valor no-string (p.ej. `name: [x]`) degrada a None, no a error de tipo.
         return value if isinstance(value, str) else None
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _coerce_enabled(cls, value: object) -> bool:
+        # Enablement como predicado declarativo (espejo del `isEnabled` canónico). Solo
+        # `false` literal (bool o string) deshabilita; ausente o corrupto → habilitado
+        # (default seguro: un frontmatter malformado no debe silenciar una skill).
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() not in {"false", "0", "no"}
+        return True
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _coerce_version(cls, value: object) -> str:
+        # Passthrough de trazabilidad: YAML puede dar float/int (`version: 1.0`) →
+        # str; ausente/None → "". No es campo de seguridad; nunca lanza.
+        return "" if value is None else str(value)
 
     @field_validator("allowed_tools", mode="before")
     @classmethod
