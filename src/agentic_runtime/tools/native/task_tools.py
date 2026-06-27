@@ -91,13 +91,9 @@ class TaskListTool:
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         status_filter = input.get("status")
         registry = get_registry()
-        # TaskRegistryProtocol exposes list_all or we enumerate via internal dict
-        # Use duck typing — if list_all exists use it, otherwise use events workaround
-        if hasattr(registry, "list_all"):
-            records = registry.list_all()
-        else:
-            # Fallback: registry may not expose list_all — return empty
-            records = []
+        # `list_all` es parte del contrato `TaskRegistryProtocol`: toda implementación
+        # conforme lo expone (espejo de `listTasks()` del canónico).
+        records = registry.list_all()
 
         if status_filter:
             records = [r for r in records if r.status == status_filter]
