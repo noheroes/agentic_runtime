@@ -26,7 +26,10 @@ class EnterPlanModeTool:
     timeout_seconds = 5.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
-        if ctx.agent_id is not None:
+        # El discriminador de subagente es `is_subagent`, no `agent_id` (que también se
+        # asigna al contexto raíz como identidad). Mismo criterio que el resto del runtime
+        # (resolver/agent_loop/runtime). Canónico: EnterPlanMode es root-only.
+        if ctx.is_subagent:
             return ToolResult.error(
                 self.name, "EnterPlanMode cannot be used inside a subagent."
             )
