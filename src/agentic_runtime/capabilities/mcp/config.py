@@ -47,6 +47,9 @@ class McpServerConfig(BaseModel):
     # Operativo (opcional, con default — no del estándar MCP)
     timeout_seconds: float | None = None
     model: str | None = None
+    # Enablement: un server deshabilitado no se conecta en `startup()` y no aporta tools
+    # (espejo de `disabledMcpServers`/`isMcpServerDisabled` del canónico). Default habilitado.
+    enabled: bool = True
 
     @model_validator(mode="after")
     def _validate_identity_and_auth(self) -> "McpServerConfig":

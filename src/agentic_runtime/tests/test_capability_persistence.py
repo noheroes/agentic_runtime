@@ -97,6 +97,71 @@ async def test_register_server_persists_to_store():
     assert "local" in await store.load()
 
 
+class _PersistFakeClient:
+    def __init__(self, config):
+        self.config = config
+
+    async def connect(self): ...
+    async def list_tools(self): return [{"name": f"{self.config.name}_t"}]
+    async def list_resources(self): return []
+    async def call(self, n, i): return "ok"
+    async def aclose(self): ...
+
+
+async def test_remove_server_unpersists_from_store():
+    """Borrar un server lo quita del registro persistido (simétrico con register)."""
+    store = StorageBackedMcpConfigStore(_FakeStorage())
+    provider = McpProvider(config_store=store, client_factory=_PersistFakeClient)
+    await provider.register_server("local", {"type": "stdio", "command": "run"})
+    assert "local" in await store.load()
+
+    await provider.remove_server("local")
+    assert "local" not in await store.load()  # no reaparece en el próximo startup
+
+
+async def test_startup_skips_disabled_servers():
+    """Un server con enabled=False no se conecta en startup y no aporta tools."""
+    storage = _FakeStorage()
+    store = StorageBackedMcpConfigStore(storage)
+    await store.save("on", {"type": "stdio", "command": "run"})
+    await store.save("off", {"type": "stdio", "command": "run", "enabled": False})
+
+    provider = McpProvider(config_store=store, client_factory=_PersistFakeClient)
+    await provider.startup()
+
+    assert provider.state.status("on").value == "connected"
+    assert provider.state.status("off").value == "configured"  # registrado, no conectado
+    assert [t.name for t in provider.tools(_ctx())] == ["on_t"]
+    await provider.shutdown()
+
+
+async def test_set_server_enabled_persists_and_survives_restart():
+    """Deshabilitar persiste el flag: un nuevo startup respeta el estado deshabilitado."""
+    storage = _FakeStorage()
+    store = StorageBackedMcpConfigStore(storage)
+    provider = McpProvider(config_store=store, client_factory=_PersistFakeClient)
+    await provider.register_server("srv", {"type": "stdio", "command": "run"})
+    await provider.connect_server("srv")
+
+    connected = await provider.set_server_enabled("srv", False)
+    assert connected is False
+    assert provider.state.status("srv").value == "configured"
+    assert (await store.load())["srv"]["enabled"] is False
+
+    # reinicio: un provider nuevo lee el store y NO conecta el deshabilitado
+    fresh = McpProvider(config_store=store, client_factory=_PersistFakeClient)
+    await fresh.startup()
+    assert fresh.state.status("srv").value == "configured"
+    assert fresh.tools(_ctx()) == []
+
+    # re-habilitar reconecta y vuelve a aportar tools
+    reconnected = await fresh.set_server_enabled("srv", True)
+    assert reconnected is True
+    assert [t.name for t in fresh.tools(_ctx())] == ["srv_t"]
+    assert (await store.load())["srv"]["enabled"] is True
+    await fresh.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Skill store
 # ---------------------------------------------------------------------------

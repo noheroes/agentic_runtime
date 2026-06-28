@@ -165,29 +165,58 @@ class McpProvider:
             self._state.set_status(name, ServerStatus.CONFIGURED)
 
     async def remove_server(self, name: str) -> None:
-        """Desconecta y elimina el server por completo (config incluida)."""
+        """Desconecta y elimina el server por completo: estado vivo Y registro persistido.
+
+        Simétrico con `register_server` (que persiste): borrar un server lo quita también
+        del `config_store`, igual que `removeMcpConfig` del canónico borra del archivo de
+        config. Sin esto, el server reaparecería en el próximo `startup()`."""
         await self.disconnect_server(name)
         self._state.remove_server(name)
+        if self._config_store is not None:
+            await self._config_store.remove(name)
 
     async def reconnect_server(self, name: str) -> bool:
         """Reconecta un server (toggle/refresh). El pool se reensambla solo por turno."""
         await self.disconnect_server(name)
         return await self.connect_server(name)
 
+    async def set_server_enabled(self, name: str, enabled: bool) -> bool:
+        """Habilita/deshabilita un server y lo deja consistente en estado, persistencia y
+        conexión (espejo del toggle del canónico, que escribe la config y reconcilia).
+
+        Persiste el flag (sobrevive a reinicios: `startup()` lo respeta), reconecta si se
+        habilita o desconecta si se deshabilita. Devuelve el estado de conexión resultante."""
+        config = self._state.servers.get(name)
+        if config is None:
+            return False
+        updated = config.model_copy(update={"enabled": enabled})
+        self._state.set_server(updated)
+        if self._config_store is not None:
+            await self._config_store.save(name, updated.model_dump(exclude={"name"}))
+        if enabled:
+            return await self.reconnect_server(name)
+        await self.disconnect_server(name)
+        return False
+
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
-        """Carga el registro persistido (si hay store) y conecta todos los servers.
+        """Carga el registro persistido (si hay store) y conecta los servers HABILITADOS.
 
-        Un server caído no aborta el resto. La config en el store ya está en el contrato
-        de capabilities (el integrador la extrajo/mapeó de su formato antes de guardarla)."""
+        Un server deshabilitado (`enabled=False`) no se conecta y no aporta tools (espejo
+        de `isMcpServerDisabled` del canónico, que salta la reconexión automática). Un
+        server caído no aborta el resto. La config en el store ya está en el contrato de
+        capabilities (el integrador la extrajo/mapeó de su formato antes de guardarla)."""
         if self._config_store is not None:
             try:
                 persisted = await self._config_store.load()
                 self.load_servers(persisted)  # tolerante: salta inválidos con log
             except Exception as exc:  # noqa: BLE001
                 logger.warning("mcp: no se pudo cargar el registro persistido: %s", exc)
-        for name in list(self._state.servers):
+        for name, config in list(self._state.servers.items()):
+            if not config.enabled:
+                logger.info("mcp: server %r deshabilitado — no se conecta en startup", name)
+                continue
             await self.connect_server(name)
 
     async def register_server(self, name: str, raw: dict) -> McpServerConfig:

@@ -1,6 +1,6 @@
 [project]
 name = "agentic-runtime"
-version = "0.7.3"
+version = "0.7.4"
 description = "Generic agentic loop runtime primitives"
 requires-python = ">=3.12"
 dependencies = [
@@ -57,3 +57,15 @@ no_implicit_optional = true
 [tool.bandit]
 # Los asserts viven en los tests (B101) y los tests no son superficie de ataque.
 exclude_dirs = ["src/agentic_runtime/tests", "src/agentic_runtime/scripts"]
+
+# Config de pytest a nivel raíz: garantiza que `uv run pytest` sea verde desde
+# cualquier cwd (sin -c). `asyncio_mode=auto` evita el falso rojo de "async not
+# natively supported" que aparece al correr desde la raíz, donde pytest no
+# encuentra el pytest.ini anidado de la carpeta de tests.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["src/agentic_runtime/tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: tests that require external infrastructure such as MinIO",
+]
