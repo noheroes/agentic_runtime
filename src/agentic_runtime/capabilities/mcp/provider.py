@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any, Callable
 from ..contracts import CapabilitySummary
 from .client import McpClient
 from .config import McpServerConfig, load_server_configs, parse_server_config
+from .config_store import ScopedMcpConfigStore
+from .reconcile import ReconcilePlan, apply_reconcile, plan_reconcile
+from .scope import McpScope
 from .state import McpState, ServerStatus
 from .tool_adapter import McpCall, build_mcp_tool
 
@@ -40,15 +43,22 @@ class McpProvider:
         *,
         client_factory: "Callable[[McpServerConfig], McpClient] | None" = None,
         config_store: "Any | None" = None,
+        config_watcher: "Any | None" = None,
         storage: "Any | None" = None,
         redirect_handler: "Any | None" = None,
         callback_handler: "Any | None" = None,
         user_id: str = "mcp",
     ) -> None:
         self._state = state or McpState()
-        # Puerto de persistencia del registro de servers (dónde se guardó la config al
-        # registrar). Lo provee/inyecta quien integra el runtime; se lee en startup().
-        self._config_store = config_store
+        # Puerto de persistencia del registro de servers, scope-aware. El integrador
+        # registra un productor por scope; un store plano (legacy) se envuelve como el
+        # productor del scope `user`. Se lee (mergeado por precedencia) en startup().
+        self._scoped: "ScopedMcpConfigStore | None" = self._normalize_store(config_store)
+        # Procedencia (scope) resuelta de cada server tras el merge — gobierna el gate
+        # de mutabilidad (managed/enterprise no mutables por el usuario).
+        self._scope_of: dict[str, McpScope] = {}
+        # Watcher de fuente externa (vector 2). Lo arranca startup() con `reconcile`.
+        self._watcher = config_watcher
         # Inyección para auth OAuth: storage para TokenStorage por defecto; handlers
         # interactivos los provee QUIEN INTEGRA el runtime (headless no abre navegador).
         self._storage = storage
@@ -56,6 +66,15 @@ class McpProvider:
         self._callback_handler = callback_handler
         self._user_id = user_id
         self._client_factory = client_factory or self._default_client
+
+    @staticmethod
+    def _normalize_store(config_store: "Any | None") -> "ScopedMcpConfigStore | None":
+        """Acepta un store scope-aware o uno plano (legacy → productor del scope user)."""
+        if config_store is None:
+            return None
+        if isinstance(config_store, ScopedMcpConfigStore):
+            return config_store
+        return ScopedMcpConfigStore.from_flat(config_store, scope=McpScope.USER)
 
     def _default_client(self, config: McpServerConfig) -> McpClient:
         """Factory por defecto: arma `AuthDeps` para oauth (TokenStorage sobre storage)."""
@@ -168,12 +187,15 @@ class McpProvider:
         """Desconecta y elimina el server por completo: estado vivo Y registro persistido.
 
         Simétrico con `register_server` (que persiste): borrar un server lo quita también
-        del `config_store`, igual que `removeMcpConfig` del canónico borra del archivo de
-        config. Sin esto, el server reaparecería en el próximo `startup()`."""
+        del store, igual que `removeMcpConfig` del canónico borra del archivo de config.
+        El gate de mutabilidad se aplica ANTES de tocar el estado vivo: un server managed/
+        enterprise no es removible por el usuario (el store lanza `ValueError`)."""
+        if self._scoped is not None:
+            scope = self._scope_of.get(name, McpScope.USER)
+            await self._scoped.remove(scope, name)  # gate: lanza para scopes no mutables
         await self.disconnect_server(name)
         self._state.remove_server(name)
-        if self._config_store is not None:
-            await self._config_store.remove(name)
+        self._scope_of.pop(name, None)
 
     async def reconnect_server(self, name: str) -> bool:
         """Reconecta un server (toggle/refresh). El pool se reensambla solo por turno."""
@@ -190,9 +212,12 @@ class McpProvider:
         if config is None:
             return False
         updated = config.model_copy(update={"enabled": enabled})
+        # Persiste primero: el gate de mutabilidad rechaza managed/enterprise antes de
+        # alterar el estado vivo (un toggle fallido no deja el server inconsistente).
+        if self._scoped is not None:
+            scope = self._scope_of.get(name, McpScope.USER)
+            await self._scoped.save(scope, name, updated.model_dump(exclude={"name"}))
         self._state.set_server(updated)
-        if self._config_store is not None:
-            await self._config_store.save(name, updated.model_dump(exclude={"name"}))
         if enabled:
             return await self.reconnect_server(name)
         await self.disconnect_server(name)
@@ -201,16 +226,16 @@ class McpProvider:
     # --- contrato CapabilityProvider -------------------------------------
 
     async def startup(self) -> None:
-        """Carga el registro persistido (si hay store) y conecta los servers HABILITADOS.
+        """Carga el registro persistido (mergeado por scope) y conecta los HABILITADOS.
 
         Un server deshabilitado (`enabled=False`) no se conecta y no aporta tools (espejo
-        de `isMcpServerDisabled` del canónico, que salta la reconexión automática). Un
-        server caído no aborta el resto. La config en el store ya está en el contrato de
-        capabilities (el integrador la extrajo/mapeó de su formato antes de guardarla)."""
-        if self._config_store is not None:
+        de `isMcpServerDisabled` del canónico). Un server caído no aborta el resto. Si hay
+        watcher de fuente externa, se arranca con `reconcile` como callback (vector 2)."""
+        if self._scoped is not None:
             try:
-                persisted = await self._config_store.load()
-                self.load_servers(persisted)  # tolerante: salta inválidos con log
+                merged = await self._scoped.load()  # {name: ScopedConfig} con precedencia
+                self._scope_of.update({n: sc.scope for n, sc in merged.items()})
+                self.load_servers({n: sc.raw for n, sc in merged.items()})  # tolerante
             except Exception as exc:  # noqa: BLE001
                 logger.warning("mcp: no se pudo cargar el registro persistido: %s", exc)
         for name, config in list(self._state.servers.items()):
@@ -218,16 +243,61 @@ class McpProvider:
                 logger.info("mcp: server %r deshabilitado — no se conecta en startup", name)
                 continue
             await self.connect_server(name)
+        if self._watcher is not None:
+            await self._watcher.start(self.reconcile)
 
-    async def register_server(self, name: str, raw: dict) -> McpServerConfig:
-        """Registra un server EN runtime: valida, persiste (si hay store) y deja listo
-        para conectar. La config `raw` ya viene en el contrato (el integrador la mapeó)."""
+    async def reconcile(self) -> ReconcilePlan:
+        """Converge el estado vivo al registro deseado de la fuente (vectores 1 y 2).
+
+        Lee el store mergeado, actualiza la procedencia y el registro, y aplica el plan
+        diff (connect/disconnect/refresh) sobre los clients. Lo consumen el watcher
+        externo y cualquier recarga in-process. Sin store: no-op."""
+        if self._scoped is None:
+            return ReconcilePlan((), (), ())
+        merged = await self._scoped.load()
+        desired: dict[str, McpServerConfig] = {}
+        for name, scoped in merged.items():
+            try:
+                desired[name] = parse_server_config(name, scoped.raw)
+            except Exception as exc:  # noqa: BLE001 — tolerante: salta inválidos
+                logger.warning("mcp: config inválida para %r en reconcile — omitido: %s", name, exc)
+        # Snapshot del estado vivo ANTES de mutar el registro.
+        live = {
+            n: self._state.servers[n]
+            for n in self._state.connected_servers()
+            if n in self._state.servers
+        }
+        self._scope_of = {n: merged[n].scope for n in desired}
+        for name, config in desired.items():
+            self._state.set_server(config)
+        plan = plan_reconcile(desired, live)
+        await apply_reconcile(plan, self)
+        # Los servers que ya no se desean quedaron desconectados por el plan: se sacan
+        # del registro para que no reaparezcan.
+        for name in list(self._state.servers):
+            if name not in desired:
+                self._state.remove_server(name)
+                self._scope_of.pop(name, None)
+        return plan
+
+    async def register_server(
+        self, name: str, raw: dict, *, scope: McpScope = McpScope.USER
+    ) -> McpServerConfig:
+        """Registra un server EN runtime: valida, persiste en el scope (default user) y
+        deja listo para conectar. El gate rechaza scopes no mutables (managed/enterprise).
+        La config `raw` ya viene en el contrato (el integrador la mapeó)."""
         config = self.add_server(name, raw)  # estricto: valida identidad/seguridad
-        if self._config_store is not None:
-            await self._config_store.save(name, raw)
+        if self._scoped is not None:
+            await self._scoped.save(scope, name, raw)  # gate de mutabilidad
+        self._scope_of[name] = scope
         return config
 
     async def shutdown(self) -> None:
+        if self._watcher is not None:
+            try:
+                await self._watcher.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mcp: error deteniendo watcher: %s", exc)
         for name, client in self._state.clients.items():
             try:
                 await client.aclose()

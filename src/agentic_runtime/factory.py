@@ -40,6 +40,10 @@ class CapabilitiesConfig:
     # Puertos de persistencia (dónde se guardan el registro de MCP y los skills). Los
     # inyecta quien integra el runtime; si None, se usa el default sobre StorageProtocol.
     mcp_config_store: Any = None
+    # Watcher de fuente externa de config MCP (vector 2 de recarga dinámica). Lo provee
+    # el integrador (agent_core: poll/evento MinIO; agentic_code: inotify). Si None, solo
+    # opera la recarga in-process (vector 1).
+    mcp_config_watcher: Any = None
     skill_store: Any = None
     # Memoria del agente: dir raíz en disco (default `FilesystemMemoryStore`) o un
     # `MemoryStore` inyectado. Si alguno está presente, se registra `MemoryProvider`.
@@ -134,6 +138,7 @@ class RuntimeFactory:
         if caps.mcp_servers or caps.mcp_config_store is not None:
             mcp = McpProvider(
                 config_store=caps.mcp_config_store,  # registro persistido (lee en startup)
+                config_watcher=caps.mcp_config_watcher,  # vector 2: cambios externos
                 storage=storage,  # TokenStorage OAuth por defecto sobre StorageProtocol
                 redirect_handler=caps.mcp_oauth_redirect_handler,
                 callback_handler=caps.mcp_oauth_callback_handler,
