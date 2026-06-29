@@ -83,7 +83,9 @@ async def test_startup_loads_scoped_registry_and_connects_enabled():
     await provider.shutdown()
 
 
-async def test_managed_present_suppresses_user_servers_live():
+async def test_managed_coexists_with_user_servers_live():
+    # managed = baseline de plataforma: convive con los servers del usuario (no los
+    # suprime). Ambos quedan conectados y visibles en el pool.
     store = ScopedMcpConfigStore({
         McpScope.USER: _FakeProducer({"u": {"command": "run"}}),
         McpScope.MANAGED: _FakeProducer({"m": {"command": "run"}}),
@@ -91,8 +93,23 @@ async def test_managed_present_suppresses_user_servers_live():
     provider = McpProvider(config_store=store, client_factory=_FakeClient)
     await provider.startup()
 
-    assert provider.state.connected_servers() == ["m"]
-    assert "u" not in provider.state.servers  # exclusividad aplicada en el merge
+    assert sorted(provider.state.connected_servers()) == ["m", "u"]
+    await provider.shutdown()
+
+
+async def test_enterprise_present_suppresses_managed_and_user_live():
+    # enterprise = lockdown: suprime managed Y user en el merge; solo quedan sus servers.
+    store = ScopedMcpConfigStore({
+        McpScope.USER: _FakeProducer({"u": {"command": "run"}}),
+        McpScope.MANAGED: _FakeProducer({"m": {"command": "run"}}),
+        McpScope.ENTERPRISE: _FakeProducer({"e": {"command": "run"}}),
+    })
+    provider = McpProvider(config_store=store, client_factory=_FakeClient)
+    await provider.startup()
+
+    assert provider.state.connected_servers() == ["e"]
+    assert "u" not in provider.state.servers
+    assert "m" not in provider.state.servers
     await provider.shutdown()
 
 

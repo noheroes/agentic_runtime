@@ -64,48 +64,59 @@ def test_merge_returns_typed_scoped_config():
 
 
 # ---------------------------------------------------------------------------
-# exclusividad de scopes administrados (managed/enterprise)
+# managed = baseline coexistente (capa plugin-like del canónico), NO exclusivo
 # ---------------------------------------------------------------------------
 
-def test_managed_present_suppresses_lower_scopes():
+def test_managed_coexists_with_user():
+    # managed es el baseline de plataforma: convive con los servers del usuario,
+    # no los suprime (a diferencia de enterprise). Espejo de los plugins del canónico.
     scoped = {
         McpScope.USER: {"u": {"url": "https://u"}},
         McpScope.MANAGED: {"m": {"url": "https://m"}},
     }
     merged = merge_scoped(scoped)
-    assert set(merged) == {"m"}
+    assert set(merged) == {"m", "u"}
     assert merged["m"].scope is McpScope.MANAGED
+    assert merged["u"].scope is McpScope.USER
 
+
+def test_managed_wins_over_user_on_name_collision():
+    # Coexisten por nombre; en colisión, managed (mayor precedencia) gana.
+    scoped = {
+        McpScope.USER: {"s": {"url": "https://user", "_tag": "user"}},
+        McpScope.MANAGED: {"s": {"url": "https://managed", "_tag": "managed"}},
+    }
+    merged = merge_scoped(scoped)
+    assert merged["s"].scope is McpScope.MANAGED
+    assert merged["s"].raw["_tag"] == "managed"
+
+
+# ---------------------------------------------------------------------------
+# enterprise = lockdown corporativo: ÚNICO scope exclusivo (suprime el resto)
+# ---------------------------------------------------------------------------
 
 def test_enterprise_present_suppresses_all_non_exclusive():
     scoped = {
         McpScope.USER: {"u": {"url": "https://u"}},
         McpScope.PROJECT: {"p": {"url": "https://p"}},
         McpScope.LOCAL: {"l": {"url": "https://l"}},
+        McpScope.MANAGED: {"m": {"url": "https://m"}},
         McpScope.ENTERPRISE: {"e": {"url": "https://e"}},
     }
     merged = merge_scoped(scoped)
+    # enterprise suprime TODO lo demás, incluido managed.
     assert set(merged) == {"e"}
 
 
-def test_enterprise_wins_over_managed_when_both_present():
+def test_empty_enterprise_scope_does_not_suppress():
+    # El único scope exclusivo, registrado pero VACÍO, no suprime a los demás.
     scoped = {
-        McpScope.MANAGED: {"s": {"url": "https://managed"}},
-        McpScope.ENTERPRISE: {"s": {"url": "https://enterprise"}},
-    }
-    merged = merge_scoped(scoped)
-    assert merged["s"].scope is McpScope.ENTERPRISE
-    assert merged["s"].raw["url"] == "https://enterprise"
-
-
-def test_empty_exclusive_scope_does_not_suppress():
-    # Un scope exclusivo registrado pero VACÍO no debe suprimir a los demás.
-    scoped = {
-        McpScope.MANAGED: {},
+        McpScope.ENTERPRISE: {},
+        McpScope.MANAGED: {"m": {"url": "https://m"}},
         McpScope.USER: {"u": {"url": "https://u"}},
     }
     merged = merge_scoped(scoped)
-    assert set(merged) == {"u"}
+    assert set(merged) == {"m", "u"}
 
 
 # ---------------------------------------------------------------------------
@@ -129,5 +140,7 @@ def test_managed_enterprise_claudeai_dynamic_not_mutable():
             assert_mutable(scope)
 
 
-def test_exclusive_scopes_are_managed_and_enterprise():
-    assert EXCLUSIVE_SCOPES == frozenset({McpScope.MANAGED, McpScope.ENTERPRISE})
+def test_exclusive_scopes_are_enterprise_only():
+    # Solo enterprise es exclusivo (lockdown corporativo). managed es read-only
+    # PERO coexistente (baseline plataforma), por eso NO está aquí.
+    assert EXCLUSIVE_SCOPES == frozenset({McpScope.ENTERPRISE})

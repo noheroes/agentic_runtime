@@ -9,8 +9,10 @@ Decisiones (contrastadas con `services/mcp/config.ts` y `types.ts`):
 - Precedencia por nombre: enterprise > local > project > user (`config.ts:1046-1057`);
   el merge escribe de menor a mayor, el mayor sobreescribe (`config.ts:1231-1238`).
   `dynamic`/`claudeai` quedan por debajo de `user` (no entran al lookup canónico).
-- Exclusividad: si un scope administrado (managed/enterprise) aporta servers, los
-  scopes no exclusivos se descartan (`config.ts:1084` para enterprise).
+- Exclusividad: SOLO `enterprise` es exclusivo — si aporta servers, los demás se
+  descartan (`config.ts:1082-1084`, lockdown corporativo por MDM). `managed` NO es
+  exclusivo: es el baseline de plataforma que convive con los servers del usuario,
+  espejo de la capa plugins del canónico (`config.ts:1098+`, "keeps plugin servers").
 - Gate de mutabilidad: el usuario solo puede mutar user/project/local; managed,
   enterprise, claudeai y dynamic son de solo lectura (`config.ts:705-709`).
 """
@@ -43,8 +45,10 @@ _PRECEDENCE: dict[McpScope, int] = {
     McpScope.ENTERPRISE: 6,
 }
 
-# Scopes administrados: si alguno aporta servers, suprime a los no exclusivos.
-EXCLUSIVE_SCOPES = frozenset({McpScope.MANAGED, McpScope.ENTERPRISE})
+# Scope exclusivo: si aporta servers, suprime a TODOS los demás (lockdown corporativo).
+# Solo `enterprise`. `managed` es read-only por el gate pero NO excluyente: coexiste con
+# user como baseline de plataforma (espejo de los plugins del canónico).
+EXCLUSIVE_SCOPES = frozenset({McpScope.ENTERPRISE})
 
 # Scopes que el usuario puede mutar (add/toggle/remove). El resto es solo lectura.
 MUTABLE_SCOPES = frozenset({McpScope.USER, McpScope.PROJECT, McpScope.LOCAL})
