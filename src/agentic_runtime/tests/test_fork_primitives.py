@@ -120,6 +120,53 @@ def test_fork_policy_isolates_tool_pool():
 
 
 # ---------------------------------------------------------------------------
+# ForkPolicy — capabilities inheritance (homologación canónico: el subagente
+# hereda el MCP del padre por el contexto — runAgent.ts:648-656 threadea
+# options.mcpClients del padre al hijo; no se re-resuelve por identidad).
+# ---------------------------------------------------------------------------
+
+def test_fork_policy_inherits_capabilities():
+    """Child app_state.capabilities carries the parent bag when inherit_capabilities=True."""
+    sentinel = object()
+    snap = ForkSnapshot(session_id="s1", capabilities={"mcp": sentinel})
+    policy = ForkPolicy(inherit_capabilities=True)
+    child = RuntimeContextForker().fork(
+        ForkContext(prompt="go", policy=policy, parent_snapshot=snap)
+    )
+    assert child.app_state.capabilities.get("mcp") is sentinel
+
+
+def test_fork_policy_isolates_capabilities():
+    """Child gets an empty capabilities bag when inherit_capabilities=False."""
+    snap = ForkSnapshot(session_id="s1", capabilities={"mcp": object()})
+    policy = ForkPolicy(inherit_capabilities=False)
+    child = RuntimeContextForker().fork(
+        ForkContext(prompt="go", policy=policy, parent_snapshot=snap)
+    )
+    assert child.app_state.capabilities == {}
+
+
+def test_fork_capabilities_default_inherits():
+    """Default ForkPolicy inherits capabilities (canónico: subagente ve el MCP del padre)."""
+    sentinel = object()
+    snap = ForkSnapshot(session_id="s1", capabilities={"mcp": sentinel})
+    child = RuntimeContextForker().fork(
+        ForkContext(prompt="go", policy=ForkPolicy(), parent_snapshot=snap)
+    )
+    assert child.app_state.capabilities.get("mcp") is sentinel
+
+
+def test_fork_capabilities_child_container_independent():
+    """Child mutating its bag does not alter the snapshot (independent container)."""
+    snap = ForkSnapshot(session_id="s1", capabilities={"mcp": object()})
+    child = RuntimeContextForker().fork(
+        ForkContext(prompt="go", policy=ForkPolicy(), parent_snapshot=snap)
+    )
+    child.app_state.capabilities["skills"] = object()
+    assert "skills" not in snap.capabilities
+
+
+# ---------------------------------------------------------------------------
 # RuntimeContextForker — agent_id uniqueness
 # ---------------------------------------------------------------------------
 

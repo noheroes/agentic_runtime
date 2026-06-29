@@ -113,6 +113,28 @@ async def test_agent_tool_snapshot_carries_parent_user_id():
     assert captured["fork_ctx"].parent_snapshot.user_id == "u-parent"
 
 
+@pytest.mark.asyncio
+async def test_agent_tool_snapshot_carries_parent_capabilities():
+    """El snapshot captura app_state.capabilities del padre, para que el subagente
+    herede el provider per-tenant del integrador (homologación canónico)."""
+    from agentic_runtime.tools.native.agent import AgentTool
+
+    captured: dict = {}
+
+    class _CapturingRunner:
+        async def run(self, fork_ctx, *, background):
+            captured["fork_ctx"] = fork_ctx
+            return "task-xyz"
+
+    set_runner(_CapturingRunner())
+    sentinel = object()
+    ctx = ToolUseContext(session_id="s1", user_id="u-parent")
+    ctx.app_state.capabilities["mcp"] = sentinel
+    await AgentTool().execute({"prompt": "go", "description": "d"}, ctx)
+
+    assert captured["fork_ctx"].parent_snapshot.capabilities.get("mcp") is sentinel
+
+
 # --- 5. Tier 2: memoria scopeada por usuario -------------------------------
 
 def test_memory_scope_separates_users(tmp_path):

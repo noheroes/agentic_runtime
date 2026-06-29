@@ -78,6 +78,7 @@ class AgentTool:
             messages=tuple(ctx.messages) if inherit_messages else (),
             permissions=ctx.permission_context,
             tool_pool=ctx.tool_pool,
+            capabilities=ctx.app_state.capabilities,
         )
 
         policy = ForkPolicy(
