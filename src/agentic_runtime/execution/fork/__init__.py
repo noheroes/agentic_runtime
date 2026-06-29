@@ -24,6 +24,7 @@ class ForkPolicy(BaseModel):
     inherit_messages: bool = False
     inherit_permissions: bool = True
     inherit_tool_pool: bool = True
+    inherit_capabilities: bool = True
     propagate_abort: bool = True
 
 
@@ -38,6 +39,11 @@ class ForkSnapshot(BaseModel):
     messages: tuple[Any, ...] = ()
     permissions: PermissionContext = Field(default_factory=PermissionContext)
     tool_pool: ToolPool = Field(default_factory=ToolPool)
+    # Bolsa de extensión per-request del integrador (AppState.capabilities). El hijo la
+    # hereda por el contexto, igual que el canónico threadea options.mcpClients del padre
+    # al subagente (runAgent.ts:648-656). Sin esto el delegador MCP per-tenant del
+    # integrador no vería al provider del padre en subagentes.
+    capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
 class ForkContext(BaseModel):
@@ -67,6 +73,9 @@ class RuntimeContextForker:
         messages: list[Any] = list(snap.messages) if policy.inherit_messages else []
         permissions = snap.permissions if policy.inherit_permissions else PermissionContext()
         tool_pool = snap.tool_pool if policy.inherit_tool_pool else ToolPool()
+        # Contenedor independiente, valores compartidos (mismo provider vivo): espejo del
+        # patrón de messages (tupla→list). El hijo puede añadir/quitar claves sin tocar al padre.
+        capabilities = dict(snap.capabilities) if policy.inherit_capabilities else {}
 
         if policy.propagate_abort:
             stop = parent_stop
@@ -79,7 +88,7 @@ class RuntimeContextForker:
             agent_id=agent_id,
             messages=messages,
             tool_pool=tool_pool,
-            app_state=AppState(permissions=permissions),
+            app_state=AppState(permissions=permissions, capabilities=capabilities),
             stop=stop,
         )
 
