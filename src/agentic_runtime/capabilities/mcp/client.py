@@ -118,10 +118,14 @@ class McpClient:
                 else:  # http (Streamable HTTP) — API nueva: recibe un httpx.AsyncClient
                     from mcp.client.streamable_http import streamable_http_client
 
+                    # El timeout DEBE venir del config (espejo del default operativo del
+                    # provider, 30s): sin pasarlo, httpx aplica su default de 5s y toda tool
+                    # que tarde más da ReadTimeout. La rama SSE ya lo respeta vía el factory.
                     http_client = await stack.enter_async_context(
                         httpx.AsyncClient(
                             headers=headers, auth=httpx_auth,
                             verify=self._config.ssl_verify, follow_redirects=True,
+                            timeout=self._config.timeout_seconds or 30.0,
                         )
                     )
                     streams = await stack.enter_async_context(

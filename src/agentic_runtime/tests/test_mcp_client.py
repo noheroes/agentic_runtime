@@ -4,6 +4,11 @@ Foco: connect/discover/call/aclose, estado de conexión (pending/failed/connecte
 aislamiento por ítem (un server caído no tumba al resto) y mapeo de isError.
 El transporte se inyecta vía `client_factory` (cliente fake) — sin server real.
 """
+import httpx
+import mcp
+import mcp.client.streamable_http as _shttp
+import pytest
+
 from agentic_runtime.capabilities.mcp import (
     McpProvider,
     McpServerConfig,
@@ -11,6 +16,7 @@ from agentic_runtime.capabilities.mcp import (
     ServerStatus,
     build_mcp_tool,
 )
+from agentic_runtime.capabilities.mcp.client import McpClient
 from agentic_runtime.context.tool_use import ToolUseContext
 
 
@@ -144,6 +150,70 @@ async def test_tool_is_error_maps_to_error_result_single_call():
 # ---------------------------------------------------------------------------
 # shutdown: cierra todos los clients
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# connect (streamable HTTP): el httpx.AsyncClient recibe el timeout configurado
+# y NO el default de httpx (5s), que mata tools que tardan más (regresión real:
+# create_drawio_diagram ~7s daba ReadTimeout en la 2ª llamada del turno).
+# ---------------------------------------------------------------------------
+
+
+def _patch_streamable_transport(monkeypatch) -> dict:
+    """Stub del transporte streamable-HTTP que captura el timeout del httpx.AsyncClient,
+    evitando server real. Devuelve el dict donde se registra lo capturado."""
+    captured: dict = {}
+
+    class _CapturingClient:
+        def __init__(self, **kwargs) -> None:
+            captured["timeout"] = kwargs.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeStreams:
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeSession:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def initialize(self):
+            return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", _CapturingClient)
+    monkeypatch.setattr(_shttp, "streamable_http_client", lambda *a, **k: _FakeStreams())
+    monkeypatch.setattr(mcp, "ClientSession", _FakeSession)
+    return captured
+
+
+async def test_streamable_http_uses_configured_timeout(monkeypatch):
+    captured = _patch_streamable_transport(monkeypatch)
+    cfg = McpServerConfig(name="s", url="http://x/mcp", type="http", timeout_seconds=42.0)
+    await McpClient(cfg).connect()
+    assert captured["timeout"] == 42.0
+
+
+async def test_streamable_http_defaults_timeout_above_httpx_5s(monkeypatch):
+    captured = _patch_streamable_transport(monkeypatch)
+    cfg = McpServerConfig(name="s", url="http://x/mcp", type="http")  # timeout_seconds=None
+    await McpClient(cfg).connect()
+    # sin config explícita, debe usar el default operativo del provider (30s), nunca
+    # quedarse con el default de httpx (5s) que regresa el bug.
+    assert captured["timeout"] == 30.0
+
 
 async def test_shutdown_closes_all_clients():
     clients: list[_FakeClient] = []
