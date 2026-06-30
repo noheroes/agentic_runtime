@@ -17,6 +17,9 @@ from .status import TaskStatus
 class TaskRecord:
     task_id: str
     description: str
+    # Lista a la que pertenece la tarea (espejo de `getTaskListId()` → `getSessionId()`).
+    # Cada sesión sólo ve su propia lista; `None` = legacy/sin escopar.
+    owner_session_id: str | None = None
     status: TaskStatus = TaskStatus.PENDING
     # Eje "background" (= isBackgrounded del canónico): MUTABLE, relativo al observador.
     # Lo flipea el consumidor vía el registry. NO afecta el toolset (eso es por kind, B3).
@@ -34,11 +37,12 @@ class TaskRecord:
 
 @runtime_checkable
 class TaskRegistryProtocol(Protocol):
-    def register(self, *, description: str) -> TaskRecord: ...
+    def register(self, *, description: str, session_id: str | None = None) -> TaskRecord: ...
     def start(self, task_id: str, *, asyncio_task: asyncio.Task | None) -> None: ...
     def arm_watchdog(self, task_id: str, timeout_seconds: float) -> None: ...
     def get(self, task_id: str) -> TaskRecord | None: ...
     def list_all(self) -> list[TaskRecord]: ...
+    def list_for(self, session_id: str | None) -> list[TaskRecord]: ...
     def set_backgrounded(self, task_id: str, value: bool) -> None: ...
     def push_event(self, task_id: str, event: dict) -> None: ...
     def kill(self, task_id: str) -> bool: ...
@@ -66,10 +70,12 @@ class InMemoryTaskRegistry:
         self._tasks: dict[str, TaskRecord] = {}
         self._seq = 0
 
-    def register(self, *, description: str) -> TaskRecord:
+    def register(self, *, description: str, session_id: str | None = None) -> TaskRecord:
         self._seq += 1
         task_id = f"task_{self._seq}_{description[:16]}".replace(" ", "_")
-        record = TaskRecord(task_id=task_id, description=description)
+        record = TaskRecord(
+            task_id=task_id, description=description, owner_session_id=session_id
+        )
         self._tasks[task_id] = record
         return record
 
@@ -89,6 +95,14 @@ class InMemoryTaskRegistry:
 
     def list_all(self) -> list[TaskRecord]:
         return list(self._tasks.values())
+
+    def list_for(self, session_id: str | None) -> list[TaskRecord]:
+        """Tareas de UNA lista (espejo del tasks-dir per-sesión del canónico).
+
+        Sólo devuelve las tareas cuyo `owner_session_id` coincide con `session_id`.
+        Una sesión no ve las tareas de otra. `session_id=None` (sin sesión activa)
+        devuelve sólo las tareas legacy sin owner."""
+        return [r for r in self._tasks.values() if r.owner_session_id == session_id]
 
     def set_backgrounded(self, task_id: str, value: bool) -> None:
         rec = self._tasks.get(task_id)

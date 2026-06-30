@@ -11,6 +11,12 @@ ENTER_PLAN_MODE_TOOL_NAME = "EnterPlanMode"
 EXIT_PLAN_MODE_TOOL_NAME = "ExitPlanMode"
 
 _PLAN_MODE_KEY = "plan_mode"
+# Plan aprobado persistido en `app_state.native` (espejo de `getPlan()` keyed por sesión;
+# `app_state` es per-sesión). Lo consume `PlanModeProvider` en ejecución.
+_PLAN_KEY = "plan"
+# One-shot: marca que se acaba de salir de plan mode → el provider emite el recordatorio
+# `plan_mode_exit` una vez (espejo de `needsPlanModeExitAttachment`).
+_PLAN_EXIT_PENDING_KEY = "plan_mode_exit_pending"
 
 
 class EnterPlanModeTool:
@@ -75,6 +81,10 @@ class ExitPlanModeTool:
 
         def modifier(c: "ToolUseContext") -> "ToolUseContext":
             c.app_state.native.pop(_PLAN_MODE_KEY, None)
+            # Persiste el plan aprobado (espejo de `getPlan()`) para que sea orientación
+            # durable en ejecución, no un `tool_result` transitorio que el modelo pierde.
+            c.app_state.native[_PLAN_KEY] = plan
+            c.app_state.native[_PLAN_EXIT_PENDING_KEY] = True
             return c
 
         result = ToolResult(
