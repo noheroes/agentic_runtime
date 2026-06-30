@@ -108,6 +108,11 @@ class RuntimeConfig:
     # el canónico hace DENTRO del loop; el consumidor (paquete separado) no puede alcanzar
     # el loop, así que lo inyecta aquí. Devuelve `[]` para sesiones desconocidas.
     root_turn_start_hooks: Any = None
+    # Resolver de definiciones de subagente que provee el host: `AgentDefinitionResolver`
+    # (`resolve(subagent_type) -> AgentDefinition | None`). Espejo de
+    # `options.agentDefinitions` del canónico — el runtime es genérico y NO posee el
+    # catálogo de agentes. None = sin agentes especializados (fork genérico).
+    agent_resolver: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +227,7 @@ class RuntimeFactory:
             initial_allowed_tools=config.initial_allowed_tools,
             root_context_modifier=config.root_context_modifier,
             root_turn_start_hooks=config.root_turn_start_hooks,
+            agent_resolver=config.agent_resolver,
             stt=stt,
             tts=tts,
         )

@@ -23,6 +23,7 @@ from ...events.protocol import Event, EventHandler
 from ...hooks import HookEvent, HookRunner
 from ...loop.agent_loop import AgentLoop
 from ...storage.protocol import StorageKeys, StorageProtocol
+from ..agents import resolve_subagent_model
 from ..fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContextForker
 from ..session import Session
 from ..tasks.registry import InMemoryTaskRegistry, TaskRegistryProtocol
@@ -72,6 +73,7 @@ class LocalAgentRuntime:
         root_turn_start_hooks: Any = None,
         stt: Any = None,
         tts: Any = None,
+        agent_resolver: Any = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._model_caller = model_caller
@@ -92,6 +94,10 @@ class LocalAgentRuntime:
         self._root_context_modifier = root_context_modifier
         # Seam per-request de hooks de inicio de run de la raíz (ver RuntimeConfig).
         self._root_turn_start_hooks = root_turn_start_hooks
+        # Resolver de definiciones de subagente (subagent_type → AgentDefinition) que
+        # provee el host (espejo de options.agentDefinitions). None = sin agentes
+        # especializados: el subagente corre como fork genérico heredando al padre.
+        self._agent_resolver = agent_resolver
         # Primitivas de voz ya resueltas por el factory (None = canal inactivo).
         self._stt = stt
         self._tts = tts
@@ -315,6 +321,24 @@ class LocalAgentRuntime:
         # Salida por voz: el TTS se suscribe al stream antes de arrancar el loop.
         self._wire_tts(bus, ctx)
 
+        # Subagente especializado (homologación subagent_type): resuelve la definición
+        # por su tipo (host-provided) y deriva modelo/system_prompt/tools de ELLA. El
+        # nombre del agente es la LLAVE de la definición, nunca el model_id. Sin resolver
+        # o sin tipo, el fork es genérico y hereda al padre.
+        agent_def = None
+        if task.subagent_type and self._agent_resolver is not None:
+            agent_def = self._agent_resolver.resolve(task.subagent_type)
+        if agent_def is not None:
+            model_id = resolve_subagent_model(
+                agent_def.model, self._model_id, task.model_override
+            )
+            system_prompt_override = agent_def.system_prompt
+            agent_allowed_tools = tuple(agent_def.allowed_tools)
+        else:
+            model_id = task.model_override or self._model_id
+            system_prompt_override = ""
+            agent_allowed_tools = ()
+
         loop = AgentLoop(
             model_caller=self._model_caller,
             tool_registry=self._tool_registry,
@@ -323,7 +347,9 @@ class LocalAgentRuntime:
             tool_dispatcher=self._tool_dispatcher,
             event_bus=bus,
             hook_runner=self._hook_runner,
-            model_id=task.model_override or self._model_id,
+            model_id=model_id,
+            system_prompt_override=system_prompt_override,
+            agent_allowed_tools=agent_allowed_tools,
         )
 
         # Hooks de inicio de run per-request del consumidor — SOLO en la raíz (los
