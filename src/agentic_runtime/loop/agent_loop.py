@@ -60,6 +60,8 @@ class AgentLoop:
         event_bus: Optional[EventBus] = None,
         hook_runner: Optional[Any] = None,
         model_id: str = "",
+        system_prompt_override: str = "",
+        agent_allowed_tools: tuple[str, ...] = (),
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -69,6 +71,12 @@ class AgentLoop:
         self._event_bus = event_bus
         self._hook_runner = hook_runner
         self._model_id = model_id
+        # Subagente especializado (homologación subagent_type): system prompt propio que
+        # REEMPLAZA el base del padre (espejo getAgentSystemPrompt → [agentPrompt]); `""`
+        # = heredar el base. `agent_allowed_tools` restringe el pool a ese subconjunto
+        # (espejo resolveAgentTools); `()` o `("*",)` = todas.
+        self._system_prompt_override = system_prompt_override
+        self._agent_allowed_tools = agent_allowed_tools
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
 
     def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
@@ -80,8 +88,23 @@ class AgentLoop:
             mode = "background" if ctx.is_subagent else "foreground"
             native = self._tool_registry.list_available(mode=mode)
         if self._capability_manager is not None:
-            return self._capability_manager.build_tool_pool(native, ctx)
-        return ToolPool(native_tools=native)
+            pool = self._capability_manager.build_tool_pool(native, ctx)
+        else:
+            pool = ToolPool(native_tools=native)
+        return self._restrict_to_agent_tools(pool)
+
+    def _restrict_to_agent_tools(self, pool: ToolPool) -> ToolPool:
+        """Restringe el pool al subconjunto de un subagente especializado (espejo de
+        `resolveAgentTools`). `()` o `("*",)` → sin restricción. El filtro aplica tanto al
+        anuncio como a la ejecución, porque el dispatcher resuelve del mismo pool."""
+        allowed = self._agent_allowed_tools
+        if not allowed or "*" in allowed:
+            return pool
+        names = set(allowed)
+        return ToolPool(
+            native_tools=[t for t in pool.native_tools if t.name in names],
+            capability_tools=[t for t in pool.capability_tools if t.name in names],
+        )
 
     def _inject_recall(self, ctx: ToolUseContext) -> None:
         """Inyecta el recall del manager como `<system-reminder>` (role:"user").
@@ -207,6 +230,11 @@ class AgentLoop:
             complete_kwargs: dict[str, Any] = {"stop": ctx.stop, "model_id": self._model_id}
             if system_sections:
                 complete_kwargs["system_sections"] = system_sections
+            # Subagente especializado: su system prompt REEMPLAZA el base del caller
+            # (espejo getAgentSystemPrompt). Solo se pasa si la def trae cuerpo; `""`
+            # = heredar el base. Se pasa condicional por la misma robustez que system_sections.
+            if self._system_prompt_override:
+                complete_kwargs["system_override"] = self._system_prompt_override
             stream = await self._model_caller.complete(
                 ctx.messages,
                 tool_schemas,

@@ -39,6 +39,10 @@ class AgentTool:
                 ),
                 "default": False,
             },
+            "subagent_type": {
+                "type": "string",
+                "description": "The type of specialized agent to use for this task.",
+            },
             "model_override": {
                 "type": "string",
                 "description": "Optional model ID to use for the subagent.",
@@ -59,6 +63,7 @@ class AgentTool:
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         prompt = input.get("prompt", "")
         run_in_background: bool = bool(input.get("run_in_background", False))
+        subagent_type: str | None = input.get("subagent_type")
         model_override: str | None = input.get("model_override")
         inherit_messages: bool = bool(input.get("inherit_messages", False))
 
@@ -92,6 +97,7 @@ class AgentTool:
             prompt=prompt,
             policy=policy,
             parent_snapshot=snapshot,
+            subagent_type=subagent_type,
             model_override=model_override,
         )
 
