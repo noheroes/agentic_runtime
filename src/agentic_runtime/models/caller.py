@@ -135,9 +135,11 @@ class AgenticModelsCaller:
         stop: Optional[asyncio.Event] = None,
         model_id: str = "",
         system_sections: Optional[list[str]] = None,
+        system_override: Optional[str] = None,
     ) -> AsyncGenerator[Any, None]:
         return self._stream(
-            messages, tools, stop=stop, model_id=model_id, system_sections=system_sections
+            messages, tools, stop=stop, model_id=model_id,
+            system_sections=system_sections, system_override=system_override,
         )
 
     async def _stream(
@@ -148,12 +150,17 @@ class AgenticModelsCaller:
         stop: Optional[asyncio.Event] = None,
         model_id: str = "",
         system_sections: Optional[list[str]] = None,
+        system_override: Optional[str] = None,
     ) -> AsyncGenerator[Any, None]:
         from agentic_models import stream
         from agentic_models.model_types import StreamOptions
 
+        # Subagente especializado (homologación subagent_type): su system prompt REEMPLAZA
+        # el base del integrador (espejo getAgentSystemPrompt → [agentPrompt]); las secciones
+        # del runtime se concatenan igual. `None`/`""` → base intacto del constructor.
+        base = system_override if system_override else self._system_prompt
         context = _dict_messages_to_context(
-            messages, tools, _compose_system_prompt(self._system_prompt, system_sections)
+            messages, tools, _compose_system_prompt(base, system_sections)
         )
 
         opts = self._options
