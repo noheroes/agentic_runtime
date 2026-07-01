@@ -136,9 +136,12 @@ class RuntimeFactory:
         """
         from .capabilities.manager import CapabilityManager
         from .capabilities.mcp import McpProvider
+        from .capabilities.plan import PlanModeProvider
         from .capabilities.skills import SkillsProvider
 
-        providers: list[Any] = []
+        # Capability nativa siempre presente: rinde el plan aprobado como orientación
+        # durable en ejecución (one-shot de salida de plan mode, espejo del canónico).
+        providers: list[Any] = [PlanModeProvider()]
 
         if caps.mcp_servers or caps.mcp_config_store is not None:
             mcp = McpProvider(

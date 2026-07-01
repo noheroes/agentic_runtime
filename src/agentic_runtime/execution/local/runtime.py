@@ -134,7 +134,9 @@ class LocalAgentRuntime:
         *,
         on_event: EventHandler | None = None,
     ) -> str:
-        reg_task = self._task_registry.register(description=task.description)
+        reg_task = self._task_registry.register(
+            description=task.description, session_id=task.session_id
+        )
         task_id = reg_task.task_id
         asyncio_task = asyncio.ensure_future(
             self._run_loop(task_id, task, parent_snapshot, on_event=on_event)

@@ -14,6 +14,24 @@ if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
 
 
+def _session_of(ctx: "ToolUseContext | None") -> str | None:
+    """Lista activa = sesión del contexto (espejo de `getTaskListId()`)."""
+    return getattr(ctx, "session_id", None)
+
+
+def _scoped_get(task_id: str, ctx: "ToolUseContext | None"):
+    """Resuelve un task SÓLO si pertenece a la lista de la sesión activa.
+
+    Un `task_id` de otra sesión es invisible (espejo: no está en el tasks-dir
+    de esta sesión) → se trata como inexistente."""
+    from ...execution.tasks.registry import get_registry
+
+    record = get_registry().get(task_id)
+    if record is None or record.owner_session_id != _session_of(ctx):
+        return None
+    return record
+
+
 class TaskCreateTool:
     name = "TaskCreate"
     description = "Create a task in the task registry to track background or async work."
@@ -33,7 +51,9 @@ class TaskCreateTool:
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         subject = input.get("subject", "")
         description = input.get("description", "")
-        record = get_registry().register(description=f"{subject}: {description}")
+        record = get_registry().register(
+            description=f"{subject}: {description}", session_id=_session_of(ctx)
+        )
         return ToolResult(
             tool_name=self.name,
             output=json.dumps({"task_id": record.task_id, "subject": subject}),
@@ -57,7 +77,7 @@ class TaskGetTool:
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
-        record = get_registry().get(task_id)
+        record = _scoped_get(task_id, ctx)
         if record is None:
             return ToolResult.error(self.name, f"No task found with id: {task_id}")
         return ToolResult(
@@ -91,9 +111,9 @@ class TaskListTool:
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         status_filter = input.get("status")
         registry = get_registry()
-        # `list_all` es parte del contrato `TaskRegistryProtocol`: toda implementación
-        # conforme lo expone (espejo de `listTasks()` del canónico).
-        records = registry.list_all()
+        # Escopado a la lista de la sesión activa (espejo de `getTaskListId()` →
+        # `getSessionId()`): una sesión sólo ve sus propias tareas, sin bleed.
+        records = registry.list_for(_session_of(ctx))
 
         if status_filter:
             records = [r for r in records if r.status == status_filter]
@@ -129,7 +149,7 @@ class TaskUpdateTool:
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
-        record = get_registry().get(task_id)
+        record = _scoped_get(task_id, ctx)
         if record is None:
             return ToolResult.error(self.name, f"No task found with id: {task_id}")
 
@@ -160,6 +180,10 @@ class TaskStopTool:
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
+        if _scoped_get(task_id, ctx) is None:
+            return ToolResult.error(
+                self.name, f"Task {task_id} not found or already terminal."
+            )
         killed = get_registry().kill(task_id)
         if not killed:
             return ToolResult.error(
@@ -188,7 +212,7 @@ class TaskOutputTool:
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
-        record = get_registry().get(task_id)
+        record = _scoped_get(task_id, ctx)
         if record is None:
             return ToolResult.error(self.name, f"No task found with id: {task_id}")
         if record.result is None:

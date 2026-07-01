@@ -29,12 +29,14 @@ def test_inmemory_registry_satisfies_protocol_and_lists_all():
     assert ids == {a.task_id, b.task_id}
 
 
-async def test_task_list_tool_returns_registered_tasks():
+async def test_task_list_tool_returns_session_scoped_tasks():
+    from agentic_runtime.context.tool_use import ToolUseContext
+
     reg = InMemoryTaskRegistry()
     set_registry(reg)
-    rec = reg.register(description="probe-subject: una tarea")
+    rec = reg.register(description="probe-subject: una tarea", session_id="s1")
 
-    result = await TaskListTool().execute({}, ctx=None)  # execute no usa ctx
+    result = await TaskListTool().execute({}, ctx=ToolUseContext(session_id="s1"))
     assert not result.is_error
     listed = json.loads(result.output)
     assert any(t["task_id"] == rec.task_id for t in listed), listed
