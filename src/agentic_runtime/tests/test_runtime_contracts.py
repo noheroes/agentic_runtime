@@ -113,7 +113,6 @@ def test_session_adapter_builds_tool_use_context_without_provider_state():
 
     class _Session:
         session_id = "s1"
-        execution_id = "e1"
         turn_count = 3
         metadata = _Metadata()
 
@@ -126,7 +125,6 @@ def test_session_adapter_builds_tool_use_context_without_provider_state():
     )
 
     assert context.session_id == "s1"
-    assert context.execution_id == "e1"
     assert context.turn_count == 3
     assert context.messages == [{"role": "user", "content": "hello"}]
     assert context.permission_context.always_allow_session == ["read_file"]

@@ -296,7 +296,7 @@ class LocalAgentRuntime:
             parent_user_id=parent_user_id or "", parent_session_id=parent_session_id,
             task_id=task_id, status=status,
             description=task.description, notification_text=text,
-            final_text=final_text, parent_execution_id=task.parent_execution_id,
+            final_text=final_text,
         ))
 
     async def _run_loop(

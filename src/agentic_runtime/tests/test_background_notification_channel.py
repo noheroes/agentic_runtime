@@ -49,7 +49,6 @@ def _notif(**kw) -> BackgroundNotification:
         description="task",
         notification_text="done",
         final_text="",
-        parent_execution_id="",
     )
     defaults.update(kw)
     return BackgroundNotification(**defaults)

@@ -22,7 +22,6 @@ class RuntimeTask:
     max_turns: int | None = None
     timeout_seconds: float | None = None
     fork_context: bool = False
-    parent_execution_id: str = ""
     # Identidad de ciclo de vida que inyecta el consumidor (p.ej. el BFF). Ambos son
     # opcionales: si no se pasan, el runtime los autogenera (`user_<hex>` / `sess_<hex>`)
     # de forma simétrica, de modo que el runtime sea ejecutable por sí solo.

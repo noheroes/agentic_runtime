@@ -13,27 +13,27 @@ class ModeManager:
         # Extension primitive: callbacks que se llaman ante cada transición
         self._listeners: list[Callable[[str, AgentMode, AgentMode], None]] = []
 
-    def register(self, *, execution_id: str, mode: AgentMode) -> None:
-        self._modes[execution_id] = mode
+    def register(self, *, task_id: str, mode: AgentMode) -> None:
+        self._modes[task_id] = mode
 
-    def unregister(self, execution_id: str) -> None:
-        self._modes.pop(execution_id, None)
+    def unregister(self, task_id: str) -> None:
+        self._modes.pop(task_id, None)
 
-    def get_mode(self, execution_id: str) -> Optional[AgentMode]:
-        return self._modes.get(execution_id)
+    def get_mode(self, task_id: str) -> Optional[AgentMode]:
+        return self._modes.get(task_id)
 
-    def set_mode(self, execution_id: str, mode: AgentMode) -> None:
-        current = self._modes.get(execution_id)
+    def set_mode(self, task_id: str, mode: AgentMode) -> None:
+        current = self._modes.get(task_id)
         if current == AgentMode.FORK:
-            raise ValueError(f"execution_id '{execution_id}' es FORK — el modo es inmutable")
+            raise ValueError(f"task_id '{task_id}' es FORK — el modo es inmutable")
         if current is not None:
             for cb in self._listeners:
-                cb(execution_id, current, mode)
-        self._modes[execution_id] = mode
+                cb(task_id, current, mode)
+        self._modes[task_id] = mode
 
-    def on_complete(self, execution_id: str) -> bool:
+    def on_complete(self, task_id: str) -> bool:
         """True si la ejecución debe emitir notificación al completar."""
-        return self._modes.get(execution_id) == AgentMode.BACKGROUND
+        return self._modes.get(task_id) == AgentMode.BACKGROUND
 
     # ------------------------------------------------------------------
     # Extension primitive
