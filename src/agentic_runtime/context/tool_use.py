@@ -33,7 +33,6 @@ class ToolUseContext(BaseModel):
     agent_id: str | None = None
     is_subagent: bool = False  # kind: subagente unattended → toolset filtrado a safe_for_background
     subagent_depth: int = 0  # profundidad de anidamiento; la tool Agent la usa como tope
-    execution_id: str = ""
     turn_count: int = 0
     messages: list[Any] = Field(default_factory=list)
     tool_pool: Any = Field(default_factory=_default_pool)

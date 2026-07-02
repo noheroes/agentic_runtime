@@ -37,7 +37,6 @@ def tool_use_context_from_session(
 
     return ToolUseContext(
         session_id=getattr(session, "session_id", ""),
-        execution_id=getattr(session, "execution_id", ""),
         turn_count=getattr(session, "turn_count", 0),
         messages=messages,
         tool_pool=tool_pool or ToolPool(),

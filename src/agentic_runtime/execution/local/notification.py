@@ -31,7 +31,6 @@ class BackgroundNotification:
     notification_text: str
     parent_user_id: str = ""
     final_text: str = ""
-    parent_execution_id: str = ""
 
 
 def put_notification(notification: BackgroundNotification) -> None:
