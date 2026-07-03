@@ -13,45 +13,72 @@ ASK_USER_QUESTION_TOOL_NAME = "AskUserQuestion"
 _OPTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "label": {"type": "string"},
-        "description": {"type": "string"},
+        "label": {
+            "type": "string",
+            "description": "The display text for this option (concise, 1-5 words).",
+        },
+        "description": {
+            "type": "string",
+            "description": "What this option means or what happens if chosen (trade-offs/implications).",
+        },
     },
     "required": ["label"],
+}
+
+_QUESTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": "The complete question to ask the user. Clear, specific, ends with '?'.",
+        },
+        "header": {
+            "type": "string",
+            "description": "Very short label (max 12 chars) displayed as a chip. E.g. 'Objective'.",
+        },
+        "options": {
+            "type": "array",
+            "items": _OPTION_SCHEMA,
+            "minItems": 2,
+            "maxItems": 4,
+            "description": (
+                "2-4 distinct, mutually exclusive options (unless multiSelect). Do NOT add an 'Other' "
+                "option: free-form input is always offered to the user automatically."
+            ),
+        },
+        "multiSelect": {
+            "type": "boolean",
+            "description": "Allow selecting multiple options. Use when choices are not mutually exclusive.",
+        },
+    },
+    "required": ["question", "header", "options"],
 }
 
 
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
     description = (
-        "Ask the user a multiple-choice question and wait for their response. Use this tool to: "
-        "(1) gather user preferences or requirements; (2) clarify ambiguous instructions; "
-        "(3) get decisions on implementation choices as you work; (4) offer the user choices about "
-        "what direction to take. Prefer this over asking in free-form prose whenever the decision is a "
-        "choice among a small set of concrete options: it presents them as structured, selectable "
-        "choices. Provide 2-4 mutually exclusive options; the user can always give a free-form answer "
-        "instead. If you recommend one option, list it first and append \"(Recommended)\" to its label. "
-        "Ask one focused question per call (call the tool again for a follow-up decision)."
+        "Ask the user one or more multiple-choice questions to gather information, clarify ambiguity, "
+        "understand preferences, or get decisions on direction. Presents a QUESTIONNAIRE of 1-4 "
+        "questions that the user answers together in one interaction, each with 2-4 options; the user "
+        "can always give a free-form answer ('Other') instead, so open-ended details (a number, a name) "
+        "are fine. Prefer this over asking in free-form prose whenever you need input to proceed. GROUP "
+        "related questions into a SINGLE call (up to 4) so the user can answer everything at once, "
+        "rather than asking one at a time. If you recommend an option, list it first and append "
+        "\"(Recommended)\" to its label."
     )
     input_schema = {
         "type": "object",
         "properties": {
-            "question": {
-                "type": "string",
-                "description": "The question to ask the user.",
-            },
-            "options": {
+            "questions": {
                 "type": "array",
-                "items": _OPTION_SCHEMA,
-                "minItems": 2,
+                "items": _QUESTION_SCHEMA,
+                "minItems": 1,
                 "maxItems": 4,
-                "description": "2–4 mutually exclusive options for the user to choose from.",
-            },
-            "header": {
-                "type": "string",
-                "description": "Short label (max 12 chars) displayed as a chip.",
+                "description": "The questions to ask the user (1-4). Group related ones into one call.",
             },
         },
-        "required": ["question", "options", "header"],
+        "required": ["questions"],
     }
     category = ToolCategory.SYSTEM
     requires_permission = False
@@ -59,30 +86,45 @@ class AskUserQuestionTool:
     timeout_seconds = 300.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
-        question = input.get("question", "")
-        options = input.get("options", [])
-        header = input.get("header", "")
+        questions = input.get("questions", []) or []
 
-        # Build the prompt shown to the user
-        lines = [f"[{header}] {question}", ""]
-        for i, opt in enumerate(options, 1):
-            label = opt.get("label", "")
-            desc = opt.get("description", "")
-            lines.append(f"  {i}. {label}" + (f" — {desc}" if desc else ""))
-        lines.append("")
-        lines.append("Enter the number of your choice:")
-        prompt_text = "\n".join(lines)
-
-        # Delegate to app_state user_input processor if available,
-        # otherwise fall back to stdin (headless/test contexts).
-        user_input_fn = ctx.app_state.native.get("user_input_fn")
-        if callable(user_input_fn):
-            answer = await user_input_fn(prompt_text, options)
+        # Canal dedicado del cuestionario (separado del HITL de permisos). El integrador lo inyecta;
+        # devuelve una respuesta por pregunta (texto elegido o libre 'Other'), en orden.
+        ask_user_fn = ctx.app_state.native.get("ask_user_fn")
+        if callable(ask_user_fn):
+            answers = await ask_user_fn(questions)
         else:
-            loop = asyncio.get_event_loop()
-            answer = await loop.run_in_executor(None, lambda: input_prompt(prompt_text))
+            # Fallback headless/test: una pregunta por vez vía stdin.
+            answers = []
+            for q in questions:
+                answers.append(
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, lambda p=_render_question(q): input_prompt(p)
+                    )
+                )
 
-        return ToolResult(tool_name=self.name, output=str(answer))
+        return ToolResult(tool_name=self.name, output=_format_answers(questions, answers))
+
+
+def _render_question(q: dict) -> str:
+    header = q.get("header", "")
+    lines = [f"[{header}] {q.get('question', '')}", ""]
+    for i, opt in enumerate(q.get("options", []) or [], 1):
+        label = opt.get("label", "")
+        desc = opt.get("description", "")
+        lines.append(f"  {i}. {label}" + (f" — {desc}" if desc else ""))
+    lines.append("")
+    lines.append("Enter your choice (or type a free-form answer):")
+    return "\n".join(lines)
+
+
+def _format_answers(questions: list[dict], answers: list[Any]) -> str:
+    """Resultado homologado al canónico: 'User has answered your questions: q -> a; ...'."""
+    pairs = []
+    for i, q in enumerate(questions):
+        a = answers[i] if i < len(answers) else ""
+        pairs.append(f"{q.get('question', '')} -> {a}")
+    return "User has answered your questions: " + "; ".join(pairs)
 
 
 def input_prompt(prompt: str) -> str:
