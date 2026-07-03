@@ -1,9 +1,10 @@
-"""Contrato de `AskUserQuestion` homologado al canónico: cuestionario de 1-4 preguntas.
+"""Contrato de `AskUserQuestion`: cuestionario canónico de 1-4 preguntas + HITL MULTI-TURNO.
 
-El schema es `questions: array[1..4]` (no una sola pregunta) y el `execute` delega en el canal
-DEDICADO `app_state.native["ask_user_fn"]` (separado del HITL de permisos), que devuelve una
-respuesta por pregunta (texto elegido o libre 'Other'). Fuente canónica:
-`claude-code/src/tools/AskUserQuestionTool/AskUserQuestionTool.tsx:62` (`questions.min(1).max(4)`).
+El schema es `questions: array[1..4]` (fuente canónica `AskUserQuestionTool.tsx:62`). El `execute`
+NO bloquea: emite las preguntas (el consumidor las detecta por el `tool_call` en el stream) y CIERRA
+el turno vía `ends_turn`; la respuesta llega en un turno nuevo y el consumidor reinyecta el resultado
+real. Esto homologa AskUserQuestion al HITL multi-turno propio del integrador (plan/tool approval),
+no al modelo bloqueante del CLI canónico.
 """
 from __future__ import annotations
 
@@ -24,37 +25,11 @@ def test_schema_es_cuestionario_1_a_4():
     assert item["options"]["minItems"] == 2 and item["options"]["maxItems"] == 4
 
 
-def test_execute_delega_en_ask_user_fn_y_formatea_respuestas():
-    recibido: dict = {}
-
-    async def fake_ask_user_fn(questions):
-        recibido["questions"] = questions
-        return ["10K", "52 min, 4 días"]  # una respuesta por pregunta (2ª es libre 'Other')
-
+def test_execute_cierra_el_turno_sin_bloquear():
     ctx = ToolUseContext(session_id="s1")
-    ctx.app_state.native["ask_user_fn"] = fake_ask_user_fn
-
-    questions = [
-        {"question": "¿Qué distancia?", "header": "Distancia",
-         "options": [{"label": "5K"}, {"label": "10K"}]},
-        {"question": "¿Tu marca y días/semana?", "header": "Datos",
-         "options": [{"label": "Principiante"}, {"label": "Avanzado"}]},
-    ]
-    result = asyncio.run(AskUserQuestionTool().execute({"questions": questions}, ctx))
-
-    # el canal dedicado recibió el cuestionario íntegro (N preguntas), no de a una
-    assert recibido["questions"] == questions
-    # el resultado enlaza cada pregunta con su respuesta (incluida la libre)
-    assert "¿Qué distancia? -> 10K" in result.output
-    assert "¿Tu marca y días/semana? -> 52 min, 4 días" in result.output
-
-
-def test_execute_una_sola_pregunta_sigue_funcionando():
-    async def fake(questions):
-        return ["Correr"]
-
-    ctx = ToolUseContext(session_id="s1")
-    ctx.app_state.native["ask_user_fn"] = fake
     q = [{"question": "¿Tipo?", "header": "Tipo", "options": [{"label": "Correr"}, {"label": "Fuerza"}]}]
     result = asyncio.run(AskUserQuestionTool().execute({"questions": q}, ctx))
-    assert "¿Tipo? -> Correr" in result.output
+    # Señala corte de turno (HITL multi-turno); el resultado real lo reinyecta el consumidor.
+    assert getattr(result, "ends_turn", False) is True
+    assert "Awaiting" in result.output
+    assert not result.is_error

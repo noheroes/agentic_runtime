@@ -210,6 +210,51 @@ async def test_loop_emits_events_to_bus():
 
 
 # ---------------------------------------------------------------------------
+# Corte de turno por tool (HITL multi-turno)
+# ---------------------------------------------------------------------------
+
+class _SuspendTool:
+    name = "suspend"
+    description = "Ends the turn (HITL)"
+    input_schema: dict = {"type": "object", "properties": {}}
+    category = ToolCategory.SYSTEM
+    requires_permission = False
+    safe_for_background = False
+    timeout_seconds = 5.0
+
+    async def execute(self, input: dict, ctx) -> ToolResult:
+        r = ToolResult(tool_name=self.name, output="awaiting")
+        r.ends_turn = True  # type: ignore[attr-defined]
+        return r
+
+
+@pytest.mark.asyncio
+async def test_tool_ends_turn_no_reinvoca_al_modelo():
+    """Una tool con `ends_turn=True` corta el turno: el modelo NO se re-llama aunque el stop_reason
+    sea 'tool_calls' (AskUserQuestion emite las preguntas y cede el control al usuario)."""
+    calls = {"n": 0}
+
+    class CountingCaller:
+        async def complete(self, messages, tools, *, stop=None, model_id=""):
+            calls["n"] += 1
+
+            async def _gen():
+                yield ToolCallEvent(tool_name="suspend", tool_input={}, call_id="c1")
+                yield DoneEvent(stop_reason="tool_calls")
+
+            return _gen()
+
+    loop = AgentLoop(
+        model_caller=CountingCaller(),
+        tool_registry=_make_registry(_SuspendTool()),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    ctx = _make_ctx()
+    await loop.run("pregúntame", ctx)
+    assert calls["n"] == 1  # sin ends_turn se re-llamaría (2); el corte lo impide
+
+
+# ---------------------------------------------------------------------------
 # Shim BasicLoop
 # ---------------------------------------------------------------------------
 

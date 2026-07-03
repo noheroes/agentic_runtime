@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from ..protocol import ToolCategory, ToolResult
@@ -86,47 +85,14 @@ class AskUserQuestionTool:
     timeout_seconds = 300.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
-        questions = input.get("questions", []) or []
-
-        # Canal dedicado del cuestionario (separado del HITL de permisos). El integrador lo inyecta;
-        # devuelve una respuesta por pregunta (texto elegido o libre 'Other'), en orden.
-        ask_user_fn = ctx.app_state.native.get("ask_user_fn")
-        if callable(ask_user_fn):
-            answers = await ask_user_fn(questions)
-        else:
-            # Fallback headless/test: una pregunta por vez vía stdin.
-            answers = []
-            for q in questions:
-                answers.append(
-                    await asyncio.get_event_loop().run_in_executor(
-                        None, lambda p=_render_question(q): input_prompt(p)
-                    )
-                )
-
-        return ToolResult(tool_name=self.name, output=_format_answers(questions, answers))
-
-
-def _render_question(q: dict) -> str:
-    header = q.get("header", "")
-    lines = [f"[{header}] {q.get('question', '')}", ""]
-    for i, opt in enumerate(q.get("options", []) or [], 1):
-        label = opt.get("label", "")
-        desc = opt.get("description", "")
-        lines.append(f"  {i}. {label}" + (f" — {desc}" if desc else ""))
-    lines.append("")
-    lines.append("Enter your choice (or type a free-form answer):")
-    return "\n".join(lines)
-
-
-def _format_answers(questions: list[dict], answers: list[Any]) -> str:
-    """Resultado homologado al canónico: 'User has answered your questions: q -> a; ...'."""
-    pairs = []
-    for i, q in enumerate(questions):
-        a = answers[i] if i < len(answers) else ""
-        pairs.append(f"{q.get('question', '')} -> {a}")
-    return "User has answered your questions: " + "; ".join(pairs)
-
-
-def input_prompt(prompt: str) -> str:
-    print(prompt, flush=True)
-    return input()
+        """HITL multi-turno: NO bloquea. Emite las preguntas (el consumidor las detecta por este
+        `tool_call` en el stream) y CIERRA el turno vía `ends_turn`; el usuario responde y el
+        resultado REAL ('User has answered your questions: …') lo reinyecta el consumidor como el
+        tool_result de esta llamada al inicio del turno siguiente. Aquí solo dejamos un placeholder.
+        """
+        result = ToolResult(
+            tool_name=self.name,
+            output="Awaiting the user's answers to the questions above.",
+        )
+        result.ends_turn = True  # type: ignore[attr-defined]
+        return result
