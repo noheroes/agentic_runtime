@@ -23,8 +23,14 @@ _OPTION_SCHEMA: dict[str, Any] = {
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
     description = (
-        "Ask the user a question with structured options and wait for their response. "
-        "Use when a decision requires explicit user input before proceeding."
+        "Ask the user a multiple-choice question and wait for their response. Use this tool to: "
+        "(1) gather user preferences or requirements; (2) clarify ambiguous instructions; "
+        "(3) get decisions on implementation choices as you work; (4) offer the user choices about "
+        "what direction to take. Prefer this over asking in free-form prose whenever the decision is a "
+        "choice among a small set of concrete options: it presents them as structured, selectable "
+        "choices. Provide 2-4 mutually exclusive options; the user can always give a free-form answer "
+        "instead. If you recommend one option, list it first and append \"(Recommended)\" to its label. "
+        "Ask one focused question per call (call the tool again for a follow-up decision)."
     )
     input_schema = {
         "type": "object",
