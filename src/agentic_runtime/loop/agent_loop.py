@@ -283,7 +283,10 @@ class AgentLoop:
                     ]
                 ctx.messages.append(msg)
 
-            # Ejecuta tool calls y acumula resultados
+            # Ejecuta tool calls y acumula resultados. `_ends_turn`: una tool puede señalar que el
+            # turno debe CERRAR tras ejecutarla (HITL multi-turno; p. ej. AskUserQuestion emite las
+            # preguntas y cede el control al usuario — la respuesta llega en un turno nuevo).
+            _ends_turn = False
             for tc in tool_calls:
                 if self._tool_dispatcher is None:
                     ctx.messages.append({"role": "tool", "tool_call_id": tc.call_id, "content": "[no dispatcher]"})
@@ -335,14 +338,17 @@ class AgentLoop:
                         ctx = modifier(ctx) or ctx
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("AgentLoop: context_modifier de %s falló: %s", tc.tool_name, exc)
+                if getattr(result, "ends_turn", False):
+                    _ends_turn = True
                 logger.debug(
                     "AgentLoop turno %d: tool %s(%s) -> %s",
                     ctx.turn_count, tc.tool_name, tc.tool_input,
                     str(result.output)[:160],
                 )
 
-            # Decide si continuar
-            if done is None or done.stop_reason != "tool_calls":
+            # Decide si continuar. `_ends_turn`: una tool pidió cerrar el turno (HITL multi-turno) →
+            # no se re-llama al modelo; el control vuelve al consumidor para recabar la respuesta.
+            if _ends_turn or done is None or done.stop_reason != "tool_calls":
                 break
 
         else:
