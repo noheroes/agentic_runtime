@@ -8,6 +8,10 @@ from ..protocol import ToolCategory, ToolResult
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
 
+# Cap de archivos emitidos; sin él un patrón amplio vuelca miles de rutas al contexto.
+# Espejo de `globLimits.maxResults` (100) del canónico.
+DEFAULT_GLOB_LIMIT = 100
+
 
 class GlobTool:
     name = "glob"
@@ -30,6 +34,10 @@ class GlobTool:
         pattern = input["pattern"]
         try:
             matches = sorted(str(p) for p in base.glob(pattern))
-            return ToolResult(tool_name=self.name, output="\n".join(matches))
+            shown = matches[:DEFAULT_GLOB_LIMIT]
+            output = "\n".join(shown)
+            if len(matches) > DEFAULT_GLOB_LIMIT:
+                output += "\n(Results are truncated. Consider using a more specific path or pattern.)"
+            return ToolResult(tool_name=self.name, output=output)
         except Exception as exc:
             return ToolResult.error(self.name, str(exc))
