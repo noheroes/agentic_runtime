@@ -92,4 +92,9 @@ class ExitPlanModeTool:
             output=f"Plan submitted for approval:\n\n{plan}",
         )
         result.context_modifier = modifier  # type: ignore[attr-defined]
+        # Presentar el plan CIERRA el turno: el agente se detiene a esperar la aprobación del
+        # usuario en vez de seguir generando (sin esto el modelo narra el plan como aprobado y
+        # anuncia implementación). Espejo del canónico `requiresUserInteraction()->true`, que
+        # detiene el turno en el gate de aprobación; mismo primitivo que `AskUserQuestion`.
+        result.ends_turn = True  # type: ignore[attr-defined]
         return result
