@@ -13,6 +13,13 @@ def _default_pool() -> "Any":
     return ToolPool()
 
 
+def _default_fs() -> "Any":
+    # Default seguro: confina a cwd() — nunca ilimitado. El consumidor lo sobreescribe
+    # con el allow-set real (workspace_dir / pwd) por sesión.
+    from ..tools.fs_env import ConfinedFilesystem
+    return ConfinedFilesystem()
+
+
 class AppState(BaseModel):
     """Provider-agnostic runtime-visible application state."""
 
@@ -42,6 +49,7 @@ class ToolUseContext(BaseModel):
     storage: Any = None
     presentation: Any = None
     exec_env: Any = None
+    fs: Any = Field(default_factory=_default_fs)
 
     @property
     def permission_context(self) -> PermissionContext:

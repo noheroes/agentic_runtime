@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -48,7 +48,10 @@ class GrepTool:
     timeout_seconds = 15.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
-        base = Path(input.get("path", "."))
+        try:
+            base = ctx.fs.resolve(input.get("path", "."), for_write=False)
+        except PathOutsideWorkspace as exc:
+            return ToolResult.error(self.name, str(exc))
         pattern = input["pattern"]
         file_glob = input.get("glob", "**/*")
         head_limit = input.get("head_limit", DEFAULT_HEAD_LIMIT)

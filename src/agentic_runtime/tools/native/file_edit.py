@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -42,9 +43,12 @@ class FileEditTool:
         old_string = input.get("old_string", "")
         new_string = input.get("new_string", "")
 
-        path = Path(file_path)
-        if not path.is_absolute():
+        if not Path(file_path).is_absolute():
             return ToolResult.error(self.name, "file_path must be absolute.")
+        try:
+            path = ctx.fs.resolve(file_path, for_write=True)
+        except PathOutsideWorkspace as exc:
+            return ToolResult.error(self.name, str(exc))
         if not path.exists():
             return ToolResult.error(self.name, f"File not found: {file_path}")
 

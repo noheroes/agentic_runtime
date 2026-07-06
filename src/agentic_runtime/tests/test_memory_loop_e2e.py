@@ -23,6 +23,7 @@ from agentic_runtime.capabilities.memory import (
 )
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.runtime import RuntimeTask
+from agentic_runtime.tools.fs_env import ConfinedFilesystem
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.factory import (
     CapabilitiesConfig,
@@ -114,6 +115,9 @@ async def test_memory_activation_recall_save_and_restart(tmp_path):
         capabilities=CapabilitiesConfig(memory_root=memory_root),
         # El integrador permite write_file para que el modelo pueda guardar memorias.
         initial_allowed_tools=["write_file"],
+        # ...y siembra el allow-set de confinamiento fs con el área donde se guardan (tmp_path
+        # cubre memory_root); sin sembrarlo, el default confina a cwd y denegaría la escritura.
+        fs=ConfinedFilesystem(roots=[tmp_path]),
     ))
     await runtime.startup()
     try:

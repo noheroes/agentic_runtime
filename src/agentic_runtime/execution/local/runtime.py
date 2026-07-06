@@ -65,6 +65,7 @@ class LocalAgentRuntime:
         storage: Optional[StorageProtocol] = None,
         presentation: Any = None,
         exec_env: Any = None,
+        fs: Any = None,
         small_llm: Any = None,
         background_result_max_chars: int = 2000,
         model_id: str = "",
@@ -86,6 +87,7 @@ class LocalAgentRuntime:
         self._storage = storage
         self._presentation = presentation
         self._exec_env = exec_env
+        self._fs = fs
         self._small_llm = small_llm
         self._max_chars = background_result_max_chars
         self._model_id = model_id
@@ -312,6 +314,10 @@ class LocalAgentRuntime:
         ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
         ctx.presentation = self._presentation
         ctx.exec_env = self._exec_env
+        # fs: costura de confinamiento inyectada por el consumidor. Si no se inyecta, el ctx
+        # conserva su default seguro (ConfinedFilesystem confinado a cwd) — nunca ilimitado.
+        if self._fs is not None:
+            ctx.fs = self._fs
         # Autoría per-request del consumidor SOLO en la raíz (los subagentes heredan su
         # estado por el ForkSnapshot). Corre tras fijar los defaults para que el
         # consumidor pueda sembrar `app_state.native` y/o sobrescribir `presentation`.
