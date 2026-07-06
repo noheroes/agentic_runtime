@@ -84,6 +84,29 @@ def test_resolve_traversal_raises(tmp_path):
         fs.resolve(str(root / ".." / "escape.txt"), for_write=True)
 
 
+def test_write_roots_subset_denies_write_allows_read(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    readonly = tmp_path / "ro"
+    readonly.mkdir()
+    (readonly / "SKILL.md").write_text("catalog")
+    # lectura = ws + readonly; escritura = solo ws
+    fs = ConfinedFilesystem(roots=[ws, readonly], storage=None, write_roots=[ws])
+    # lectura del dir read-only permitida
+    assert fs.resolve(str(readonly / "SKILL.md"), for_write=False) == readonly / "SKILL.md"
+    # escritura al dir read-only denegada
+    with pytest.raises(PathOutsideWorkspace):
+        fs.resolve(str(readonly / "SKILL.md"), for_write=True)
+    # escritura al workspace sí permitida
+    assert fs.resolve(str(ws / "out.txt"), for_write=True) == ws / "out.txt"
+
+
+def test_write_roots_defaults_to_roots(tmp_path):
+    # sin write_roots, escritura == lectura (backward-compatible)
+    fs = ConfinedFilesystem(roots=[tmp_path])
+    assert fs.resolve(str(tmp_path / "a.txt"), for_write=True) == tmp_path / "a.txt"
+
+
 def test_default_confines_to_cwd():
     fs = ConfinedFilesystem()
     resolved = fs.resolve(os.path.join(os.getcwd(), "x.txt"), for_write=True)
