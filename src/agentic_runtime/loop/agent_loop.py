@@ -126,6 +126,30 @@ class AgentLoop:
             ctx.messages.append({"role": "user", "content": rendered})
             existing.add(rendered)
 
+    def _inject_deferred_tools_delta(self, ctx: ToolUseContext) -> None:
+        """Anuncia al modelo los NOMBRES de las tools diferidas nuevas (MCP) como
+        `<system-reminder>` (role:"user"), y retira las de servers desconectados.
+
+        Sin esto el modelo no sabe que hay diferidas detrás de ToolSearch y nunca las
+        busca → las tools MCP quedan invisibles. Espejo del `deferred_tools_delta`
+        canónico; STATELESS: el delta se computa contra lo ya anunciado en `ctx.messages`,
+        así no se re-anuncia dentro del run pero sí se refleja un alta/baja a mitad de
+        sesión (ver `tools/deferred_delta.py`)."""
+        if ctx.tool_pool is None:
+            return
+        from ..tools.deferred_delta import (
+            compute_deferred_tools_delta,
+            render_deferred_tools_delta,
+        )
+
+        pool = ctx.tool_pool.assemble(ctx.permission_context)
+        delta = compute_deferred_tools_delta(pool, ctx.messages)
+        if delta is None:
+            return
+        added, removed = delta
+        rendered = _as_reminder(render_deferred_tools_delta(added, removed))
+        ctx.messages.append({"role": "user", "content": rendered})
+
     def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
         """Schemas anunciados al modelo, derivados del pool ensamblado.
 
@@ -200,6 +224,7 @@ class AgentLoop:
             # derivan de él; la ejecución (dispatcher) resuelve del MISMO pool.
             if self._tool_registry is not None or self._capability_manager is not None:
                 ctx.tool_pool = self._build_tool_pool(ctx)
+                self._inject_deferred_tools_delta(ctx)
                 tool_schemas = self._schemas_for_turn(ctx)
             elif self._capabilities_resolver is not None:
                 # Path legacy (solo schemas): el dispatcher resuelve de ctx.tool_pool,
