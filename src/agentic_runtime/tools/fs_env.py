@@ -111,14 +111,24 @@ class ConfinedFilesystem:
 
     Default seguro: sin roots explícitos, confina a `cwd()` — nunca ilimitado (§3.5 del diseño).
     Los tokens relativos se expanden contra el primer root (cwd ≡ working-dir del canónico).
+
+    Lectura vs escritura (homologado del canónico, que separa el check de escritura del de
+    lectura): `roots` es el allow-set de LECTURA; `write_roots` el de ESCRITURA (subconjunto).
+    `resolve(for_write=True)` confina contra `write_roots`; `for_write=False` contra `roots`.
+    Omitir `write_roots` iguala escritura a lectura (comportamiento previo, backward-compatible).
     """
 
     def __init__(
         self,
         roots: list[Path] | None = None,
         storage: "StorageContract | None" = None,
+        *,
+        write_roots: list[Path] | None = None,
     ) -> None:
         self._roots = [Path(r) for r in roots] if roots else [Path.cwd()]
+        self._write_roots = (
+            [Path(r) for r in write_roots] if write_roots is not None else self._roots
+        )
         self._storage = storage
 
     @property
@@ -127,9 +137,11 @@ class ConfinedFilesystem:
 
     def resolve(self, token: str, *, for_write: bool) -> Path:
         host = self._storage.real_path(token) if self._storage is not None else Path(token)
-        if not path_in_allowed_working_path(str(host), [str(r) for r in self._roots], self._base_dir):
+        allow = self._write_roots if for_write else self._roots
+        if not path_in_allowed_working_path(str(host), [str(r) for r in allow], self._base_dir):
             raise PathOutsideWorkspace(
-                f"path {token!r} resolves outside the allowed workspace"
+                f"path {token!r} resolves outside the allowed "
+                f"{'write ' if for_write else ''}workspace"
             )
         return Path(host)
 
