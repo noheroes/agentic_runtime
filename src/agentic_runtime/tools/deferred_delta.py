@@ -2,7 +2,7 @@
 (`utils/messages.ts` / `utils/toolSearch.ts::getDeferredToolsDelta`).
 
 Las tools diferidas (MCP) NO se anuncian en el schema hasta que ToolSearch las descubre
-(ver `_schemas_for_turn`). Sin decirle al modelo QUÉ diferidas existen, éste no sabe que
+(ver `SimulatedDeferredStrategy`). Sin decirle al modelo QUÉ diferidas existen, éste no sabe que
 hay capacidades detrás de ToolSearch y nunca busca — las tools MCP quedan invisibles. El
 canónico resuelve esto inyectando un `<system-reminder>` que lista los NOMBRES de las
 diferidas al quedar disponibles (y las removidas cuando su server MCP se desconecta).

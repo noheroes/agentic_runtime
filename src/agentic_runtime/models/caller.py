@@ -91,6 +91,7 @@ def _dict_messages_to_context(
             name=t.get("name") or (t.get("function") or {}).get("name") or "",
             description=t.get("description") or (t.get("function") or {}).get("description") or "",
             parameters=(t.get("parameters") or (t.get("function") or {}).get("parameters") or {}),
+            defer_loading=bool(t.get("defer_loading")),
         )
         for t in tools
     ]
@@ -126,6 +127,21 @@ class AgenticModelsCaller:
         self._api_key = api_key
         self._system_prompt = system_prompt
         self._options = options  # agentic_models.StreamOptions override
+
+    def supports_native_tool_search(self, model_id: str = "") -> bool:
+        """Capability del Model activo: ¿el provider resuelve tools diferidas server-side?
+
+        El loop la consulta para elegir la estrategia diferida (nativa vs simulada). Se
+        resuelve dentro del provider del modelo del constructor (misma identidad (provider, id)
+        que `complete`); un id desconocido cae al default sin romper (→ simulada por defecto)."""
+        model = self._model
+        if model_id:
+            from agentic_models import get_registry
+            try:
+                model = get_registry().get_by_provider(self._model.provider, model_id)
+            except Exception:
+                model = self._model
+        return bool(getattr(model, "native_tool_search", False))
 
     async def complete(
         self,
