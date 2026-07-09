@@ -15,16 +15,13 @@ from ..tools.pool import ToolPool
 
 if TYPE_CHECKING:
     from ..capabilities.manager import CapabilityManager
+    from ..tools.deferred_strategy import DeferredToolStrategy
     from ..tools.protocol import ToolProtocol
     from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 _MAX_TURNS = 50  # techo de seguridad para evitar loops infinitos
-
-
-def _tool_schema(tool: "ToolProtocol") -> dict:
-    return {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
 
 
 def _as_reminder(content: str) -> str:
@@ -62,6 +59,7 @@ class AgentLoop:
         model_id: str = "",
         system_prompt_override: str = "",
         agent_allowed_tools: tuple[str, ...] = (),
+        deferred_strategy: "Optional[DeferredToolStrategy]" = None,
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -77,6 +75,11 @@ class AgentLoop:
         # (espejo resolveAgentTools); `()` o `("*",)` = todas.
         self._system_prompt_override = system_prompt_override
         self._agent_allowed_tools = agent_allowed_tools
+        # Estrategia de carga diferida: inyectable (tests / selección explícita del
+        # consumidor); si no, se resuelve una vez por la capability del modelo activo
+        # (nativa si el provider la soporta, simulada en caso contrario).
+        self._deferred_strategy_override = deferred_strategy
+        self._deferred_strategy_cached: "Optional[DeferredToolStrategy]" = None
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
 
     def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
@@ -126,59 +129,25 @@ class AgentLoop:
             ctx.messages.append({"role": "user", "content": rendered})
             existing.add(rendered)
 
-    def _inject_deferred_tools_delta(self, ctx: ToolUseContext) -> None:
-        """Anuncia al modelo los NOMBRES de las tools diferidas nuevas (MCP) como
-        `<system-reminder>` (role:"user"), y retira las de servers desconectados.
+    def _resolve_deferred_strategy(self) -> "DeferredToolStrategy":
+        """Estrategia diferida del loop. Inyectada → se usa tal cual; si no, se resuelve
+        UNA vez por la capability del modelo activo: nativa si el caller declara
+        `supports_native_tool_search(model_id)`, simulada en caso contrario (default seguro
+        para callers de terceros que no exponen la capability). Espejo de §4 del contrato:
+        el runtime lee la capability del provider y elige el mecanismo."""
+        if self._deferred_strategy_override is not None:
+            return self._deferred_strategy_override
+        if self._deferred_strategy_cached is None:
+            from ..tools.deferred_strategy import NativeDeferredStrategy, SimulatedDeferredStrategy
 
-        Sin esto el modelo no sabe que hay diferidas detrás de ToolSearch y nunca las
-        busca → las tools MCP quedan invisibles. Espejo del `deferred_tools_delta`
-        canónico; STATELESS: el delta se computa contra lo ya anunciado en `ctx.messages`,
-        así no se re-anuncia dentro del run pero sí se refleja un alta/baja a mitad de
-        sesión (ver `tools/deferred_delta.py`)."""
-        if ctx.tool_pool is None:
-            return
-        from ..tools.deferred_delta import (
-            compute_deferred_tools_delta,
-            render_deferred_tools_delta,
-        )
-
-        pool = ctx.tool_pool.assemble(ctx.permission_context)
-        delta = compute_deferred_tools_delta(pool, ctx.messages)
-        if delta is None:
-            return
-        added, removed = delta
-        rendered = _as_reminder(render_deferred_tools_delta(added, removed))
-        ctx.messages.append({"role": "user", "content": rendered})
-
-    def _schemas_for_turn(self, ctx: ToolUseContext) -> list[dict]:
-        """Schemas anunciados al modelo, derivados del pool ensamblado.
-
-        - Visibilidad homologada al canónico (getTools): el anuncio solo filtra por deny
-          (`assemble()` ya quitó las denegadas) y por las diferidas no descubiertas.
-          `requires_permission` NO controla visibilidad — una tool que pide permiso se
-          anuncia igual; su gate vive en ejecución (dispatcher + hook PRE_TOOL_USE, espejo
-          de checkPermissions), que es lo que hace alcanzable la aprobación HITL.
-        - Diferidas (M3, espejo de `claude.ts`): las tools diferidas (MCP) NO se
-          anuncian hasta que ToolSearch las descubre; ToolSearch solo se anuncia si
-          hay diferidas que descubrir. La ejecución no se ve afectada (viven en el pool).
-        """
-        from ..tools.deferred import discovered_tool_names, is_deferred_tool
-        from ..tools.native.tool_search import TOOL_SEARCH_TOOL_NAME
-
-        pool = ctx.tool_pool.assemble(ctx.permission_context)
-        deferred_names = {t.name for t in pool if is_deferred_tool(t)}
-        tool_search_active = bool(deferred_names)
-        discovered = discovered_tool_names(ctx)
-
-        schemas: list[dict] = []
-        for tool in pool:
-            if tool.name == TOOL_SEARCH_TOOL_NAME:
-                if not tool_search_active:
-                    continue  # sin diferidas, no hay nada que buscar
-            elif tool.name in deferred_names and tool.name not in discovered:
-                continue  # diferida no descubierta → oculta hasta ToolSearch
-            schemas.append(_tool_schema(tool))
-        return schemas
+            native = False
+            probe = getattr(self._model_caller, "supports_native_tool_search", None)
+            if callable(probe):
+                native = bool(probe(self._model_id))
+            self._deferred_strategy_cached = (
+                NativeDeferredStrategy() if native else SimulatedDeferredStrategy()
+            )
+        return self._deferred_strategy_cached
 
     async def _emit(self, event: Event) -> None:
         if self._event_bus is not None:
@@ -224,8 +193,11 @@ class AgentLoop:
             # derivan de él; la ejecución (dispatcher) resuelve del MISMO pool.
             if self._tool_registry is not None or self._capability_manager is not None:
                 ctx.tool_pool = self._build_tool_pool(ctx)
-                self._inject_deferred_tools_delta(ctx)
-                tool_schemas = self._schemas_for_turn(ctx)
+                pool = ctx.tool_pool.assemble(ctx.permission_context)
+                plan = self._resolve_deferred_strategy().prepare_turn(ctx, pool)
+                for announcement in plan.announcements:
+                    ctx.messages.append({"role": "user", "content": _as_reminder(announcement)})
+                tool_schemas = plan.tool_schemas
             elif self._capabilities_resolver is not None:
                 # Path legacy (solo schemas): el dispatcher resuelve de ctx.tool_pool,
                 # así que NO ejecuta tools por esta vía — solo las anuncia.
