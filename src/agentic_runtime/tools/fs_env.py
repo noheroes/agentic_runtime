@@ -135,6 +135,12 @@ class ConfinedFilesystem:
     def _base_dir(self) -> str:
         return str(self._roots[0])
 
+    @property
+    def write_root(self) -> Path:
+        """Root de escritura primario del workspace. Para tools que ubican un destino
+        nuevo por nombre relativo (p.ej. `clone_repository`), no un path del modelo."""
+        return self._write_roots[0]
+
     def resolve(self, token: str, *, for_write: bool) -> Path:
         host = self._storage.real_path(token) if self._storage is not None else Path(token)
         allow = self._write_roots if for_write else self._roots

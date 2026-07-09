@@ -1,6 +1,7 @@
 from .agent import AgentTool
 from .ask_user import AskUserQuestionTool
 from .bash import BashTool
+from .clone_repository import CloneRepositoryTool, GitCredentialProvider
 from .config import ConfigTool
 from .file_edit import FileEditTool
 from .glob_tool import GlobTool
@@ -27,7 +28,9 @@ __all__ = [
     "AgentTool",
     "AskUserQuestionTool",
     "BashTool",
+    "CloneRepositoryTool",
     "ConfigTool",
+    "GitCredentialProvider",
     "EnterPlanModeTool",
     "EnterWorktreeTool",
     "ExitPlanModeTool",

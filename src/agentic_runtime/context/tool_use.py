@@ -50,6 +50,9 @@ class ToolUseContext(BaseModel):
     presentation: Any = None
     exec_env: Any = None
     fs: Any = Field(default_factory=_default_fs)
+    # Seam de credenciales git (clone_repository): el integrador lo cablea al token del
+    # MCP per-tenant. None → clones sin auth (repos públicos). GitCredentialProvider.
+    git_credentials: Any = None
 
     @property
     def permission_context(self) -> PermissionContext:
