@@ -88,6 +88,7 @@ class RuntimeConfig:
     presentation: Any = None      # PathPresentation inyectada por el consumidor (default identidad)
     exec_env: Any = None          # ToolExecEnvironment inyectado por el consumidor (default in-process)
     fs: Any = None                # ConfinedFilesystem inyectado por el consumidor (default confinado a cwd)
+    git_credentials: Any = None   # GitCredentialProvider inyectado por el consumidor (clone_repository); default sin auth
     small_llm: Any = None
     model_id: str = ""
     background_result_max_chars: int = 2000
@@ -226,6 +227,7 @@ class RuntimeFactory:
             presentation=presentation,
             exec_env=exec_env,
             fs=config.fs,
+            git_credentials=config.git_credentials,
             small_llm=config.small_llm,
             background_result_max_chars=config.background_result_max_chars,
             model_id=config.model_id,

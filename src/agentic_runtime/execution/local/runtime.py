@@ -66,6 +66,7 @@ class LocalAgentRuntime:
         presentation: Any = None,
         exec_env: Any = None,
         fs: Any = None,
+        git_credentials: Any = None,
         small_llm: Any = None,
         background_result_max_chars: int = 2000,
         model_id: str = "",
@@ -88,6 +89,7 @@ class LocalAgentRuntime:
         self._presentation = presentation
         self._exec_env = exec_env
         self._fs = fs
+        self._git_credentials = git_credentials
         self._small_llm = small_llm
         self._max_chars = background_result_max_chars
         self._model_id = model_id
@@ -314,6 +316,9 @@ class LocalAgentRuntime:
         ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
         ctx.presentation = self._presentation
         ctx.exec_env = self._exec_env
+        # Credenciales git (clone_repository): peer de exec_env — se asigna a CADA ctx
+        # (raíz y subagente), así el agente que clona siempre las tiene.
+        ctx.git_credentials = self._git_credentials
         # fs: costura de confinamiento inyectada por el consumidor. Si no se inyecta, el ctx
         # conserva su default seguro (ConfinedFilesystem confinado a cwd) — nunca ilimitado.
         if self._fs is not None:

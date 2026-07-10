@@ -131,3 +131,21 @@ async def test_create_runtime_runs_task_end_to_end(tmp_path):
 
     assert runtime.status(task_id) == TaskStatus.COMPLETED
     assert runtime.result(task_id) == "respuesta final"
+
+
+def test_create_runtime_wires_git_credentials(tmp_path):
+    sentinel = object()
+    config = RuntimeConfig(
+        storage=StorageConfig(backend="filesystem", root=tmp_path),
+        git_credentials=sentinel,
+    )
+    runtime = create_runtime(config=config)
+    # el runtime lo asigna a cada ctx (peer de exec_env) para que clone_repository lo vea
+    assert runtime._git_credentials is sentinel
+
+
+def test_git_credentials_default_none(tmp_path):
+    runtime = create_runtime(config=RuntimeConfig(
+        storage=StorageConfig(backend="filesystem", root=tmp_path)
+    ))
+    assert runtime._git_credentials is None
