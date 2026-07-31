@@ -110,7 +110,7 @@ Fuera del tramo queda toda **política** (permisos, hooks, modos), toda **estrat
 - **prueba:** **la que promueve G2→G1**: traversal, symlink y allow-set rechazados con test negativo; `run_shell` contra un backend fake **y** contra el local.
 - **⚠ grado y razón de estar dentro:** `existe-fiel` por lectura (`09·G1-G8`), **no corrido**. Está dentro porque sin una tool real la E2E del tramo es un juguete (`add_numbers`). Quedan fuera: shell persistente (`09·F2`), política de sandbox (`09·F3`) y `safety-fs` (`09·G8`).
 
-### C7 · Façade `AgentRuntime` + registro de tasks 【G1】
+### C7 · Façade `AgentRuntime` + registro de tasks 【G1】 · **estado 2026-07-31: ✅ implementada** (doble-camino cerrado: `_registry`/`set_registry`/`get_registry` **retirados**; `task_tools.py` lee `ctx.task_registry`; `S4` gana `join(task_id)` como enriquecimiento declarado, ver `SEAMS §S4`)
 - **comportamiento:** `dispatch` devuelve `task_id` inmediatamente; `status`/`result` son coherentes bajo ese mismo id.
 - **costura:** `S4` `AgentRuntime` · `S19` `TaskRegistryProtocol` · `S24` `arm_watchdog` (default no-op **declarado**).
 - **firma:** `SEAMS §S4` y `§S19`.
@@ -119,7 +119,7 @@ Fuera del tramo queda toda **política** (permisos, hooks, modos), toda **estrat
 - **prueba:** `dispatch`→`status`=COMPLETED→`result` no-None bajo el MISMO id (corrido en A2.5) + test de que no queda **ningún** `get_registry()` global.
 - **⚠ fuera:** el `TaskRecord` rico (`type`/`notified`/`output_file`/`pending_messages`) y el watchdog real → tramo 2/Fase F. `05·LAT-EXEC1` del tracker **es incorrecto** y no debe guiar este cableado (`SKELETON-REPORT §5·pregunta 4`).
 
-### C8 · Subagentes: runner por DI + canal de notificación con drenador 【G1 + un CORE-GAP】
+### C8 · Subagentes: runner por DI + canal de notificación con drenador 【G1 + un CORE-GAP】 · **estado 2026-07-31: ✅ implementada — `FIND-EXEC1` y `H-5` PAGADOS** (runner por factory inyectada → `ctx.runner`; global retirado; drenaje como paso propio del `AgentLoop` con `apply_notification` sobre el historial vivo, sólo en la raíz; acreditada por `E3` y `E9` reales)
 - **comportamiento:** el padre delega, el hijo corre de verdad, el resultado vuelve **aplanado y citado**, y el padre **se entera** de que un hijo background terminó.
 - **costura:** `S18` `SubagentRunnerProtocol` · `S21` `NotificationSink`.
 - **firma:** `run(spec: SubagentSpec, *, background: bool)` — **`SubagentSpec` frozen mínimo, NO `ForkContext`** (corregido corriendo) · `drain(scope) -> list[Notification]` · **`apply_notification(messages, n)`**.
@@ -190,22 +190,24 @@ El tramo 1 se declara terminado cuando **todas** estas pasan, corriendo:
 |---|---|---|---|---|
 | E1 | turno real texto-solo, con verificación **en el cable** de qué llegó al proveedor | C1·C2·C3 | 🟢 2 tests | un mock no distingue passthrough de traducción-en-el-bridge |
 | E2 | turno real con **tool nativa real** (bash + fs), resultado aplanado, re-entrada | C4·C5·C6 | ⛔ sin escribir | `add_numbers` no ejercita confinamiento |
-| E3 | turno real **padre→subagente**, resultado citado por el padre | C7·C8·C10 | ⛔ sin escribir | es el único camino que cruza las 10 capacidades |
+| E3 | turno real **padre→subagente**, resultado citado por el padre | C7·C8·C10 | ✅ **en verde** | es el único camino que cruza las 10 capacidades |
 | E4 | **NEGATIVA**: runtime sin cablear (`runner=None`) ⇒ `is_error` limpio, no excepción | que las costuras son *load-bearing* | 🟢 4 tests (control positivo · negativa de costura · `FIND-EXEC1` aseverado · negativa **E2E real**), acreditada con violación inyectada | sin ella, verde ≠ cableado (`L09`) |
 | E5 | **abort real**: `stop.aborted=True` corta el stream a mitad | C2 / `S2` | 🟢 1 test | hoy el abort se ignora en silencio |
 | E6 | **sin identidad**: turno completo sin `user_id`; probe de que ninguno llega al seam del modelo | C9 | 🟢 3 tests | es la prueba de que Filosofía B se cumple |
 | E7 | **confinamiento**: traversal/symlink/allow-set rechazados | C6 | ⛔ sin escribir | promueve C6 de G2 a G1 |
 | E8 | **aislamiento**: battery importada sólo por su compositor; el base no la conoce | C10 | ⛔ sin escribir | el agnosticismo se asevera, no se narra |
-| E9 | **notificación**: el padre recibe y **aplica** al historial vivo la notificación de un hijo | C8 / `H-5` | ⛔ sin escribir | los 7 tests actuales verifican la función, no el comportamiento |
+| E9 | **notificación**: el padre recibe y **aplica** al historial vivo la notificación de un hijo | C8 / `H-5` | ✅ **en verde** | los 7 tests actuales verifican la función, no el comportamiento |
 
-**Estado del gate:** `uv run pytest src/agentic_runtime/tests/test_tramo1_gate.py -m gate_tramo1 -q` = **10 passed,
-0 skipped, en una sola corrida** (`E1`×2 · `E4`×4 · `E5`×1 · `E6`×3). **4 de 9 — faltan `E2`·`E3`·`E7`·`E8`·`E9`.
-El tramo NO está cerrado.** Deuda de cierre re-medida el 2026-07-31 (2ª ventana, nada heredado):
-`mypy --strict` **139 err / 55 f** · `ruff` **500** · suite **685 passed / 3 skipped / 114 xfailed / 0 failed**.
+**Estado del gate:** `uv run pytest src/agentic_runtime/tests/test_tramo1_gate.py -m gate_tramo1 -q` = **12 passed,
+0 skipped, en una sola corrida** (`E1`×2 · `E3`×1 · `E4`×4 · `E5`×1 · `E6`×3 · `E9`×1). **6 de 9 — faltan
+`E2`·`E7`·`E8`. El tramo NO está cerrado.** Deuda de cierre re-medida el 2026-07-31 (4ª ventana, nada heredado):
+`mypy --strict` **139 err / 55 f** · `ruff` **500** · suite **688 passed / 3 skipped / 112 xfailed / 0 failed**.
 
-⚠ **`FIND-EXEC1` medido y aseverado por `E4`:** `create_runtime` **nunca llama `set_runner`** ⇒ hoy TODO spawn de
-subagente devuelve `is_error` en producción. Es de **`C8`** (que además retira el global en favor de `ctx.runner`) y
-bloquea `E3`.
+✅ **`FIND-EXEC1` PAGADO (`C8`, 4ª ventana).** `create_runtime` puebla `S18` por factory inyectada y `_run_loop` lo
+threadea a `ctx.runner`; el global `set_runner`/`get_runner` está retirado. La pieza 3 de `E4` —escrita con su
+muerte anunciada— se puso roja al pagarlo y está **reescrita al revés**: hoy asevera que el ensamblador SÍ cablea y
+que la costura LLEGA al `ctx` (testigo `S11` dentro del turno, no `hasattr`). El caso «sin cablear» de la negativa
+se construye ahora **a propósito** (`subagent_runner_factory=lambda _rt: None`).
 
 **Regla dura del gate:** «100 % del tramo probado y operativo» significa **E1–E9 en verde a la vez, en una sola
 corrida**, con `mypy --strict` y lint limpios. Una prueba verde con la costura sin cablear es el modo de fallo

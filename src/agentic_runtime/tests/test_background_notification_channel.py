@@ -1,13 +1,17 @@
 """
-Tests de BackgroundNotificationChannel y process_background_notification (Fase 8).
+Tests del canal de notificaciones background y de `apply_notification` (`S21`).
+
+**Reescritos en `C8`.** Antes ejercitaban `process_background_notification(session, n)`,
+que `AC-07` retiró: escribía en `session.messages` mientras `_run_loop` reasigna
+`session.messages = list(ctx.messages)` al terminar ⇒ el XML se descartaba en silencio.
+Estos 7 tests pasaban verificando **la función**, no el comportamiento — el ejemplo
+exacto de `L09`. La firma vigente es `apply_notification(messages, n)` sobre el
+historial VIVO, y el comportamiento de punta a punta lo asevera `E9` del gate.
 
 Cubre:
-- Canal acepta escritura por session_id y entrega notificaciones en orden
-- Canal vacío al drenar devuelve lista vacía
-- Canal con múltiples notificaciones: todas llegan en orden
-- Notificación completed/failed/killed produce XML correcto
-- process_background_notification actualiza BackgroundTaskRef e inyecta XML
-- _run_loop no recibe ni referencia al objeto Session del padre
+- Canal: escritura escopada por (scope, session_id), entrega en orden, drain destructivo
+- `apply_notification`: XML completed/failed/killed, rol `user`, acumulación
+- `_run_loop` no recibe ni referencia al objeto Session del padre
 """
 from __future__ import annotations
 
@@ -15,13 +19,12 @@ import inspect
 
 import pytest
 
+from agentic_runtime.contracts.notifications import apply_notification
 from agentic_runtime.execution.local.notification import (
     BackgroundNotification,
     drain_notifications,
-    process_background_notification,
     put_notification,
 )
-from agentic_runtime.execution.session import BackgroundTaskRef, Session
 
 
 # ---------------------------------------------------------------------------
@@ -96,75 +99,70 @@ def test_channel_isolates_sessions():
 
 
 # ---------------------------------------------------------------------------
-# process_background_notification: inyección XML
+# apply_notification: inyección XML sobre el HISTORIAL VIVO
 # ---------------------------------------------------------------------------
 
-def test_process_injects_completed_xml(monkeypatch):
-    s = Session(session_id="sess-test")
-    process_background_notification(s, _notif(status="completed", notification_text="result ok"))
-    xml = s.messages[-1]["content"]
+def test_apply_injects_completed_xml():
+    messages: list = []
+    apply_notification(messages, _notif(status="completed", notification_text="result ok"))
+    xml = messages[-1]["content"]
     assert 'status="completed"' in xml
     assert "result ok" in xml
     assert "<task-notification" in xml
 
 
-def test_process_injects_failed_xml(monkeypatch):
-    s = Session(session_id="sess-test")
-    process_background_notification(s, _notif(status="failed", notification_text="Error: algo fallo"))
-    xml = s.messages[-1]["content"]
+def test_apply_injects_failed_xml():
+    messages: list = []
+    apply_notification(messages, _notif(status="failed", notification_text="Error: algo fallo"))
+    xml = messages[-1]["content"]
     assert 'status="failed"' in xml
     assert "Error: algo fallo" in xml
 
 
-def test_process_injects_killed_xml(monkeypatch):
-    s = Session(session_id="sess-test")
-    process_background_notification(s, _notif(status="killed", notification_text="killed by timeout"))
-    xml = s.messages[-1]["content"]
-    assert 'status="killed"' in xml
+def test_apply_injects_killed_xml():
+    messages: list = []
+    apply_notification(messages, _notif(status="killed", notification_text="killed by timeout"))
+    assert 'status="killed"' in messages[-1]["content"]
 
 
-def test_process_xml_message_has_user_role(monkeypatch):
-    s = Session(session_id="sess-test")
-    process_background_notification(s, _notif())
-    assert s.messages[-1]["role"] == "user"
+def test_apply_xml_message_has_user_role():
+    messages: list = []
+    apply_notification(messages, _notif())
+    assert messages[-1]["role"] == "user"
 
 
-def test_process_multiple_notifications_produce_multiple_messages(monkeypatch):
-    s = Session(session_id="sess-test")
-    process_background_notification(s, _notif(task_id="t1", notification_text="first"))
-    process_background_notification(s, _notif(task_id="t2", notification_text="second"))
-    xmls = [m["content"] for m in s.messages]
+def test_apply_multiple_notifications_produce_multiple_messages():
+    messages: list = []
+    apply_notification(messages, _notif(task_id="t1", notification_text="first"))
+    apply_notification(messages, _notif(task_id="t2", notification_text="second"))
+    xmls = [m["content"] for m in messages]
     assert any("first" in x for x in xmls)
     assert any("second" in x for x in xmls)
 
 
-# ---------------------------------------------------------------------------
-# process_background_notification: BackgroundTaskRef
-# ---------------------------------------------------------------------------
+def test_apply_operates_on_the_live_history_not_on_a_session():
+    """La regresión que `AC-07` mide: la firma NO toma `Session`.
 
-def test_process_updates_background_task_ref(monkeypatch):
-    s = Session(session_id="sess-test")
-    s.metadata.background_tasks.append(BackgroundTaskRef(task_id="t1", description="d"))
-    process_background_notification(s, _notif(task_id="t1", status="completed"))
-    assert s.metadata.background_tasks[0].status == "completed"
+    Con `process_background_notification(session, n)` el XML acababa en un objeto que
+    `_run_loop` sobreescribe al terminar el turno; con `apply_notification(messages, n)`
+    acaba en la MISMA lista que el loop le pasa al modelo. Que la firma tome la lista es
+    lo que hace imposible volver al fallo silencioso.
+    """
+    import inspect
 
-
-def test_process_updates_failed_ref(monkeypatch):
-    s = Session(session_id="sess-test")
-    s.metadata.background_tasks.append(BackgroundTaskRef(task_id="t1", description="d"))
-    process_background_notification(s, _notif(task_id="t1", status="failed"))
-    assert s.metadata.background_tasks[0].status == "failed"
+    params = list(inspect.signature(apply_notification).parameters)
+    assert params[0] == "messages"
 
 
-def test_process_missing_task_ref_is_noop(monkeypatch):
-    s = Session(session_id="sess-test")
-    process_background_notification(s, _notif(task_id="no-such-task", status="failed"))
-    # No debe lanzar excepción
-
-
-# Nota: display_messages y persistencia salieron de process_background_notification
-# (G2/D4) — son proyección/persistencia del consumidor, no del runtime. Por eso ya
-# no hay tests de display aquí.
+# Nota honesta de `C8`: `process_background_notification` también recorría
+# `session.metadata.background_tasks` para actualizar el `status` del ref. Ese recorrido
+# **no se ha portado**, y no es una omisión disimulada: `background_tasks` no lo puebla
+# NADIE en producción (sólo lo hacía el test que lo aseveraba), luego era un bucle sobre
+# una lista siempre vacía. Reponerlo exige primero un productor del ref — unidad
+# diferida ENTERA y nombrada (`L07`), no troceada aquí.
+#
+# display_messages y persistencia salieron ya antes (G2/D4): son proyección del
+# consumidor, no del runtime.
 
 
 # ---------------------------------------------------------------------------

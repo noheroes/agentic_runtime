@@ -247,6 +247,7 @@
       async def cancel(self, task_id: str) -> None: ...
       def result(self, task_id: str) -> ResultEvent | None: ...
   ```
+- **ENRIQUECIMIENTO DECLARADO (`C8`, 2026-07-31) — `join(task_id) -> str | None`.** Un spawn en *foreground* es, por definición, el padre BLOQUEANDO en el hijo; con sólo `dispatch`/`status`/`result` la única forma de esperar era hurgar en el `asyncio_task` del registry, es decir **romper la costura por dentro** desde `S18`. `LocalAgentRuntime.join` espera la task y devuelve su `result`. Es adición, no cambio: ningún consumidor previo la necesita, y `S22 ForceAsyncPolicy` (quién decide fondo vs primer plano) sigue **ausente** y bajo la línea de corte.
 
 ### S6 · wire serializer `Event→SDKMessage` (battery `wire`)
 - **estado:** `ausente` (07·GAP-EVT5; el factory no lo cablea, `factory.py:178-240`). **Costura de consumo externa por diseño** (NO huérfano).
@@ -382,8 +383,10 @@
   ```
 - **cabo:** el algoritmo `agentGetAppState` (override permMode hijo, scoping `allowedTools` anti-fuga) → 05·E20/02·F2; ripear hack `plan_mode` = DEUDA-B `B-02`; safety-fs (09·G8) → 10·R3. Hogar del desarrollo = **06·hooks** (A3).
 
-### S18 · `SubagentRunnerProtocol` — ✅ VALIDADA-CORREGIDA en A2.5
-- **estado:** `existe-sin-poblar` (05·E24/FIND-EXEC1: `set_runner` sólo en test; `get_runner()` lanza `RuntimeError` en **todo** spawn — el **crítico de cableado** de la espina, pero DEUDA-B, no gap A↔B).
+### S18 · `SubagentRunnerProtocol` — ✅ VALIDADA-CORREGIDA en A2.5 · **PAGADA en `C8` (2026-07-31)**
+- **estado (2026-07-31):** ✅ **poblada por DI**. `FIND-EXEC1` cerrado: `RuntimeConfig.subagent_runner_factory` → `LocalAgentRuntime(runner_factory=…)` → `self._runner` → `ctx.runner` (threadeado en `_run_loop`, punto único por el que pasan raíz y fork) → `AgentTool` lee `ctx.runner`. El global `_runner`/`set_runner`/`get_runner` está **retirado del código**. Se inyecta una **factory** `(runtime) -> runner`, no el runner ya construido, porque el runner tiene que despachar EN el runtime que lo posee: un cableado en dos tiempos es exactamente lo que un ensamblador puede olvidar, que es el modo de fallo de `FIND-EXEC1`. `subagent_runner_factory=lambda _rt: None` deja la costura vacía **a propósito** (distinto de olvidarla) y `AgentTool` devuelve `is_error` limpio.
+- **DIVERGENCIA DECLARADA (`L10`) frente al `SubagentSpec` mínimo de A2.5:** el spec lleva además `parent_snapshot: ForkSnapshot | None` e `inherit_messages: bool`. El skeleton no ejercitaba el fork-de-historial ni la herencia de permisos/tool_pool/capabilities, pero la mímica sí las tiene, y sin el snapshot el hijo no puede heredar `scope`/permisos/`capabilities` del padre: sería el runtime COMPONIENDO identidad (`D-11`), no transportándola. `background=True` **ya no lanza `NotImplementedError`**: el `dispatch` es genuinamente fire-and-forget y `run` devuelve el `task_id` (acreditado por `E9`). `S22 ForceAsyncPolicy` —quién DECIDE el fondo— sigue **ausente** y bajo la línea de corte: no se simula.
+- **estado histórico:** `existe-sin-poblar` (05·E24/FIND-EXEC1: `set_runner` sólo en test; `get_runner()` lanza `RuntimeError` en **todo** spawn — el **crítico de cableado** de la espina, pero DEUDA-B, no gap A↔B).
 - **productor:** `AgentTool.execute` (`agent.py:105` `get_runner().run`). **consumidor:** `LocalAgentRuntime.dispatch` vía adaptador.
 - **firma BORRADOR** (a reconciliar en A2):
   ```python
@@ -397,8 +400,9 @@
   - **carga probada (L09):** prueba NEGATIVA en `_integrador` — un runtime SIN el cableado del factory (`runner=None`) hace que `AgentTool` devuelva `is_error` ("not wired") ⇒ la costura es load-bearing; el turno real prueba que el factory SÍ la puebla (padre delegó → subagente real sumó 42 → aplanado y citado).
   - **`background`:** el camino fire-and-forget NO se ejercita (declarado; `LocalSubagentRunner.run(background=True)` lanza `NotImplementedError` apuntando a S22 force-async + daemon del integrador, Fase F). L09-inverso: no se finge camino muerto.
 
-### S19 · `TaskRegistryProtocol` (repo genérico id-opaco)
-- **estado:** `existe-doble-camino` (05·`B-registry-dual-path`: `LocalAgentRuntime` usa instancia inyectada `runtime.py:63/86`; las tools nativas usan el global `get_registry()` `task_tools.py:29/54/113/187` — pueden divergir).
+### S19 · `TaskRegistryProtocol` (repo genérico id-opaco) · **DOBLE CAMINO CERRADO en `C7` (2026-07-31)**
+- **estado (2026-07-31):** ✅ **camino único**. `registry.py` ya no tiene `_registry`/`set_registry`/`get_registry`; las tools nativas leen `ctx.task_registry`, threadeado por `_run_loop` desde la instancia que el runtime posee. Ya no pueden divergir porque ya no hay dos. `TaskRecord` sigue SIN enriquecer (`type/kind`, `notified`, `output_file/offset`, `pending_messages`): diferido entero y nombrado (`L07`).
+- **estado histórico:** `existe-doble-camino` (05·`B-registry-dual-path`: `LocalAgentRuntime` usa instancia inyectada `runtime.py:63/86`; las tools nativas usan el global `get_registry()` `task_tools.py:29/54/113/187` — pueden divergir).
 - **productor:** `LocalAgentRuntime` (register/get/kill/complete) + tools nativas. **consumidor:** `InMemoryTaskRegistry` (default) o repo del integrador. 【id-opaco: reifica `.id` de la task; el scoping (`session_id`) es metadata del repo — patrón pi `SessionRepo`】.
 - **firma BORRADOR:**
   ```python
@@ -430,8 +434,13 @@
   ```
 - **validación A2:** A2.4/A2.5 corren un turno **sin conocer userId**; el integrador lista/scopea por su metadata. **Funda el rollup transversal DEUDA-A** (consolidación en A3.DA — no se resuelve categoría a categoría).
 
-### S21 · `NotificationSink` (drain/process del canal `<task-notification>`) — ✅ VALIDADA (put+drain) en A2.5
-- **estado:** `existe-put-sin-drain` (05·E5/LAT-EXEC2: el runtime **escribe** `put_notification` `runtime.py:299` pero **no se auto-drena**) — ~~delegación al integrador, 🔀, no bug~~.
+### S21 · `NotificationSink` (drain/process del canal `<task-notification>`) — ✅ VALIDADA (put+drain) en A2.5 · **CORE-GAP `H-5` PAGADO en `C8` (2026-07-31)**
+- **estado (2026-07-31):** ✅ **put + drain + apply, con call-site**. El drenaje es un **paso propio del `AgentLoop`** (`_drain_notifications`), como prescribía `AC-h3`: corre en `run()` tras los turn-start hooks y **antes** del mensaje del usuario y de `_inject_recall`, porque son hechos ya ocurridos. Frecuencia: una por `run()` = una por prompt de usuario = la del canónico (`query.ts:1631-1633`).
+  - `contracts/notifications.py` (nuevo): `BackgroundNotification`, `NotificationSink` (`put`/`drain`), `render_notification` y **`apply_notification(messages, n)`** — la firma que `AC-07` prescribió en sustitución de `process_background_notification(session, n)`, que escribía sobre `session.messages` (sumidero de copia que `_run_loop` reasigna) y por eso **descartaba el XML en silencio** (`AC-h5`). `process_background_notification` está **retirada**; los 7 tests que verificaban la función se reescribieron contra `apply_notification`.
+  - El contrato vive en `contracts` (hoja del grafo) para que el loop no importe `execution.local`; el canal concreto y `InProcessNotificationSink` siguen en `execution/local/notification.py`, y `LocalAgentRuntime` lo inyecta por defecto (`RuntimeConfig.notification_sink` para sustituirlo).
+  - **DEFECTO ENCONTRADO Y PAGADO EN LA MISMA VENTANA:** el fork hereda `session_id` **y** `scope` del padre, así que la clave del canal `(scope, session_id)` es **la misma** para padre e hijo ⇒ con el drenaje incondicional un subagente se comía la notificación de su hermano y el padre no se enteraba nunca. `_drain_notifications` sólo drena en la RAÍZ (`not ctx.is_subagent`); en el canónico las notificaciones entran por el input del usuario, que sólo la raíz tiene.
+  - **acreditado por `E9`** (gate del tramo, E2E real): hijo de fondo real → `_notify` → canal → drenaje del turno siguiente del padre → `<task-notification>` **en el cable del modelo** → el padre cita el código; y el canal queda vacío tras aplicarla. Lo que `E9` NO deja al modelo es la **decisión** de lanzar en fondo (se pide por la costura): declarado, no disimulado. `TaskRecord.notified` sigue sin existir ⇒ la de-duplicación es «drenar consume», no una marca en el registro: diferido nombrado.
+- **estado histórico:** `existe-put-sin-drain` (05·E5/LAT-EXEC2: el runtime **escribe** `put_notification` `runtime.py:299` pero **no se auto-drena**) — ~~delegación al integrador, 🔀, no bug~~.
 - **⚠ TIER CORREGIDO en A-CIERRE·P0 (AC-h3, `SEAMS.md` abierto 1→EOF 2026-07-27).** El «🔀, no bug» quedó
   **refutado** por `DEUDA-B §9·RV-7` (= `DB-29`, CORE-GAP **`H-5`**, con `notification.py` y `agent_loop.py`
   abiertos 1→EOF): (a) el base **ya trae escrita la lógica genérica** (`process_background_notification`

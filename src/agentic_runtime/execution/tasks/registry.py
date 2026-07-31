@@ -1,8 +1,9 @@
 """
-TaskRegistry — protocolo y primitiva de conexión.
+`S19` · `TaskRegistryProtocol` — el repo genérico id-opaco de tasks.
 
-El exterior registra su implementación vía set_registry().
-LocalAgentRuntime la obtiene vía get_registry() sin saber de dónde viene.
+**`C7` retiró el global `set_registry`/`get_registry`.** La costura se inyecta al
+`LocalAgentRuntime` por constructor y éste la threadea al `ctx`, que es de donde la leen
+las tools `Task*`. El global creaba un segundo camino que en producción nadie poblaba.
 """
 from __future__ import annotations
 
@@ -62,8 +63,8 @@ class TaskRegistryProtocol(Protocol):
 class InMemoryTaskRegistry:
     """Implementación concreta nativa de TaskRegistryProtocol, en-proceso.
 
-    Default del runtime para ser ejecutable por sí solo. Un consumidor puede
-    inyectar su propia implementación vía set_registry().
+    Default del runtime para ser ejecutable por sí solo. Un consumidor puede inyectar
+    la suya vía `RuntimeConfig.task_registry`.
     """
 
     def __init__(self) -> None:
@@ -150,17 +151,4 @@ class InMemoryTaskRegistry:
             rec.output_tokens = output_tokens
 
 
-_registry: TaskRegistryProtocol | None = None
-
-
-def set_registry(impl: TaskRegistryProtocol) -> None:
-    global _registry
-    _registry = impl
-
-
-def get_registry() -> TaskRegistryProtocol:
-    if _registry is None:
-        raise RuntimeError(
-            "TaskRegistry not initialized. Call set_registry() before using the runtime."
-        )
-    return _registry
+__all__ = ["InMemoryTaskRegistry", "TaskRecord", "TaskRegistryProtocol"]

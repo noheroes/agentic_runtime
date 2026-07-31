@@ -1,7 +1,12 @@
 from .fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContextForker
 from .local import LocalAgentRuntime
-from .local.notification import BackgroundNotification, drain_notifications, process_background_notification, put_notification
-from .runner import SubagentRunnerProtocol, get_runner, set_runner
+from .local.notification import (
+    BackgroundNotification,
+    InProcessNotificationSink,
+    drain_notifications,
+    put_notification,
+)
+from .runner import LocalSubagentRunner, SubagentRunnerProtocol, SubagentSpec
 from .local.summarizer import summarize_if_needed
 
 __all__ = [
@@ -9,13 +14,13 @@ __all__ = [
     "ForkContext",
     "ForkPolicy",
     "ForkSnapshot",
+    "InProcessNotificationSink",
     "LocalAgentRuntime",
+    "LocalSubagentRunner",
     "RuntimeContextForker",
     "SubagentRunnerProtocol",
+    "SubagentSpec",
     "drain_notifications",
-    "get_runner",
-    "process_background_notification",
     "put_notification",
-    "set_runner",
     "summarize_if_needed",
 ]

@@ -10,23 +10,24 @@
 ## Tablero de capacidades
 
 Ninguna capacidad se marca ✅ por existir: se marca por **correr** su prueba (`L09`). `E1..E9` son el gate del
-tramo (`TRAMO-1 §4`); **3 de 9 escritas y en verde en una misma corrida** (`E1`, `E5`, `E6`), así que las
-capacidades que esas tres acreditan —y sólo ésas— llegan a ✅.
+tramo (`TRAMO-1 §4`); **6 de 9 escritas y en verde en una misma corrida** (`E1`, `E3`, `E4`, `E5`, `E6`, `E9`), así
+que las capacidades que esas seis acreditan —y sólo ésas— llegan a ✅.
 
 | cap | grado guion | estado | qué corre hoy |
 |---|---|---|---|
 | C1 contratos T1 | G2 | 🟢 **implementada y corrida** | `test_contracts_invariant.py` con violación inyectada (exit 1) · `mypy --strict` sobre `contracts/` |
 | C2 model-caller + AbortSignal | G1 | ✅ **implementada y acreditada por `E1`+`E5`** | `S1` enriquecida y poblada, `stop: AbortSignal` en toda la cadena, `AbortController` concreto, `ModelsConfig` retirado; 2 violaciones inyectadas revertidas por `sha256` |
-| C3 EventBus + `stream()` | G1 | ⛔ sin empezar | |
-| C4 AgentLoop | G1 | ⛔ sin empezar | |
+| C3 EventBus + `stream()` | G1 | ✅ **verificada** (no reconstruida, `L11`) | orden total exacto por las DOS vías de suscripción + handler que revienta sin cortar el canal; hallazgo del orden real escrito, no maquillado |
+| C4 AgentLoop | G1 | ✅ **implementada y acreditada por `E4`** | `S11` pre-turno cableado, `LoopOutcome`/`LoopEndReason`, `max_turns` por tarea, `try:` de `_run_loop` abriendo en `_build_child` |
 | C5 tools + pool + dispatcher | G1 | ⛔ sin empezar | |
 | C6 exec-env + confinamiento | G2 | ⛔ sin empezar | |
-| C7 façade + registry | G1 | ⛔ sin empezar | el doble camino `get_registry()` sigue vivo |
-| C8 subagentes DI + drenador | G1 | ⛔ sin empezar | `H-5` sin pagar |
+| C7 façade + registry | G1 | ✅ **implementada y acreditada por `E3`** | doble camino cerrado: `set_registry`/`get_registry` retirados, `task_tools.py` lee `ctx.task_registry`; `S4` gana `join(task_id)` (enriquecimiento declarado) |
+| C8 subagentes DI + drenador | G1 | ✅ **implementada y acreditada por `E3`+`E9`** | `FIND-EXEC1` pagado (runner por factory inyectada → `ctx.runner`, global retirado) · `H-5` pagado (`apply_notification` sobre el historial vivo, drenaje como paso propio del loop y sólo en la raíz) |
 | C9 hilo de identidad | G3 (excepción) | ✅ **rip hecho y acreditado por `E6`** (promovida G3→G1) | turno real sin `user_id` + probe en `S1` + negativa + guardia de grafía `AC-39` |
-| C10 ensamblador único | G1 | ⛔ sin empezar | |
+| C10 ensamblador único | G1 | ⛔ sin empezar | pero `create_runtime` ya puebla `S18`/`S21`; lo que falta es su propia ficha y `E8` |
 
-**Gate `E1..E9`: 3 de 9 escritas (`E1`·`E5`·`E6`), 6 tests, verdes en una sola corrida. Faltan `E2`·`E3`·`E4`·`E7`·`E8`·`E9`** — y `E4`, la negativa obligatoria del gate, es de las que faltan.
+**Gate `E1..E9`: 6 de 9 escritas (`E1`·`E3`·`E4`·`E5`·`E6`·`E9`), 12 tests, verdes en una sola corrida. Faltan
+`E2`·`E7`·`E8`.**
 
 ## Cronología
 
@@ -115,3 +116,36 @@ violación es restauración desde copia propia verificada por `sha256` (`D-09`).
 
 **Commit de control `141cbb8`** en rama `fase-b/tramo-1` (139 ficheros, +23 087/−696): cierra la exposición.
 De aquí en adelante cada término cierra con commit de control **antes** del enunciado de retoma.
+
+## 2026-07-31 · ventana 4ª del tramo — `C8` + `C7`: `FIND-EXEC1` y `H-5` pagados, `E3` y `E9` escritas
+
+**Qué se hizo.** `C8`: el runner de subagentes pasa de singleton global a **DI por factory**
+(`RuntimeConfig.subagent_runner_factory` → `LocalAgentRuntime(runner_factory=…)` → `ctx.runner`); `set_runner`/
+`get_runner` **retirados**; `SubagentSpec` sustituye a `ForkContext` en `S18` (lleva `parent_snapshot`, divergencia
+declarada); `S4` gana `join(task_id)` porque un spawn en foreground es el padre bloqueando en el hijo y sin él la
+única forma de esperar era romper la costura por dentro. `H-5`: nuevo `contracts/notifications.py` con
+`NotificationSink` + **`apply_notification(messages, n)`** sobre el historial vivo;
+`process_background_notification` retirada; el drenaje es un **paso propio del `AgentLoop`**. `C7`: `_registry`/
+`set_registry`/`get_registry` retirados, `task_tools.py` lee `ctx.task_registry`.
+
+**Defecto encontrado y pagado en la misma ventana.** El fork hereda `session_id` **y** `scope`, luego la clave del
+canal es la misma para padre e hijo: con el drenaje incondicional un subagente se comía la notificación de su
+hermano. `_drain_notifications` drena **sólo en la raíz**.
+
+**La pieza 3 de `E4` murió como estaba anunciado** y está reescrita al revés: hoy asevera que el ensamblador SÍ
+puebla `S18` **y que la costura llega al `ctx`** (testigo `S11` dentro del turno, no `hasattr`).
+
+**Acreditación por violación inyectada** (anunciada antes de tocar el fuente; revert desde copia propia verificado
+con `sha256 -c`, nunca `git checkout`): `V5` quitar `ctx.runner = self._runner` → rojas **`E3`** y la pieza 3 de
+`E4`, verde `E9` (que usa el runner por la façade) — discrimina el threading del ensamblado; `V6` anular el drenaje
+→ roja **`E9`** y **sólo** `E9`.
+
+**Gate: 12 passed, 0 skipped en una sola corrida** (`E1`×2 · `E3`×1 · `E4`×4 · `E5`×1 · `E6`×3 · `E9`×1) = **6 de 9**.
+Faltan `E2`·`E7`·`E8`. Deuda re-medida, nada heredado: suite **688 passed / 3 skipped / 112 xfailed / 0 failed** ·
+`mypy --strict` **139 err / 55 f** (idéntico al baseline: `C7`/`C8` no añaden deuda de tipos) · `ruff` **500**
+(idéntico).
+
+**Intermitencia reportada, no escondida:** `test_runtime_e2e_real.py::test_real_sequential_dependent_tools` (ajeno
+a `C7`/`C8`, no-determinismo del modelo ya diagnosticado el 2026-07-31) falló en 2 de 4 corridas completas de esta
+ventana y pasó aislado y en las otras 2 completas. El verde simultáneo se apoya en las corridas 3ª y 4ª, dicho tal
+cual.

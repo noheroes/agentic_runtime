@@ -73,6 +73,16 @@ class ToolUseContext(BaseModel):
     # Seam de credenciales git (clone_repository): el integrador lo cablea al token del
     # MCP per-tenant. None → clones sin auth (repos públicos). GitCredentialProvider.
     git_credentials: Any = None
+    # `S18` (`C8`): el runner de subagentes que la tool `Agent` usa para delegar. Lo
+    # threadea el runtime desde su propia inyección — aquí murió el singleton global
+    # `get_runner()`, que nadie poblaba en producción (`FIND-EXEC1`). `None` = costura sin
+    # poblar: la tool devuelve `is_error` limpio, no revienta.
+    runner: Any = None
+    # `S19` (`C7`): el registry de tasks que ven las tools `Task*`. Antes iban por el
+    # global `get_registry()` mientras el runtime usaba su instancia inyectada — dos
+    # caminos que podían divergir, y de hecho divergían: nadie llamaba `set_registry`, así
+    # que las seis tools reventaban en producción. Un solo camino: el del runtime.
+    task_registry: Any = None
 
     @property
     def permission_context(self) -> PermissionContext:

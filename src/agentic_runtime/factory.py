@@ -89,7 +89,16 @@ class RuntimeConfig:
     input_processor: Any = None
     model_caller: Any = None      # ModelCallerProtocol inyectado por el consumidor
     hook_runner: Any = None       # HookRunner inyectado por el consumidor
-    task_registry: Any = None     # TaskRegistryProtocol inyectado por el consumidor
+    task_registry: Any = None     # `S19` TaskRegistryProtocol inyectado por el consumidor
+    # `S18` (`C8`): fábrica del runner de subagentes, `(runtime) -> SubagentRunnerProtocol`.
+    # `None` = el default `LocalSubagentRunner`, que despacha al hijo en el mismo runtime.
+    # **Aquí vivía `FIND-EXEC1`**: el ensamblador no poblaba esta costura por ningún
+    # camino —`set_runner` sólo se llamaba desde los tests— así que en producción TODO
+    # spawn de subagente devolvía error. Poner `subagent_runner_factory=lambda _rt: None`
+    # es la forma explícita de ensamblar un runtime SIN subagentes.
+    subagent_runner_factory: Any = None
+    # `S21` (`C8`/`H-5`): canal de notificaciones padre↔hijo. `None` = canal en-proceso.
+    notification_sink: Any = None
     presentation: Any = None      # PathPresentation inyectada por el consumidor (default identidad)
     exec_env: Any = None          # ToolExecEnvironment inyectado por el consumidor (default in-process)
     fs: Any = None                # ConfinedFilesystem inyectado por el consumidor (default confinado a cwd)
@@ -195,6 +204,20 @@ class RuntimeFactory:
         providers.extend(caps.extra_providers)
         return CapabilityManager(providers)
 
+    @staticmethod
+    def _default_subagent_runner_factory(runtime: Any) -> Any:
+        """`S18` POBLADA — el fix de `FIND-EXEC1`.
+
+        El runner despacha al hijo **en este mismo runtime**: un runtime, muchas tasks;
+        el fork del padre ocurre por task vía `ForkSnapshot`, que es lo que la façade ya
+        hacía con `dispatch(task, parent_snapshot)`. Un integrador que quiera un runtime
+        distinto por hijo (aislamiento de proceso, pod remoto) sustituye la fábrica: la
+        costura lo admite porque `build_child` recibe el `spec`.
+        """
+        from .execution.runner import LocalSubagentRunner
+
+        return LocalSubagentRunner(build_child=lambda _spec: runtime)
+
     @classmethod
     def _build_local(cls, config: RuntimeConfig) -> Any:
         from .execution.local import LocalAgentRuntime
@@ -260,6 +283,11 @@ class RuntimeFactory:
             root_context_modifier=config.root_context_modifier,
             root_turn_start_hooks=config.root_turn_start_hooks,
             agent_resolver=config.agent_resolver,
+            # `S18`/`S21` (`C8`): las dos costuras que el ensamblador NO poblaba. Sin
+            # estas dos líneas, `create_runtime` devuelve un runtime en el que todo
+            # spawn de subagente falla y ninguna notificación llega nunca al padre.
+            runner_factory=config.subagent_runner_factory or cls._default_subagent_runner_factory,
+            notification_sink=config.notification_sink,
             scope=config.scope,
             session_repo=config.session_repo,
             stt=stt,

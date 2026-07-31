@@ -11,7 +11,6 @@ import json
 from agentic_runtime.execution.tasks.registry import (
     InMemoryTaskRegistry,
     TaskRegistryProtocol,
-    set_registry,
 )
 from agentic_runtime.tools.native.task_tools import TaskListTool
 
@@ -33,10 +32,9 @@ async def test_task_list_tool_returns_session_scoped_tasks():
     from agentic_runtime.context.tool_use import ToolUseContext
 
     reg = InMemoryTaskRegistry()
-    set_registry(reg)
     rec = reg.register(description="probe-subject: una tarea", session_id="s1")
 
-    result = await TaskListTool().execute({}, ctx=ToolUseContext(session_id="s1"))
+    result = await TaskListTool().execute({}, ctx=ToolUseContext(session_id="s1", task_registry=reg))
     assert not result.is_error
     listed = json.loads(result.output)
     assert any(t["task_id"] == rec.task_id for t in listed), listed

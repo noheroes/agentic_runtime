@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from ..capabilities.resolver import CapabilitiesResolver
 from ..context.tool_use import ToolUseContext
+from ..contracts.notifications import NotificationSink, apply_notification
 from ..contracts.user_input import NoopUserInputProcessor, UserInputProcessor
 from ..events.bus import EventBus
 from ..events.event_types import DoneEvent, ErrorEvent, Event, TokenEvent, ToolCallEvent, ToolResultEvent
@@ -77,6 +78,7 @@ class AgentLoop:
         deferred_strategy: "Optional[DeferredToolStrategy]" = None,
         model_options: Optional[ModelOptions] = None,
         input_processor: Optional[UserInputProcessor] = None,
+        notification_sink: Optional[NotificationSink] = None,
         max_turns: Optional[int] = None,
     ) -> None:
         self._model_caller = model_caller
@@ -107,6 +109,10 @@ class AgentLoop:
         # exportada sin consumidor. Default = passthrough, para que un runtime que no
         # inyecte nada se comporte exactamente como antes de existir la costura.
         self._input_processor: UserInputProcessor = input_processor or NoopUserInputProcessor()
+        # `S21` (`C8`, CORE-GAP `H-5`): el canal de notificaciones que este loop DRENA al
+        # arrancar. `None` = sin canal (el loop se comporta como antes de existir la
+        # costura); el runtime inyecta el suyo, y ése es el call-site que faltaba.
+        self._notification_sink = notification_sink
         # `02·A5`: el tope de vueltas era una constante de módulo, y `RuntimeTask.max_turns`
         # existía en el contrato **sin llegar a ningún sitio** (`05·FIND-EXEC5`). Ahora entra
         # por constructor; `None` = el techo de seguridad por defecto.
@@ -194,6 +200,40 @@ class AgentLoop:
         for hook in self._turn_start_hooks:
             await hook()
 
+    def _drain_notifications(self, ctx: ToolUseContext) -> int:
+        """`S21`/`H-5`: aplica al historial VIVO lo que los hijos dejaron en el canal.
+
+        Paso PROPIO del loop, no un `root_turn_start_hook`. La razón está medida
+        (`SEAMS §S21`, `AC-h3`/`AC-07`): los hooks devuelven corrutinas **de cero
+        argumentos**, así que un integrador podía drenar (tiene la task) pero **no podía
+        aplicar** —`ctx.messages` no le llega—, y la única firma que existía escribía
+        sobre `session.messages`, que `_run_loop` reasigna al terminar ⇒ el XML se
+        descartaba en silencio. Delegarlo no estaba incompleto: era imposible.
+
+        Frecuencia: una vez por `run()` = una por prompt de usuario, que es la del
+        canónico (las notificaciones entran como *attachment* junto al input,
+        `query.ts:1631-1633`), no una por turno de modelo.
+
+        Orden: **antes** del mensaje del usuario y de `_inject_recall`, porque son
+        hechos ya ocurridos — el modelo debe leer que su subagente terminó antes de leer
+        lo que el usuario le pide ahora.
+
+        Sólo la RAÍZ drena. El fork hereda `session_id` y `scope` del padre
+        (`_build_child`), así que la clave del canal `(scope, session_id)` es **la
+        misma** para padre e hijo: un subagente que drenase se comería la
+        notificación de su hermano y el padre no se enteraría nunca. En el canónico
+        las notificaciones entran por el input del usuario, que sólo la raíz tiene.
+        """
+        if self._notification_sink is None or ctx.is_subagent:
+            return 0
+        scope_key = ctx.scope.key if ctx.scope is not None else ""
+        drained = self._notification_sink.drain(scope_key, ctx.session_id)
+        for notification in drained:
+            apply_notification(ctx.messages, notification)
+        if drained:
+            logger.debug("AgentLoop: %d notificación(es) aplicadas al historial", len(drained))
+        return len(drained)
+
     # ------------------------------------------------------------------
     # Ciclo principal
     # ------------------------------------------------------------------
@@ -204,6 +244,9 @@ class AgentLoop:
             return LoopOutcome(LoopEndReason.ABORTED_PRE_RUN, ctx.turn_count)
 
         await self._run_turn_start_hooks()
+
+        # `S21`/`H-5`: el drain que el docstring del canal afirmaba y nadie hacía.
+        self._drain_notifications(ctx)
 
         # `S11` PRE-TURNO (`C4`, paga `GAP-01`). El orden es el del canónico: el
         # preproceso corre **antes** de que nada entre al historial, porque puede

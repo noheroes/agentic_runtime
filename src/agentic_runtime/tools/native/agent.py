@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...execution.fork import ForkContext, ForkPolicy, ForkSnapshot
-from ...execution.runner import get_runner
+from ...execution.fork import ForkSnapshot
+from ...execution.runner import SubagentSpec
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -76,6 +76,18 @@ class AgentTool:
                 f"Maximum subagent depth ({_MAX_SUBAGENT_DEPTH}) reached.",
             )
 
+        # `S18` por DI (`C8`): la costura llega en el `ctx`, puesta por el runtime que
+        # la recibió del ensamblador. Con el singleton global esto era
+        # `get_runner()`, que en producción **siempre** levantaba `RuntimeError` porque
+        # `create_runtime` no llamaba a `set_runner` (`FIND-EXEC1`).
+        runner = ctx.runner
+        if runner is None:
+            return ToolResult.error(
+                self.name,
+                "Subagent runner not wired: this runtime was assembled without `S18` "
+                "(RuntimeConfig.subagent_runner_factory / LocalAgentRuntime(runner_factory=…)).",
+            )
+
         snapshot = ForkSnapshot(
             session_id=ctx.session_id,
             scope=ctx.scope,
@@ -86,23 +98,19 @@ class AgentTool:
             capabilities=ctx.app_state.capabilities,
         )
 
-        policy = ForkPolicy(
-            inherit_messages=inherit_messages,
-            inherit_permissions=True,
-            inherit_tool_pool=True,
-            propagate_abort=True,
-        )
-
-        fork_ctx = ForkContext(
+        spec = SubagentSpec(
             prompt=prompt,
-            policy=policy,
-            parent_snapshot=snapshot,
+            description=input.get("description", "") or prompt[:80],
             subagent_type=subagent_type,
             model_override=model_override,
+            # Token OPACO heredado: el runtime lo transporta, no lo interpreta (`D-11`).
+            parent_session_id=ctx.session_id,
+            parent_snapshot=snapshot,
+            inherit_messages=inherit_messages,
         )
 
         try:
-            result = await get_runner().run(fork_ctx, background=run_in_background)
+            result = await runner.run(spec, background=run_in_background)
         except Exception as e:
             return ToolResult.error(self.name, f"Subagent failed: {e}")
 

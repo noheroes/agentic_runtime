@@ -1,17 +1,27 @@
 """
 Task management tools — equivalente Python de TaskCreate/Get/List/Update/Stop/Output del canónico.
-Todos operan vía get_registry() para mantenerse desacoplados de LocalAgentRuntime.
+
+**`C7` retira el doble camino.** Estas seis tools iban por el global `get_registry()`
+mientras `LocalAgentRuntime` usaba **su propia instancia inyectada**: dos caminos que
+podían divergir (`SEAMS §S19`, `existe-doble-camino`) y que de hecho divergían, porque
+nadie llamaba `set_registry` en producción ⇒ las seis reventaban con `RuntimeError`, el
+mismo modo de fallo que `FIND-EXEC1`. Ahora hay UN camino: el registry del runtime,
+threadeado al `ctx` (`S19` por DI).
 """
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from ...execution.tasks.registry import get_registry
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
+
+_NO_REGISTRY = (
+    "Task registry not wired: this runtime was assembled without `S19` "
+    "(RuntimeConfig.task_registry → LocalAgentRuntime → ctx.task_registry)."
+)
 
 
 def _session_of(ctx: "ToolUseContext | None") -> str | None:
@@ -19,14 +29,21 @@ def _session_of(ctx: "ToolUseContext | None") -> str | None:
     return getattr(ctx, "session_id", None)
 
 
+def _registry_of(ctx: "ToolUseContext | None") -> Any:
+    """El registry del turno. `None` = costura sin poblar: la tool devuelve `is_error`
+    limpio, no levanta — que es lo que el global hacía y por lo que nadie lo notaba."""
+    return getattr(ctx, "task_registry", None)
+
+
 def _scoped_get(task_id: str, ctx: "ToolUseContext | None"):
     """Resuelve un task SÓLO si pertenece a la lista de la sesión activa.
 
     Un `task_id` de otra sesión es invisible (espejo: no está en el tasks-dir
     de esta sesión) → se trata como inexistente."""
-    from ...execution.tasks.registry import get_registry
-
-    record = get_registry().get(task_id)
+    registry = _registry_of(ctx)
+    if registry is None:
+        return None
+    record = registry.get(task_id)
     if record is None or record.owner_session_id != _session_of(ctx):
         return None
     return record
@@ -51,7 +68,10 @@ class TaskCreateTool:
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         subject = input.get("subject", "")
         description = input.get("description", "")
-        record = get_registry().register(
+        registry = _registry_of(ctx)
+        if registry is None:
+            return ToolResult.error(self.name, _NO_REGISTRY)
+        record = registry.register(
             description=f"{subject}: {description}", session_id=_session_of(ctx)
         )
         return ToolResult(
@@ -110,7 +130,9 @@ class TaskListTool:
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         status_filter = input.get("status")
-        registry = get_registry()
+        registry = _registry_of(ctx)
+        if registry is None:
+            return ToolResult.error(self.name, _NO_REGISTRY)
         # Escopado a la lista de la sesión activa (espejo de `getTaskListId()` →
         # `getSessionId()`): una sesión sólo ve sus propias tareas, sin bleed.
         records = registry.list_for(_session_of(ctx))
@@ -184,7 +206,7 @@ class TaskStopTool:
             return ToolResult.error(
                 self.name, f"Task {task_id} not found or already terminal."
             )
-        killed = get_registry().kill(task_id)
+        killed = _registry_of(ctx).kill(task_id)
         if not killed:
             return ToolResult.error(
                 self.name, f"Task {task_id} not found or already terminal."

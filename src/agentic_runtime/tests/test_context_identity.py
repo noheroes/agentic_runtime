@@ -28,7 +28,6 @@ from agentic_runtime.execution.fork import (
     RuntimeContextForker,
 )
 from agentic_runtime.execution.local.runtime import LocalAgentRuntime
-from agentic_runtime.execution.runner import set_runner
 from agentic_runtime.contracts.errors import RuntimeIdentityError
 from agentic_runtime.contracts.identity import Scope
 
@@ -145,15 +144,17 @@ async def test_agent_tool_snapshot_carries_parent_scope():
     captured: dict = {}
 
     class _CapturingRunner:
-        async def run(self, fork_ctx, *, background):
-            captured["fork_ctx"] = fork_ctx
+        async def run(self, spec, *, background=False):
+            captured["spec"] = spec
             return "task-xyz"
 
-    set_runner(_CapturingRunner())
-    ctx = ToolUseContext(session_id="s1", scope=Scope("u-parent"))
+    # `C8`: la costura llega por el `ctx`, no por un global (`set_runner` ya no existe).
+    ctx = ToolUseContext(
+        session_id="s1", scope=Scope("u-parent"), runner=_CapturingRunner()
+    )
     await AgentTool().execute({"prompt": "go", "description": "d"}, ctx)
 
-    assert captured["fork_ctx"].parent_snapshot.scope == Scope("u-parent")
+    assert captured["spec"].parent_snapshot.scope == Scope("u-parent")
 
 
 @pytest.mark.asyncio
@@ -165,17 +166,18 @@ async def test_agent_tool_snapshot_carries_parent_capabilities():
     captured: dict = {}
 
     class _CapturingRunner:
-        async def run(self, fork_ctx, *, background):
-            captured["fork_ctx"] = fork_ctx
+        async def run(self, spec, *, background=False):
+            captured["spec"] = spec
             return "task-xyz"
 
-    set_runner(_CapturingRunner())
     sentinel = object()
-    ctx = ToolUseContext(session_id="s1", scope=Scope("u-parent"))
+    ctx = ToolUseContext(
+        session_id="s1", scope=Scope("u-parent"), runner=_CapturingRunner()
+    )
     ctx.app_state.capabilities["mcp"] = sentinel
     await AgentTool().execute({"prompt": "go", "description": "d"}, ctx)
 
-    assert captured["fork_ctx"].parent_snapshot.capabilities.get("mcp") is sentinel
+    assert captured["spec"].parent_snapshot.capabilities.get("mcp") is sentinel
 
 
 # --- 5. Tier 2: memoria scopeada por usuario -------------------------------

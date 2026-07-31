@@ -19,19 +19,6 @@ from agentic_runtime.factory import (
 )
 
 
-@pytest.fixture
-def _reset_runner():
-    """Aísla el `_runner` global de execution/runner.py (evita filtrado entre tests)."""
-    import agentic_runtime.execution.runner as runner_mod
-
-    prev = runner_mod._runner
-    runner_mod._runner = None
-    try:
-        yield runner_mod
-    finally:
-        runner_mod._runner = prev
-
-
 # --------------------------------------------------------------------------
 # Deuda A propia de 18
 # --------------------------------------------------------------------------
@@ -71,20 +58,27 @@ def test_create_runtime_does_not_wire_dead_resolver(tmp_path):
 # C1 = FIND-EXEC1 — convergencia observable (el xfail source-grep vive en 05)
 # --------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C1=FIND-EXEC1 (converge en 18): create_runtime NO llama set_runner(), así que "
-    "get_runner() sigue lanzando RuntimeError tras ensamblar → todo spawn de subagente "
-    "(AgentTool→get_runner().run) revienta. Passing = el factory registra el runner "
-    "(remediación real en 05·ExR1). Prueba el efecto observable, no el source.",
-)
-def test_create_runtime_wires_runner_so_subagents_spawn(tmp_path, _reset_runner):
-    create_runtime(config=RuntimeConfig(
+def test_create_runtime_wires_runner_so_subagents_spawn(tmp_path):
+    """`C1=FIND-EXEC1` PAGADO (`C8`): tras ensamblar, el spawn tiene con qué correr.
+
+    Era `xfail(strict)` porque `get_runner()` levantaba `RuntimeError` tras
+    `create_runtime`. Ya no hay `get_runner()`: la costura viaja por DI y lo observable
+    es que el runtime la lleva puesta y la threadea al `ctx` de cada task.
+    """
+    runtime = create_runtime(config=RuntimeConfig(
         storage=StorageConfig(backend="filesystem", root=tmp_path),
     ))
-    # Tras ensamblar, el runner DEBERÍA estar registrado (sin set_runner manual):
-    runner = execution.get_runner()  # hoy lanza RuntimeError → el xfail
-    assert runner is not None
+    assert isinstance(runtime._runner, execution.SubagentRunnerProtocol)
+
+
+def test_create_runtime_can_be_assembled_without_subagents(tmp_path):
+    """Y la costura se puede dejar vacía **a propósito**, que es distinto de olvidarla:
+    `subagent_runner_factory=lambda _rt: None` ensambla un runtime sin subagentes."""
+    runtime = create_runtime(config=RuntimeConfig(
+        storage=StorageConfig(backend="filesystem", root=tmp_path),
+        subagent_runner_factory=lambda _rt: None,
+    ))
+    assert runtime._runner is None
 
 
 # --------------------------------------------------------------------------

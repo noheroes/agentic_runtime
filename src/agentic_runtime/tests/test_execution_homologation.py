@@ -109,19 +109,21 @@ def test_subagent_depth_cap_enforced_by_agent_tool():
 
 # --- FIND-EXEC1: el runner de subagentes NO está cableado en producción -------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FIND-EXEC1: factory._build_local nunca llama set_runner(); AgentTool→"
-    "get_runner().run() reventaría (RuntimeError). Falta el adaptador "
-    "ForkContext→RuntimeTask que puentee AgentTool ↔ LocalAgentRuntime.dispatch. "
-    "Sólo los tests registran un runner.",
-)
-def test_factory_wires_subagent_runner():
-    """El factory debería cablear el runner para que AgentTool pueda spawnear subagentes."""
-    from agentic_runtime import factory as factory_mod
+def test_factory_wires_subagent_runner(tmp_path):
+    """`FIND-EXEC1` PAGADO (`C8`): el ensamblador puebla `S18`.
 
-    src = inspect.getsource(factory_mod)
-    assert "set_runner" in src
+    Este test era `xfail(strict)` y aseveraba `"set_runner" in <source del factory>` —
+    una aserción sobre el TEXTO, que es lo único que se podía aseverar mientras la
+    costura vivía en un global. Ahora asevera el efecto: el runtime que devuelve
+    `create_runtime` trae su runner, y es un `SubagentRunnerProtocol` de verdad.
+    """
+    from agentic_runtime.execution.runner import SubagentRunnerProtocol
+    from agentic_runtime.factory import RuntimeConfig, StorageConfig, create_runtime
+
+    runtime = create_runtime(config=RuntimeConfig(
+        storage=StorageConfig(backend="filesystem", root=tmp_path),
+    ))
+    assert isinstance(runtime._runner, SubagentRunnerProtocol)
 
 
 # --- FIND-EXEC2: el fork con inherit_messages no filtra tool_use colgantes ----

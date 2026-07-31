@@ -9,7 +9,8 @@ from .context.adapters import (
 )
 from .context.tool_use import AppState, ContextModifier, ToolUseContext
 from .execution.fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContextForker
-from .execution.local.notification import BackgroundNotification, drain_notifications, process_background_notification, put_notification
+from .contracts.notifications import NotificationSink, apply_notification
+from .execution.local.notification import BackgroundNotification, drain_notifications, put_notification
 from .contracts.runtime import AgentRuntime, RuntimeTask
 from .tools import NativeToolRegistry, ToolPool, assemble_tool_pool
 
@@ -35,8 +36,9 @@ __all__ = [
     "apply_context_modifier_compat",
     "assemble_tool_pool",
     "collect_compaction_context",
+    "NotificationSink",
+    "apply_notification",
     "drain_notifications",
-    "process_background_notification",
     "put_notification",
     "sync_session_from_tool_use_context",
     "tool_use_context_from_session",

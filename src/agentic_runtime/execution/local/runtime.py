@@ -32,7 +32,7 @@ from ..fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContextForker
 from ..session import Session
 from ..tasks.registry import InMemoryTaskRegistry, TaskRegistryProtocol
 from ..tasks.status import TaskStatus
-from .notification import BackgroundNotification, put_notification
+from .notification import BackgroundNotification, InProcessNotificationSink
 from .summarizer import summarize_if_needed
 
 if TYPE_CHECKING:
@@ -82,6 +82,17 @@ class LocalAgentRuntime:
         stt: Any = None,
         tts: Any = None,
         agent_resolver: Any = None,
+        # `S18` (`C8`): FÁBRICA del runner, no el runner. El runner tiene que despachar
+        # al hijo en un runtime, y en esta composición ese runtime es ESTE (un runtime,
+        # muchas tasks; el fork ocurre por task vía `ForkSnapshot`), así que la única
+        # forma de inyectarlo por CONSTRUCTOR —y no en un segundo paso que el ensamblador
+        # pudiera olvidar, que es exactamente el modo de fallo de `FIND-EXEC1`— es
+        # recibir `(runtime) -> SubagentRunnerProtocol`. Una sola grafía del cable
+        # (`AC-39`): quien quiera inyectar un runner ya construido pasa `lambda _rt: r`.
+        runner_factory: Any = None,
+        # `S21` (`C8`/`H-5`): canal de notificaciones. Default = el canal en-proceso, para
+        # que el drenador del padre funcione sin que el integrador cablee nada.
+        notification_sink: Any = None,
         scope: Scope | None = None,
         session_repo: "SessionRepo[Any] | None" = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
@@ -115,6 +126,11 @@ class LocalAgentRuntime:
         # provee el host (espejo de options.agentDefinitions). None = sin agentes
         # especializados: el subagente corre como fork genérico heredando al padre.
         self._agent_resolver = agent_resolver
+        # `S18`: se resuelve AQUÍ, en el constructor, y queda en `self._runner`. Si nadie
+        # inyecta fábrica, la costura queda **vacía y visible** (`ctx.runner is None` ⇒
+        # `is_error` en la tool) en vez de fingirse con un default silencioso.
+        self._runner = runner_factory(self) if runner_factory is not None else None
+        self._notification_sink = notification_sink or InProcessNotificationSink()
         # Primitivas de voz ya resueltas por el factory (None = canal inactivo).
         self._stt = stt
         self._tts = tts
@@ -202,6 +218,24 @@ class LocalAgentRuntime:
             if event is sentinel:
                 return
             yield event
+
+    async def join(self, task_id: str) -> str | None:
+        """Espera a que la task termine y devuelve su resultado.
+
+        **Enriquecimiento de `S4` que `C8` obligó a declarar** (`SEAMS §S4`): la façade
+        tenía `dispatch`/`status`/`result` pero ningún modo de ESPERAR, y un spawn de
+        subagente en primer plano es exactamente eso — el padre bloquea en el hijo. Sin
+        este miembro, el runner sólo podía esperar hurgando en el `asyncio.Task` que el
+        registry guarda, o sea rompiendo la costura por dentro. Un `task_id` desconocido
+        devuelve `None` en vez de colgarse.
+        """
+        rec = self._task_registry.get(task_id)
+        if rec is None:
+            return None
+        asyncio_task = rec.asyncio_task
+        if asyncio_task is not None and not asyncio_task.done():
+            await asyncio.wait([asyncio_task])
+        return self.result(task_id)
 
     def status(self, task_id: str) -> TaskStatus | None:
         rec = self._task_registry.get(task_id)
@@ -343,7 +377,7 @@ class LocalAgentRuntime:
                 final_text: str) -> None:
         if parent_session_id is None:
             return
-        put_notification(BackgroundNotification(
+        self._notification_sink.put(BackgroundNotification(
             parent_scope=parent_scope.key if parent_scope else "",
             parent_session_id=parent_session_id,
             task_id=task_id, status=status,
@@ -378,6 +412,11 @@ class LocalAgentRuntime:
             # Credenciales git (clone_repository): peer de exec_env — se asigna a CADA ctx
             # (raíz y subagente), así el agente que clona siempre las tiene.
             ctx.git_credentials = self._git_credentials
+            # `S18`/`S19` (`C8`/`C7`): las dos costuras que vivían en globales se threadean
+            # AQUÍ, en el punto único por el que pasan raíz y fork — así un subagente puede
+            # a su vez delegar (topado por `subagent_depth`) y ver las tasks de su sesión.
+            ctx.runner = self._runner
+            ctx.task_registry = self._task_registry
             # fs: costura de confinamiento inyectada por el consumidor. Si no se inyecta, el ctx
             # conserva su default seguro (ConfinedFilesystem confinado a cwd) — nunca ilimitado.
             if self._fs is not None:
@@ -423,6 +462,10 @@ class LocalAgentRuntime:
                 model_options=self._model_options,
                 # `S11` per-runtime (`C4`): el preproceso viaja por constructor, `S27`.
                 input_processor=self._input_processor,
+                # `S21` (`C8`/`H-5`): con esto el loop drena el canal al arrancar el run
+                # y el padre SE ENTERA de que su subagente terminó. Sin esto la
+                # maquinaria completa del canal seguía sin call-site.
+                notification_sink=self._notification_sink,
                 # `max_turns` por TAREA gana al techo del runtime (`query.ts:1705`).
                 max_turns=task.max_turns,
                 system_prompt_override=system_prompt_override,

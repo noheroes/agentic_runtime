@@ -485,37 +485,31 @@ async def test_e6_negative_runtime_refuses_to_invent_identity_end_to_end(tmp_pat
 #      de tool y el loop re-entra. Es lo único que distingue *falla limpio* de
 #      *revienta el turno*.
 #
-# ⚠ **hallazgo medido en esta ventana, no inferido** (`factory.py` leído 1→EOF):
-# `create_runtime` **nunca llama `set_runner`** — el ensamblador de producción no
-# puebla `S18`. O sea que hoy el estado «sin cablear» **no es un caso de prueba
-# artificial: es el de producción**, y todo spawn real devuelve el error de la
-# pieza 2. Es `FIND-EXEC1`, sigue abierto, y su pago es de **`C8`** (que además
-# retira el global en favor de `ctx.runner`, `TRAMO-1 §C8·cableado`). `E4` lo deja
-# aseverado en vez de narrado: cuando `C8` cablee el runner, la pieza 3 seguirá
-# midiendo lo mismo porque construye su runtime **sin** él explícitamente.
+# ⚠ **`FIND-EXEC1` está PAGADO** (`C8`, esta ventana). Cuando `E4` se escribió, el
+# hallazgo medido era que `create_runtime` **nunca llamaba `set_runner`**: el
+# ensamblador de producción no poblaba `S18` y todo spawn real devolvía el error
+# de la pieza 2. La pieza 3 se escribió entonces como fotografía de ese estado y
+# **con su propia muerte anunciada** — «se pondrá roja cuando `C8` cablee el
+# runner». Se puso roja, y aquí está reescrita contra la costura nueva: hoy
+# asevera lo contrario, que el ensamblador **sí** puebla `S18` y lo threadea hasta
+# el `ctx` de la task. El global `_runner`/`set_runner`/`get_runner` ya no existe
+# (`SEAMS §S18`: singleton global → deps-DI `S27`), así que tampoco existe la
+# fixture que lo aislaba: la costura viaja por `ToolUseContext.runner` y el
+# aislamiento entre piezas es el que da construir un ctx por pieza.
 #
-# El global `_runner` se aísla en cada pieza: es estado de proceso, y dejarlo
-# sucio contamina otras corridas (medido: `test_context_identity.py:152,172` lo
-# setea y no lo restaura).
-
-@pytest.fixture
-def _isolated_runner():
-    """Salva y restaura el `_runner` global — sin esto, `E4` mide al vecino."""
-    from agentic_runtime.execution import runner as runner_mod
-
-    previous = runner_mod._runner
-    runner_mod._runner = None
-    try:
-        yield runner_mod
-    finally:
-        runner_mod._runner = previous
+# El caso «sin cablear» de las piezas 2 y 4 deja por eso de ser el de producción y
+# pasa a construirse **explícitamente** (`runner=None` en el ctx;
+# `subagent_runner_factory=lambda _rt: None` en el ensamblador). Es lo correcto:
+# `E4` mide que la costura es *load-bearing*, no que esté rota.
 
 
-def _agent_tool_ctx(scope: Scope) -> ToolUseContext:
-    return ToolUseContext(session_id=f"sess-E4-{uuid.uuid4().hex}", scope=scope)
+def _agent_tool_ctx(scope: Scope, runner: Any = None) -> ToolUseContext:
+    return ToolUseContext(
+        session_id=f"sess-E4-{uuid.uuid4().hex}", scope=scope, runner=runner
+    )
 
 
-async def test_e4_control_positive_agent_tool_spawns_when_the_seam_is_wired(_isolated_runner):
+async def test_e4_control_positive_agent_tool_spawns_when_the_seam_is_wired():
     """Control: con la costura poblada, el spawn OCURRE y devuelve su salida.
 
     Sin esta pieza, la negativa de abajo pasaría igual con una `AgentTool` que no
@@ -525,25 +519,26 @@ async def test_e4_control_positive_agent_tool_spawns_when_the_seam_is_wired(_iso
     seen: list[Any] = []
 
     class _Runner:
-        async def run(self, fork_ctx: Any, *, background: bool) -> str | None:
-            seen.append((fork_ctx, background))
+        async def run(self, spec: Any, *, background: bool = False) -> str | None:
+            seen.append((spec, background))
             return token
-
-    _isolated_runner.set_runner(_Runner())
 
     from agentic_runtime.tools.native.agent import AgentTool
 
     result = await AgentTool().execute(
         {"prompt": "haz algo", "description": "hijo-e4"},
-        _agent_tool_ctx(Scope("scope-e4-positiva")),
+        _agent_tool_ctx(Scope("scope-e4-positiva"), runner=_Runner()),
     )
 
     assert result.is_error is False, result.output
     assert token in result.output, "la salida del hijo no llegó al padre"
     assert seen and seen[0][1] is False, "el spawn no cruzó la costura"
+    # y cruzó con la forma nueva de `S18`: un `SubagentSpec`, no un `ForkContext`.
+    assert seen[0][0].prompt == "haz algo"
+    assert seen[0][0].parent_snapshot.scope == Scope("scope-e4-positiva")
 
 
-async def test_e4_negative_unwired_runner_yields_clean_is_error_not_an_exception(_isolated_runner):
+async def test_e4_negative_unwired_runner_yields_clean_is_error_not_an_exception():
     """**La negativa obligatoria del gate.** Sin runner, `is_error` limpio.
 
     Dos cosas a la vez, y las dos importan:
@@ -552,53 +547,86 @@ async def test_e4_negative_unwired_runner_yields_clean_is_error_not_an_exception
       · **`is_error=True`** — si devolviera un `ToolResult` normal, el modelo leería
         el fallo como éxito, que es el modo de fallo caro de `L09`.
     """
-    assert _isolated_runner._runner is None, "la fixture no aisló el global"
+    ctx = _agent_tool_ctx(Scope("scope-e4-negativa"))
+    assert ctx.runner is None, "el ctx de la negativa llegó con la costura puesta"
 
     from agentic_runtime.tools.native.agent import AgentTool
 
     result = await AgentTool().execute(
-        {"prompt": "haz algo", "description": "hijo-e4-negativa"},
-        _agent_tool_ctx(Scope("scope-e4-negativa")),
+        {"prompt": "haz algo", "description": "hijo-e4-negativa"}, ctx
     )
 
     assert result.is_error is True, "el spawn sin costura se dio por bueno"
-    assert "Subagent failed" in result.output
+    assert "Subagent runner not wired" in result.output
     assert result.tool_name == "Agent"
 
 
-def test_e4_the_production_assembler_does_not_wire_the_runner_yet(tmp_path, _isolated_runner):
-    """`FIND-EXEC1` **aseverado**, no narrado: `create_runtime` no puebla `S18`.
+async def test_e4_the_production_assembler_wires_the_runner_and_threads_it_to_the_ctx(tmp_path):
+    """`FIND-EXEC1` **pagado**, aseverado por el camino de producción entero.
 
-    Este test es una **fotografía del estado real**, y está escrito para ponerse
-    ROJO cuando `C8` cablee el runner por `ctx.runner`. Ese rojo será la señal de
-    que la pieza 3 hay que reescribirla contra la costura nueva — que es
-    exactamente lo que se quiere que ocurra, en vez de que `E4` siga verde
-    midiendo un mundo que ya cambió.
+    No basta con mirar `runtime._runner`: eso probaría que la costura *existe* en
+    el ensamblador, no que *llega* a quien la usa (`L09` — cablear ≠ existir). El
+    testigo es un `UserInputProcessor` real (`S11`) cableado por
+    `RuntimeConfig.input_processor`, que corre **dentro** del turno y ve el mismo
+    `ctx` que verá `AgentTool`. Corta el turno (`short_circuit`) para que la pieza
+    no necesite modelo: lo que mide es el threading, no la conversación.
     """
-    _runtime(tmp_path, object(), (), Scope("scope-e4-find-exec1"))
+    from agentic_runtime.contracts.user_input import ProcessedInput
+    from agentic_runtime.execution.runner import SubagentRunnerProtocol
 
-    assert _isolated_runner._runner is None, (
-        "`create_runtime` ya cablea el runner: `FIND-EXEC1` está pagado y la pieza 3 "
-        "de `E4` debe reescribirse contra `ctx.runner` (`C8`)"
+    seen: list[Any] = []
+
+    class _RunnerWitness:
+        async def process(self, prompt: str, ctx: Any) -> ProcessedInput:
+            seen.append(getattr(ctx, "runner", None))
+            return ProcessedInput(prompt=prompt, short_circuit=True, result_text="ok")
+
+    runtime = _runtime(
+        tmp_path, None, (), Scope("scope-e4-find-exec1"), input_processor=_RunnerWitness()
+    )
+
+    # 1. el ensamblador puebla `S18` — lo que `create_runtime` NO hacía.
+    assert isinstance(runtime._runner, SubagentRunnerProtocol), (
+        "`create_runtime` volvió a ensamblar un runtime sin runner: `FIND-EXEC1`"
+    )
+
+    # 2. y esa costura LLEGA al ctx del turno.
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt="da igual, el turno se corta",
+        description="gate-e4-threading",
+        session_id=f"sess-E4-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    assert runtime.status(task_id) is TaskStatus.COMPLETED, runtime.result(task_id)
+    assert seen, "el testigo `S11` no llegó a correr: el turno no ocurrió"
+    assert seen[0] is runtime._runner, (
+        "el runner del ensamblador no llegó al `ctx`: la costura existe pero no se cablea"
     )
 
 
 @_needs_azure
-async def test_e4_negative_end_to_end_the_parent_turn_survives_an_unwired_spawn(
-    tmp_path, _isolated_runner,
-):
+async def test_e4_negative_end_to_end_the_parent_turn_survives_an_unwired_spawn(tmp_path):
     """Turno REAL: el modelo pide un subagente, no hay costura, y el padre sobrevive.
 
     Esto es lo que ninguna unitaria acredita: que el fallo de la costura viaja
     **como resultado de tool** por el camino de producción entero (dispatcher →
     aplanado → re-entrada del loop) y el turno termina `COMPLETED` en vez de
     dejar la task en `FAILED` con una excepción escapada.
+
+    El runtime se ensambla **explícitamente sin subagentes**
+    (`subagent_runner_factory=lambda _rt: None`): desde que `C8` pagó
+    `FIND-EXEC1`, el default de producción SÍ cablea `S18`, así que el caso «sin
+    costura» hay que construirlo a propósito en vez de heredarlo del defecto.
     """
     probe = ModelSeamProbe(_build_caller(
         "Cuando te pidan delegar trabajo, usa la herramienta Agent. Si la herramienta "
         "devuelve un error, explica en una linea que la delegacion fallo."
     ))
-    runtime = _runtime(tmp_path, probe, (), Scope("scope-e4-e2e"))
+    runtime = _runtime(
+        tmp_path, probe, (), Scope("scope-e4-e2e"),
+        subagent_runner_factory=lambda _rt: None,
+    )
 
     task_id = await runtime.dispatch(RuntimeTask(
         prompt="Delega en un subagente la tarea de listar tres colores. Usa la herramienta Agent.",
@@ -613,7 +641,7 @@ async def test_e4_negative_end_to_end_the_parent_turn_survives_an_unwired_spawn(
 
     # 2. y el modelo LLEGÓ a pedir el spawn — si no, no habría fallo que sobrevivir.
     payload = probe.wire_payload()
-    assert "Subagent failed" in payload, (
+    assert "Subagent runner not wired" in payload, (
         "el error de la costura no volvió al modelo como resultado de tool: "
         f"{payload[-1500:]}"
     )
@@ -636,3 +664,145 @@ def test_e6_old_identity_spelling_explodes_instead_of_being_dropped():
     for spelling in _IDENTITY_SPELLINGS:
         with pytest.raises(ValidationError):
             ToolUseContext(session_id="s1", **{spelling: "u1"})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E3 · el padre DELEGA de verdad y el resultado del hijo vuelve aplanado
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `TRAMO-1 §4·E3`: *turno real padre→subagente; el resultado del hijo se aplana y
+# el padre lo cita*. Acredita `C8` (`S18` por DI) por el camino de producción
+# entero: `create_runtime` → `ctx.runner` → `LocalSubagentRunner` → `dispatch` del
+# hijo → `join` → `ToolResult` del `AgentTool` → re-entrada del loop del padre.
+#
+# Es la pieza POSITIVA que le faltaba a `E4`: `E4` prueba que sin costura se falla
+# limpio, y sin `E3` «falla limpio» sería compatible con «no delega nunca».
+#
+# El token del hijo es un `uuid` por corrida devuelto por una tool REAL que sólo
+# el hijo puede haber llamado: si el padre lo cita, es que la salida del hijo
+# cruzó de vuelta. Inadivinable a propósito (`L09`).
+
+@_needs_azure
+async def test_e3_the_parent_delegates_for_real_and_quotes_the_child_result(tmp_path):
+    """Padre→hijo REAL: dos turnos de modelo distintos, un token que sólo el hijo ve."""
+    code = f"EXP-{uuid.uuid4().hex[:8].upper()}"
+    witness = IdentityWitnessTool(code)
+    # El prompt de sistema es del RUNTIME, así que lo lee también el hijo: por eso se
+    # escribe condicionado al rol y no «eres un coordinador que nunca llama la tool»
+    # —medido en esta ventana: con esa forma el hijo se creía coordinador, volvía a
+    # delegar y la delegación se hacía recursiva hasta el tope de profundidad—.
+    probe = ModelSeamProbe(_build_caller(
+        "Trabajas con herramientas. Si te piden DELEGAR, usa la herramienta Agent una sola "
+        "vez, con inherit_messages=false, y despues repite literalmente el codigo que te "
+        "devuelva. Si lo que te piden es consultar el expediente, llama tu mismo a la "
+        "herramienta consultar_expediente y responde solo con su codigo. Nunca delegues una "
+        "tarea que ya te han delegado a ti."
+    ))
+    runtime = _runtime(tmp_path, probe, (witness,), Scope("scope-e3"))
+
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt=(
+            "Delega en un subagente con la herramienta Agent esta tarea: llamar a la "
+            "herramienta consultar_expediente y devolver el codigo de verificacion. "
+            "Luego dime ese codigo."
+        ),
+        description="gate-e3-delegacion-real",
+        session_id=f"sess-E3-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    result = runtime.result(task_id) or ""
+    assert runtime.status(task_id) is TaskStatus.COMPLETED, result
+
+    # 1. el hijo corrió DE VERDAD, y corrió como hijo — no fue el padre llamando la
+    #    tool y diciendo que delegó.
+    assert witness.seen, "nadie llamó a la tool: no hubo turno de subagente"
+    child_ctxs = [c for c in witness.seen if c.is_subagent]
+    assert child_ctxs, "la tool la ejecutó el padre: no hubo delegación (`S18` sin cruzar)"
+
+    # 2. el hijo heredó la identidad del padre POR DATO (`D-11`), sin inventarse nada.
+    assert child_ctxs[0].scope == Scope("scope-e3")
+    assert child_ctxs[0].subagent_depth == 1
+
+    # 3. y su salida volvió APLANADA al padre, que la cita.
+    assert code in result, f"el padre no citó el resultado del hijo: {result!r}"
+
+    # 4. el aplanado cruzó el cable del modelo como resultado de tool (no lo adivinó).
+    assert code in probe.wire_payload()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E9 · la notificación del hijo de fondo LLEGA al historial vivo del padre
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `TRAMO-1 §4·E9`: *el padre recibe y aplica la notificación de un hijo*. Acredita
+# el `CORE-GAP H-5`: el canal `S21` tenía `put` y no tenía **call-site de drenaje**
+# — la maquinaria entera existía y no la llamaba nadie, y la única firma de
+# aplicación que había escribía sobre `session.messages`, que `_run_loop` reasigna
+# al terminar, así que el XML se descartaba en silencio.
+#
+# Divergencia declarada (`L10`), dicha antes de que se note: lo que este test NO
+# deja al modelo es la **decisión** de lanzar en background — el spawn de fondo se
+# pide por la costura (`AgentTool` con `run_in_background`), no rogándole al
+# modelo que elija ese flag. El MECANISMO es entero de producción (runner real →
+# `dispatch` real → turno de modelo REAL del hijo → `_notify` → canal → drenaje del
+# loop del padre → `apply_notification` → cable del modelo), y el turno del padre
+# que consume la notificación es un turno real. `S22 ForceAsyncPolicy` sigue
+# **ausente** (`TRAMO-1`, bajo la línea de corte): no se simula.
+
+@_needs_azure
+async def test_e9_the_background_child_notification_reaches_the_parent_live_history(tmp_path):
+    """`H-5` pagado: el hijo de fondo termina y el padre SE ENTERA en su turno siguiente."""
+    from agentic_runtime.tools.native.agent import AgentTool
+
+    code = f"EXP-{uuid.uuid4().hex[:8].upper()}"
+    witness = IdentityWitnessTool(code)
+    probe = ModelSeamProbe(_build_caller(
+        "Respondes en una linea. Si en la conversacion aparece una notificacion de una "
+        "tarea de fondo, cita literalmente el codigo que contenga."
+    ))
+    scope = Scope("scope-e9")
+    session_id = f"sess-E9-{uuid.uuid4().hex}"
+    runtime = _runtime(tmp_path, probe, (witness,), scope)
+
+    # 1. spawn de FONDO por la costura real: el `ctx` lleva el runner que ensambló
+    #    `create_runtime`, igual que el que `_run_loop` threadea en un turno.
+    ctx = ToolUseContext(session_id=session_id, scope=scope, runner=runtime._runner)
+    spawn = await AgentTool().execute(
+        {
+            "prompt": (
+                "Llama a la herramienta consultar_expediente y responde SOLO con el "
+                "codigo de verificacion que devuelva."
+            ),
+            "description": "hijo-e9-de-fondo",
+            "run_in_background": True,
+        },
+        ctx,
+    )
+    assert spawn.is_error is False, spawn.output
+
+    child_id = spawn.output.strip().split()[-1]
+    child = runtime._task_registry.get(child_id)
+    assert child is not None, f"el spawn de fondo no dejó task en el registry: {spawn.output!r}"
+    await child.asyncio_task
+    assert runtime.status(child_id) is TaskStatus.COMPLETED, runtime.result(child_id)
+    assert code in (runtime.result(child_id) or ""), "el hijo no llegó a resolver su tarea"
+
+    # 2. turno REAL del padre, MISMA sesión: al arrancar drena el canal y aplica.
+    parent_id = await runtime.dispatch(RuntimeTask(
+        prompt="Que te ha reportado tu tarea de fondo?",
+        description="gate-e9-padre-se-entera",
+        session_id=session_id,
+    ))
+    await runtime._task_registry.get(parent_id).asyncio_task
+    assert runtime.status(parent_id) is TaskStatus.COMPLETED, runtime.result(parent_id)
+
+    # 3. la notificación cruzó AL MODELO — historial vivo, no `session.messages`.
+    payload = probe.wire_payload()
+    assert "<task-notification" in payload, (
+        f"el canal no se drenó en el turno del padre (`H-5`): {payload[-1500:]}"
+    )
+    assert code in payload, "la notificación llegó vacía de lo que el hijo produjo"
+
+    # 4. y se consume UNA vez: el canal queda limpio tras aplicarla.
+    assert runtime._notification_sink.drain(scope.key, session_id) == []

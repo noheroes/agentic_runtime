@@ -1,19 +1,21 @@
 """
-BackgroundNotificationChannel — canal de notificaciones para agentes background.
+Canal en-proceso de notificaciones background — implementación concreta de `S21`.
 
-El agente hijo escribe al canal al terminar (sin referencia viva al objeto Session
-del padre). El loop padre drena el canal al inicio de cada turno, convierte las
-entradas en mensajes <task-notification> y aplica display_messages si corresponde.
+El agente hijo escribe al canal al terminar (sin referencia viva al objeto Session del
+padre). El loop del padre lo **drena al arrancar su run** y aplica cada entrada al
+historial vivo con `apply_notification` (`contracts/notifications.py`). Hasta `C8` ese
+drain **no existía**: el docstring lo afirmaba y ningún productor lo llamaba (CORE-GAP
+`H-5`), así que el padre no se enteraba nunca de que su subagente había terminado.
+
+El contrato (`BackgroundNotification`, `NotificationSink`, `apply_notification`) vive en
+`contracts/notifications.py`; aquí sólo el canal.
 """
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from ..session import Session
+from ...contracts.notifications import BackgroundNotification
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +24,6 @@ logger = logging.getLogger(__name__)
 # primer componente era `user_id` y pasa a ser la clave del `Scope` (`C9`/`ID-3`): el
 # runtime ya no conoce usuarios, sólo scopes opacos que le da el integrador.
 _channel: dict[tuple[str, str], list[BackgroundNotification]] = defaultdict(list)
-
-
-@dataclass
-class BackgroundNotification:
-    parent_session_id: str
-    task_id: str
-    status: str  # "completed" | "failed" | "killed"
-    description: str
-    notification_text: str
-    parent_scope: str = ""
-    final_text: str = ""
 
 
 def put_notification(notification: BackgroundNotification) -> None:
@@ -48,27 +39,24 @@ def drain_notifications(scope: str, session_id: str) -> list[BackgroundNotificat
     return _channel.pop((scope, session_id), [])
 
 
-def process_background_notification(session: "Session", notification: BackgroundNotification) -> None:
-    """Comportamiento genérico del runtime: actualiza el ref del subagente en el
-    padre e inyecta un mensaje <task-notification> en su historial.
+class InProcessNotificationSink:
+    """`NotificationSink` por defecto del runtime: el canal global de este proceso.
 
-    La presentación (display) y la persistencia NO son responsabilidad de esta
-    función: el runtime emite eventos y persiste vía StorageProtocol; el consumidor
-    proyecta su UI escuchando esos eventos (G2/D4).
+    Es el default que mantiene al runtime ejecutable por sí solo. Un integrador
+    multi-proceso inyecta el suyo (`RuntimeConfig.notification_sink`) sobre su propio
+    transporte; el loop no distingue.
     """
-    for ref in session.metadata.background_tasks:
-        if ref.task_id == notification.task_id:
-            ref.status = notification.status
-            break
 
-    xml = (
-        f'<task-notification task_id="{notification.task_id}" status="{notification.status}">\n'
-        f"<description>{notification.description}</description>\n"
-        f"<result>{notification.notification_text}</result>\n"
-        f"</task-notification>"
-    )
-    session.messages.append({"role": "user", "content": xml})
-    logger.debug(
-        "notification processed: session=%s task=%s status=%s",
-        session.session_id, notification.task_id, notification.status,
-    )
+    def put(self, notification: BackgroundNotification) -> None:
+        put_notification(notification)
+
+    def drain(self, scope: str, session_id: str) -> list[BackgroundNotification]:
+        return drain_notifications(scope, session_id)
+
+
+__all__ = [
+    "BackgroundNotification",
+    "InProcessNotificationSink",
+    "drain_notifications",
+    "put_notification",
+]
