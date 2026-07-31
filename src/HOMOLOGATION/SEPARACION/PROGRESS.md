@@ -112,3 +112,6 @@ inyectada. Todo el trabajo del tramo está **sin commitear** (HEAD = `cce603f`),
 `C2`/`C9` en `agent_loop.py` y `runtime.py`. Recuperados byte a byte desde el JSONL de la sesión y confirmados por
 la suite volviendo a su cifra exacta. **Regla permanente: en este repo no se usa `git checkout`;** el revert de una
 violación es restauración desde copia propia verificada por `sha256` (`D-09`).
+
+**Commit de control `141cbb8`** en rama `fase-b/tramo-1` (139 ficheros, +23 087/−696): cierra la exposición.
+De aquí en adelante cada término cierra con commit de control **antes** del enunciado de retoma.
