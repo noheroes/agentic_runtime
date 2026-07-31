@@ -1,14 +1,6 @@
+"""Reexport del contrato T1 de estado de task (`contracts.tasks`)."""
 from __future__ import annotations
 
-from enum import Enum
+from ...contracts.tasks import TaskStatus
 
-
-class TaskStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    KILLED = "killed"
-
-    def is_terminal(self) -> bool:
-        return self in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.KILLED)
+__all__ = ["TaskStatus"]

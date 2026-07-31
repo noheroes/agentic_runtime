@@ -6,12 +6,19 @@ and maps agentic_models stream events to agentic_runtime event types.
 """
 from __future__ import annotations
 
-import asyncio
 import json
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Mapping
 
+from ..contracts.abort import AbortSignal
 from ..events.event_types import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent, Usage
-from .protocol import ModelCallerProtocol  # noqa: F401 — satisfies Protocol
+from .protocol import (  # noqa: F401 — ModelCallerProtocol: satisfies Protocol
+    Effort,
+    ModelCallerProtocol,
+    OutputFormat,
+    ThinkingConfig,
+    ToolChoice,
+    UnsupportedModelOptionError,
+)
 
 
 def _compose_system_prompt(
@@ -148,14 +155,38 @@ class AgenticModelsCaller:
         messages: list[dict],
         tools: list[dict],
         *,
-        stop: Optional[asyncio.Event] = None,
+        stop: AbortSignal | None = None,
         model_id: str = "",
-        system_sections: Optional[list[str]] = None,
-        system_override: Optional[str] = None,
+        system_sections: list[str] | None = None,
+        system_override: str | None = None,
+        thinking: ThinkingConfig | None = None,
+        effort: Effort | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        output_format: OutputFormat | None = None,
+        tool_choice: ToolChoice | None = None,
+        metadata: Mapping[str, str] | None = None,
     ) -> AsyncGenerator[Any, None]:
+        # Lo que este motor no sabe expresar se rechaza AQUÍ, antes de abrir el
+        # stream: si se dejara pasar, el turno correría y devolvería algo que no
+        # es lo pedido (texto libre donde se pidió schema, tool opcional donde se
+        # exigió obligatoria) sin una sola señal.
+        if output_format is not None:
+            raise UnsupportedModelOptionError(
+                "`output_format` (salida estructurada) no existe en agentic_models 0.2.0: "
+                "no hay campo equivalente en StreamOptions ni en SimpleStreamOptions. "
+                "Se rechaza en vez de descartarse en silencio."
+            )
+        if tool_choice is not None and tool_choice.mode != "auto":
+            raise UnsupportedModelOptionError(
+                f"`tool_choice.mode={tool_choice.mode!r}` no existe en agentic_models 0.2.0; "
+                "sólo el comportamiento por defecto ('auto') es representable."
+            )
         return self._stream(
             messages, tools, stop=stop, model_id=model_id,
             system_sections=system_sections, system_override=system_override,
+            thinking=thinking, effort=effort, temperature=temperature,
+            max_tokens=max_tokens, metadata=metadata,
         )
 
     async def _stream(
@@ -163,13 +194,18 @@ class AgenticModelsCaller:
         messages: list[dict],
         tools: list[dict],
         *,
-        stop: Optional[asyncio.Event] = None,
+        stop: AbortSignal | None = None,
         model_id: str = "",
-        system_sections: Optional[list[str]] = None,
-        system_override: Optional[str] = None,
+        system_sections: list[str] | None = None,
+        system_override: str | None = None,
+        thinking: ThinkingConfig | None = None,
+        effort: Effort | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        metadata: Mapping[str, str] | None = None,
     ) -> AsyncGenerator[Any, None]:
-        from agentic_models import stream
-        from agentic_models.model_types import StreamOptions
+        from agentic_models import stream, stream_simple
+        from agentic_models.model_types import SimpleStreamOptions, StreamOptions
 
         # Subagente especializado (homologación subagent_type): su system prompt REEMPLAZA
         # el base del integrador (espejo getAgentSystemPrompt → [agentPrompt]); las secciones
@@ -179,15 +215,54 @@ class AgenticModelsCaller:
             messages, tools, _compose_system_prompt(base, system_sections)
         )
 
+        from dataclasses import fields, replace
+
         opts = self._options
         if opts is None:
             opts = StreamOptions()
         if self._api_key and not opts.api_key:
-            from dataclasses import replace
             opts = replace(opts, api_key=self._api_key)
         if stop is not None:
-            from dataclasses import replace
+            # `signal` es lo que los providers consultan por `.aborted`. Con el tipo
+            # viejo (`asyncio.Event`) esto viajaba igual y no lo leía nadie.
             opts = replace(opts, signal=stop)
+        if temperature is not None:
+            opts = replace(opts, temperature=temperature)
+        if max_tokens is not None:
+            opts = replace(opts, max_tokens=max_tokens)
+        if metadata:
+            # `ID-7`: opaca. Se funde con la que traiga el integrador en sus options
+            # y no se lee por el camino — el runtime sólo la transporta.
+            opts = replace(opts, metadata={**dict(opts.metadata or {}), **dict(metadata)})
+
+        # Razonamiento: NO es passthrough. `agentic_models` sólo lo expone por
+        # `stream_simple(SimpleStreamOptions.reasoning=…)`, así que el puente TRADUCE
+        # (`SEAMS §S1 A2.2`). Un `thinking.enabled=False` apaga aunque venga `effort`.
+        reasoning: str | None = effort.value if effort is not None else None
+        if thinking is not None and not thinking.enabled:
+            reasoning = None
+        if thinking is not None and thinking.enabled and reasoning is None:
+            raise UnsupportedModelOptionError(
+                "`thinking` sin `effort`: agentic_models 0.2.0 sólo aplica "
+                "`thinking_budgets` cuando hay un nivel `reasoning`, luego un "
+                "presupuesto suelto se perdería. Pásese también `effort`."
+            )
+
+        if reasoning is not None:
+            from agentic_models.model_types import ThinkingBudgets
+
+            if not isinstance(opts, SimpleStreamOptions):
+                opts = SimpleStreamOptions(
+                    **{f.name: getattr(opts, f.name) for f in fields(StreamOptions)}
+                )
+            budgets = opts.thinking_budgets
+            if thinking is not None and thinking.budget_tokens is not None:
+                # El techo pedido se aplica al nivel que se vaya a usar; se puebla
+                # todo el mapa porque el provider clampa el nivel (`xhigh → high`)
+                # y elegiría un presupuesto distinto del pedido.
+                b = thinking.budget_tokens
+                budgets = ThinkingBudgets(minimal=b, low=b, medium=b, high=b)
+            opts = replace(opts, reasoning=reasoning, thinking_budgets=budgets)
 
         # Resolución del modelo por request: model_id manda; el del constructor es el default.
         # La identidad canónica de agentic_models es (provider, id): el mismo id existe en
@@ -201,7 +276,11 @@ class AgenticModelsCaller:
             from agentic_models import get_registry
             model = get_registry().get_by_provider(self._model.provider, model_id)
 
-        event_stream = stream(model, context, opts)
+        event_stream = (
+            stream_simple(model, context, opts)  # type: ignore[arg-type]
+            if reasoning is not None
+            else stream(model, context, opts)
+        )
 
         # Providers push dicts; match on the "type" key
         async for event in event_stream:
@@ -212,7 +291,14 @@ class AgenticModelsCaller:
                 yield TokenEvent(content=delta)
 
             elif t == "toolcall_end":
-                tc = event["toolCall"] if isinstance(event, dict) else event.toolCall
+                # Dos grafías vivas del mismo campo: los providers empujan dicts
+                # camelCase (`toolCall`) y el dataclass de agentic_models 0.2.0 lo
+                # llama `tool_call`. Se aceptan ambas — quedarse con una sola
+                # rompería en silencio el día que el emisor cambie de forma.
+                if isinstance(event, dict):
+                    tc = event.get("toolCall") or event["tool_call"]
+                else:
+                    tc = getattr(event, "toolCall", None) or event.tool_call
                 yield ToolCallEvent(
                     tool_name=tc.name,
                     tool_input=tc.arguments,

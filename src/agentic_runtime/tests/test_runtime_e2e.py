@@ -31,6 +31,7 @@ from agentic_runtime.factory import (
     create_runtime,
 )
 from agentic_runtime.tools import ToolCategory, ToolResult
+from agentic_runtime.contracts.identity import Scope
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ def _runtime(tmp_path, caller, *, tools=(), capabilities=None):
 async def test_e2e_single_turn_no_tools(tmp_path):
     caller = ScriptedCaller([[TokenEvent(content="hola mundo"), DoneEvent(stop_reason="stop")]])
     runtime = _runtime(tmp_path, caller)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="saluda", description="single"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="saluda", description="single", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert runtime.status(task_id) == TaskStatus.COMPLETED
     assert runtime.result(task_id) == "hola mundo"
@@ -145,7 +146,7 @@ async def test_e2e_multi_turn_tool_call(tmp_path):
         [TokenEvent(content="terminado"), DoneEvent(stop_reason="stop")],
     ])
     runtime = _runtime(tmp_path, caller, tools=(EchoTool(),))
-    task_id = await runtime.dispatch(RuntimeTask(prompt="usa echo", description="multi"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="usa echo", description="multi", session_id="sess-test"))
     await _await_task(runtime, task_id)
 
     rec = runtime._task_registry.get(task_id)
@@ -173,7 +174,7 @@ async def test_e2e_stream_surfaces_full_event_sequence(tmp_path):
     ])
     runtime = _runtime(tmp_path, caller, tools=(EchoTool(),))
 
-    events = [ev async for ev in runtime.stream(RuntimeTask(prompt="usa echo", description="stream"))]
+    events = [ev async for ev in runtime.stream(RuntimeTask(prompt="usa echo", description="stream", session_id="sess-test"))]
 
     types = [type(e).__name__ for e in events]
     # El stream surface TODO: tool call, tool result, tokens y cierres — no solo tool events.
@@ -197,7 +198,7 @@ async def test_e2e_stream_surfaces_full_event_sequence(tmp_path):
 async def test_e2e_cancel_kills_running_task(tmp_path):
     caller = BlockingCaller()
     runtime = _runtime(tmp_path, caller)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="bloquea", description="abort"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="bloquea", description="abort", session_id="sess-test"))
     await asyncio.wait_for(caller.entered.wait(), timeout=2.0)
 
     assert await runtime.cancel(task_id) is True
@@ -218,8 +219,8 @@ async def test_e2e_background_subagent_notifies_and_persists(tmp_path):
     runtime = _runtime(tmp_path, caller)
     # La identidad de usuario del hijo viaja por el snapshot del padre (no por
     # task.owner_id, que un subagente no trae): así su transcript cae bajo user1.
-    snap = ForkSnapshot(session_id="e2e-bg-sid", user_id="user1")
-    task = RuntimeTask(prompt="trabaja", description="bg")
+    snap = ForkSnapshot(session_id="e2e-bg-sid", scope=Scope("user1"))
+    task = RuntimeTask(prompt="trabaja", description="bg", session_id="sess-test")
     task_id = await runtime.dispatch(task, parent_snapshot=snap)
     await _await_task(runtime, task_id)
 
@@ -243,10 +244,10 @@ async def test_e2e_fork_isolates_parent_messages(tmp_path):
     runtime = _runtime(tmp_path, caller)
     snap = ForkSnapshot(
         session_id="e2e-fork-sid",
-        user_id="user1",
+        scope=Scope("user1"),
         messages=({"role": "user", "content": "SECRETO_DEL_PADRE"},),
     )
-    task = RuntimeTask(prompt="trabaja aislado", description="fork", fork_context=False)
+    task = RuntimeTask(prompt="trabaja aislado", description="fork", fork_context=False, session_id="sess-test")
     task_id = await runtime.dispatch(task, parent_snapshot=snap)
     await _await_task(runtime, task_id)
     drain_notifications("user1", "e2e-fork-sid")  # no contaminar el canal global
@@ -266,7 +267,7 @@ async def test_e2e_capabilities_announces_permissioned_tool(tmp_path):
     # guarded vive en ejecución (dispatcher), no en su visibilidad.
     caller = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
     runtime = _runtime(tmp_path, caller, tools=(EchoTool(), GuardedTool()))
-    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="caps"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="caps", session_id="sess-test"))
     await _await_task(runtime, task_id)
 
     exposed = caller.seen_tools[0]
@@ -291,7 +292,7 @@ async def test_e2e_capabilities_partial_on_source_timeout(tmp_path):
         capabilities=CapabilitiesConfig(resolve_timeout_seconds=0.05),
     )
     runtime._capabilities_resolver.register_source(SlowSource())
-    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="timeout"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="timeout", session_id="sess-test"))
     await _await_task(runtime, task_id)
 
     assert runtime.status(task_id) == TaskStatus.COMPLETED
@@ -308,7 +309,7 @@ async def test_e2e_d5_a_default_capabilities_used_as_is(tmp_path):
     """(a) Capacidad default: native tools disponibles sin registrar nada."""
     caller = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
     runtime = _runtime(tmp_path, caller)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5a"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5a", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert "read_file" in caller.seen_tools[0]
     assert runtime.status(task_id) == TaskStatus.COMPLETED
@@ -330,7 +331,7 @@ async def test_e2e_d5_b_custom_backend_via_factory(tmp_path):
         model_caller=caller,
     ))
     assert getattr(runtime._storage, "is_tagged", False) is True
-    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5b"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5b", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert runtime.status(task_id) == TaskStatus.COMPLETED
 
@@ -353,6 +354,6 @@ async def test_e2e_d5_c_hand_composed_primitives(tmp_path):
         task_registry=InMemoryTaskRegistry(),
         storage=FilesystemStorage(root=tmp_path),
     )
-    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5c"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5c", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert runtime.result(task_id) == "compuesto"

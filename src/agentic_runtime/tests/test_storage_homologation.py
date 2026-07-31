@@ -21,6 +21,7 @@ from agentic_runtime.storage import (
     StorageProtocol,
     StorageRegistry,
 )
+from agentic_runtime.contracts.identity import Scope
 
 # ---------------------------------------------------------------------------
 # HOMOLOGADO (passing)
@@ -68,10 +69,10 @@ async def test_presign_returns_locator(tmp_path):
 def test_storage_keys_wired_taxonomy_shape():
     """F2/B2: la clave CABLEADA (`transcript_key`) y las declaradas comparten el subtree user/session;
     subagente anidado. Codifica la forma acordada (el que esté muerta la mayoría es FIND-STOR1, abajo)."""
-    assert StorageKeys.transcript_key("u", "s") == "u/s/session.json"
-    assert StorageKeys.transcript_key("u", "s", "a1") == "u/s/subagents/a1/session.json"
-    assert StorageKeys.meta_key("u", "s") == "u/s/session.meta.json"
-    assert StorageKeys.work_key("u", "s", "r.csv") == "u/s/work/r.csv"
+    assert StorageKeys.transcript_key(Scope("u"), "s") == "u/s/session.json"
+    assert StorageKeys.transcript_key(Scope("u"), "s", "a1") == "u/s/subagents/a1/session.json"
+    assert StorageKeys.meta_key(Scope("u"), "s") == "u/s/session.meta.json"
+    assert StorageKeys.work_key(Scope("u"), "s", "r.csv") == "u/s/work/r.csv"
 
 
 async def test_traversal_dotdot_direct_rejected(tmp_path):
@@ -97,7 +98,7 @@ def test_storage_keys_taxonomy_complete():
     assert hasattr(StorageKeys, "mcp_config_key"), "falta StorageKeys.mcp_config_key(uid)"
     assert hasattr(StorageKeys, "skill_key"), "falta StorageKeys.skill_key(uid, name)"
     assert hasattr(StorageKeys, "oauth_key"), "falta StorageKeys.oauth_key(uid, srv)"
-    assert StorageKeys.mcp_config_key("u") == "u/mcp/servers.json"
+    assert StorageKeys.mcp_config_key(Scope("u")) == "u/mcp/servers.json"
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-STOR2/StR2: transcript = snapshot-overwrite; sin append incremental")

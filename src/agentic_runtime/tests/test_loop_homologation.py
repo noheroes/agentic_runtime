@@ -21,8 +21,12 @@ import inspect
 
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.user_input import ProcessedInput
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
+from agentic_runtime.loop.outcome import LoopEndReason
 from agentic_runtime.hooks import HookEvent
 from agentic_runtime.hooks.protocol import HookDecision
 from agentic_runtime.hooks.runner import HookRunner
@@ -117,7 +121,7 @@ class StopSettingTool(RecordingTool):
     async def execute(self, input: dict, ctx) -> ToolResult:
         self.calls.append(dict(input))
         if ctx.stop is not None:
-            ctx.stop.set()
+            ctx.stop.abort()
         return ToolResult(tool_name=self.name, output="stopped")
 
 
@@ -354,8 +358,8 @@ async def test_loop_abort_before_start_makes_no_model_call():
     """ctx.stop activo antes de empezar → el loop no llama al modelo."""
     caller = ScriptedCaller([[DoneEvent(stop_reason="stop")]])
     loop = AgentLoop(model_caller=caller)
-    stop = asyncio.Event()
-    stop.set()
+    stop = AbortController()
+    stop.abort()
     await loop.run("x", _ctx(stop=stop))
     assert caller.seen_messages == []
 
@@ -373,7 +377,7 @@ async def test_loop_abort_between_turns_stops_reprompt():
         tool_registry=_registry(tool),
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx(stop=asyncio.Event())
+    ctx = _ctx(stop=AbortController())
     await loop.run("trabaja", ctx)
 
     assert len(caller.seen_messages) == 1  # solo el 1er turno llegó al modelo
@@ -449,16 +453,103 @@ async def test_loop_fires_post_tool_use_hook():
     assert HookEvent.POST_TOOL_USE in sink.events
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GAP-L2: el loop tiene el techo hardcodeado _MAX_TURNS=50; no acepta un "
-    "maxTurns configurable por el consumidor (canónico: QueryParams.maxTurns). "
-    "Ver 02-loop.md.",
-)
-def test_loop_accepts_configurable_max_turns():
-    """Homologado: maxTurns es un parámetro del consumidor, no una constante."""
-    params = inspect.signature(AgentLoop.__init__).parameters
-    assert "max_turns" in params
+async def test_loop_accepts_configurable_max_turns():
+    """`GAP-L2` pagado por `C4`: `maxTurns` es del consumidor, no una constante.
+
+    Y se comprueba **corriendo**, no con `inspect.signature`: la versión anterior de
+    este test aseveraba que el parámetro existía en la firma, que es exactamente el
+    modo de fallo de `L09` (existir ≠ estar cableado). Aquí el tope tiene que
+    **morder**: 3 vueltas y ni una más, con su reason-code.
+    """
+    tool = RecordingTool()
+    caller = ScriptedCaller([_tool_call_turn("echo", "x", f"c{i}") for i in range(20)])
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_registry(tool),
+        tool_dispatcher=ToolDispatcher(),
+        max_turns=3,
+    )
+    ctx = _ctx()
+    outcome = await loop.run("loop", ctx)
+
+    assert ctx.turn_count == 3
+    assert len(caller.seen_messages) == 3
+    assert outcome.reason is LoopEndReason.MAX_TURNS
+
+
+# ── `C4` · `S11` cableado pre-turno (`GAP-01`) y `LoopOutcome` (`02·A4`) ───────
+
+class _ShortCircuitProcessor:
+    """`S11` que resuelve la entrada localmente — el caso del slash-command."""
+
+    def __init__(self, text: str = "resuelto sin modelo") -> None:
+        self.seen: list[str] = []
+        self._text = text
+
+    async def process(self, prompt, ctx):
+        self.seen.append(prompt)
+        return ProcessedInput(prompt=prompt, short_circuit=True, result_text=self._text)
+
+
+class _RewritingProcessor:
+    """`S11` que reescribe el prompt (expansión) y deja seguir el turno."""
+
+    async def process(self, prompt, ctx):
+        return ProcessedInput(prompt=f"[expandido] {prompt}")
+
+
+async def test_loop_consumes_user_input_processor_and_honors_short_circuit():
+    """El corte de `S11` es *load-bearing*: el modelo **no** se llama.
+
+    Espejo del canónico: `processUserInput` devuelve `shouldQuery=false` y
+    `QueryEngine.ts:556` no entra al loop — pero los mensajes ya se empujaron al
+    historial (`:431`), así que el usuario y la salida local quedan en la
+    conversación.
+    """
+    caller = ScriptedCaller([[TokenEvent(content="no debería"), DoneEvent(stop_reason="stop")]])
+    proc = _ShortCircuitProcessor()
+    loop = AgentLoop(model_caller=caller, input_processor=proc)
+    ctx = _ctx()
+    outcome = await loop.run("/comando", ctx)
+
+    assert proc.seen == ["/comando"]          # el loop lo invocó, y con el prompt crudo
+    assert caller.seen_messages == []         # y NO llamó al modelo
+    assert ctx.turn_count == 0
+    assert outcome.reason is LoopEndReason.SHORT_CIRCUIT
+    assert outcome.detail == "resuelto sin modelo"
+    # el historial conserva la entrada del usuario y la respuesta ya resuelta
+    assert [m["role"] for m in ctx.messages] == ["user", "assistant"]
+    assert ctx.messages[0]["content"] == "/comando"
+    assert ctx.messages[1]["content"] == "resuelto sin modelo"
+
+
+async def test_loop_sends_the_prompt_rewritten_by_the_processor():
+    """Lo que llega al modelo es lo que `S11` devolvió, no lo que escribió el usuario."""
+    caller = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
+    loop = AgentLoop(model_caller=caller, input_processor=_RewritingProcessor())
+    ctx = _ctx()
+    outcome = await loop.run("hola", ctx)
+
+    assert caller.seen_messages[0][0]["content"] == "[expandido] hola"
+    assert outcome.reason is LoopEndReason.COMPLETED
+
+
+async def test_loop_without_processor_behaves_exactly_as_before():
+    """El default (`NoopUserInputProcessor`) no cambia nada: es la no-regresión de `C4`."""
+    caller = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
+    loop = AgentLoop(model_caller=caller)
+    ctx = _ctx()
+    outcome = await loop.run("hola", ctx)
+
+    assert caller.seen_messages[0][0] == {"role": "user", "content": "hola"}
+    assert outcome.reason is LoopEndReason.COMPLETED
+    assert outcome.turn_count == 1
+
+
+async def test_loop_outcome_distinguishes_missing_model_caller():
+    """Un loop sin `S1` no es «un turno vacío»: es un fallo de cableado con nombre."""
+    outcome = await AgentLoop().run("hola", _ctx())
+    assert outcome.reason is LoopEndReason.NO_MODEL_CALLER
 
 
 @pytest.mark.xfail(
@@ -521,7 +612,7 @@ async def test_e2e_loop_multi_turn_real_dispatch(tmp_path):
         [TokenEvent(content="listo"), DoneEvent(stop_reason="stop")],
     ])
     runtime = _real_runtime(tmp_path, caller, tools=(tool,))
-    task_id = await runtime.dispatch(RuntimeTask(prompt="usa echo", description="e2e-loop"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="usa echo", description="e2e-loop", session_id="sess-test"))
     await _await_task(runtime, task_id)
 
     assert runtime.status(task_id) == TaskStatus.COMPLETED
@@ -544,7 +635,7 @@ async def test_e2e_loop_stream_surfaces_tool_and_done_events(tmp_path):
 
     events = [
         ev async for ev in runtime.stream(
-            RuntimeTask(prompt="usa echo", description="e2e-stream")
+            RuntimeTask(prompt="usa echo", description="e2e-stream", session_id="sess-test")
         )
     ]
     types = [type(e).__name__ for e in events]

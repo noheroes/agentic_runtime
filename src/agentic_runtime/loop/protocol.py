@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Protocol, runtime_checkable
 
+from .outcome import LoopOutcome
+
 if TYPE_CHECKING:
     from ..context.tool_use import ToolUseContext
 
 
 @runtime_checkable
 class LoopProtocol(Protocol):
-    """Contrato mínimo de un loop agentico."""
+    """Contrato mínimo de un loop agentico.
 
-    async def run(self, prompt: str, ctx: "ToolUseContext") -> None: ...
+    `run` devuelve un `LoopOutcome` (`C4`/`02·A4`): quien compone el turno tiene que
+    poder distinguir «cerró el modelo» de «se agotaron las vueltas», de «lo cortó
+    `S11`», de «no había motor cableado». Devolver `None` obligaba a inferirlo del
+    historial, que es justo lo que `L09` castiga.
+    """
+
+    async def run(self, prompt: str, ctx: "ToolUseContext") -> LoopOutcome: ...
 
 
 @runtime_checkable

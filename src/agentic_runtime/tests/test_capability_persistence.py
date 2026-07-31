@@ -12,6 +12,7 @@ from agentic_runtime.capabilities.skills import (
     StorageBackedSkillStore,
 )
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.identity import Scope
 
 
 class _FakeStorage:
@@ -167,7 +168,7 @@ async def test_set_server_enabled_persists_and_survives_restart():
 # ---------------------------------------------------------------------------
 
 async def test_skill_store_roundtrip_and_list():
-    store = StorageBackedSkillStore(_FakeStorage())
+    store = StorageBackedSkillStore(_FakeStorage(), scope=Scope("u1"))
     assert await store.list() == []
 
     await store.write("docx", _skill_md("docx"))
@@ -181,7 +182,7 @@ async def test_skill_store_roundtrip_and_list():
 
 async def test_skills_provider_loads_from_store_on_startup():
     storage = _FakeStorage()
-    store = StorageBackedSkillStore(storage)
+    store = StorageBackedSkillStore(storage, scope=Scope("u1"))
     await store.write("docx", _skill_md("docx"))
 
     provider = SkillsProvider(skill_store=store)
@@ -193,7 +194,7 @@ async def test_skills_provider_loads_from_store_on_startup():
 
 
 async def test_register_skill_persists_content():
-    store = StorageBackedSkillStore(_FakeStorage())
+    store = StorageBackedSkillStore(_FakeStorage(), scope=Scope("u1"))
     provider = SkillsProvider(skill_store=store)
     await provider.register_skill("docx", _skill_md("docx"))
     assert await store.read("docx") is not None

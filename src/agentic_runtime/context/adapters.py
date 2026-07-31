@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from .tool_use import AppState, ToolUseContext
+from ..contracts.abort import AbortSignal
 from ..contracts.permissions import PermissionContext
 from ..tools.pool import ToolPool
 
@@ -12,7 +13,7 @@ def tool_use_context_from_session(
     session: Any,
     *,
     tool_pool: ToolPool | None = None,
-    stop: asyncio.Event | None = None,
+    stop: AbortSignal | None = None,
     event_queue: asyncio.Queue | None = None,
     storage: Any = None,
     presentation: Any = None,

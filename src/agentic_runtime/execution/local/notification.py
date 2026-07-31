@@ -17,8 +17,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Canal scopeado por (user_id, session_id): la identidad de ciclo de vida es el par,
-# no la sesión sola — así no hay fuga entre usuarios aunque dos compartan session_id.
+# Canal scopeado por (scope, session_id): la frontera de aislamiento es el par, no la
+# sesión sola — así no hay fuga entre tenants aunque dos compartan `session_id`. El
+# primer componente era `user_id` y pasa a ser la clave del `Scope` (`C9`/`ID-3`): el
+# runtime ya no conoce usuarios, sólo scopes opacos que le da el integrador.
 _channel: dict[tuple[str, str], list[BackgroundNotification]] = defaultdict(list)
 
 
@@ -29,21 +31,21 @@ class BackgroundNotification:
     status: str  # "completed" | "failed" | "killed"
     description: str
     notification_text: str
-    parent_user_id: str = ""
+    parent_scope: str = ""
     final_text: str = ""
 
 
 def put_notification(notification: BackgroundNotification) -> None:
-    _channel[(notification.parent_user_id, notification.parent_session_id)].append(notification)
+    _channel[(notification.parent_scope, notification.parent_session_id)].append(notification)
     logger.debug(
-        "notification queued: user=%s session=%s task=%s status=%s",
-        notification.parent_user_id, notification.parent_session_id,
+        "notification queued: scope=%s session=%s task=%s status=%s",
+        notification.parent_scope, notification.parent_session_id,
         notification.task_id, notification.status,
     )
 
 
-def drain_notifications(user_id: str, session_id: str) -> list[BackgroundNotification]:
-    return _channel.pop((user_id, session_id), [])
+def drain_notifications(scope: str, session_id: str) -> list[BackgroundNotification]:
+    return _channel.pop((scope, session_id), [])
 
 
 def process_background_notification(session: "Session", notification: BackgroundNotification) -> None:

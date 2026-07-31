@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any, Optional, Type
 
 from .capabilities.resolver import CapabilitiesResolver
+from .contracts.identity import Scope, SessionRepo
 from .context.presentation import IdentityPresentation
+from .models.protocol import ModelOptions
 from .storage.factory import StorageRegistry
 from .tools.exec_env import LocalExecEnvironment
 from .tools.dispatcher import ToolDispatcher
@@ -56,11 +58,6 @@ class CapabilitiesConfig:
 
 
 @dataclass
-class ModelsConfig:
-    extras: list = field(default_factory=list)  # list[agentic_models.Model]
-
-
-@dataclass
 class VoiceConfig:
     """I/O por voz (STT/TTS). Las primitivas las inyecta el integrador; cada canal
     se activa/desactiva por config sin retirar la implementación inyectada.
@@ -80,8 +77,16 @@ class RuntimeConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     capabilities: CapabilitiesConfig = field(default_factory=CapabilitiesConfig)
-    models: ModelsConfig = field(default_factory=ModelsConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    # `S1` enriquecida (`C2`): qué se le pide al motor más allá de los mensajes —
+    # razonamiento, muestreo, techo de tokens y `metadata` opaca (`ID-7`). Sustituye
+    # al slot MUERTO `ModelsConfig.extras` (`LAT-MODELS1`), que nadie leía: el
+    # registro de modelos vive en `agentic_models`, no en la config del runtime.
+    model_options: ModelOptions = field(default_factory=ModelOptions)
+    # `S11` (`C4`): preproceso de la entrada ANTES del turno — slash-commands resueltos
+    # localmente, expansiones. Es política del integrador; `None` = passthrough y el
+    # turno se comporta como si la costura no existiera.
+    input_processor: Any = None
     model_caller: Any = None      # ModelCallerProtocol inyectado por el consumidor
     hook_runner: Any = None       # HookRunner inyectado por el consumidor
     task_registry: Any = None     # TaskRegistryProtocol inyectado por el consumidor
@@ -115,6 +120,19 @@ class RuntimeConfig:
     # `options.agentDefinitions` del canónico — el runtime es genérico y NO posee el
     # catálogo de agentes. None = sin agentes especializados (fork genérico).
     agent_resolver: Any = None
+    # Scope de persistencia POR DESPLIEGUE — grafía única y vinculante `AC-39`
+    # (`RuntimeHost.scope`), token OPACO que produce el integrador. Es la frontera de
+    # aislamiento bajo la que escriben TODOS los repos (transcript, memoria, tokens MCP,
+    # skills). `None` = sin scope: nada se persiste bajo una clave inventada. Una task
+    # puede traer el suyo (`RuntimeTask.scope`) y entonces manda el de la task — así un
+    # integrador multi-tenant sirve muchos scopes desde un solo host (`D-11`).
+    scope: Optional[Scope] = None
+    # `S20`/`DEUDA-A ID-2`: repo de sesión del integrador. **Opcional** a propósito —
+    # el precedente PI lo confirma: el integrador complejo (openclaw) no usa los tipos
+    # `Session*` del core y habla sólo el protocolo, luego el boundary real es
+    # protocolo+motor y el repo es costura, no obligación. `None` = el runtime usa su
+    # `Session` nativa y sigue siendo ejecutable por sí solo.
+    session_repo: Optional["SessionRepo[Any]"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +147,9 @@ class RuntimeFactory:
         cls._modes[name] = name if False else runtime_cls
 
     @classmethod
-    def _build_capability_manager(cls, caps: "CapabilitiesConfig", storage: Any = None) -> Any:
+    def _build_capability_manager(
+        cls, caps: "CapabilitiesConfig", storage: Any = None, scope: Optional[Scope] = None
+    ) -> Any:
         """Ensambla el CapabilityManager con providers MCP/Skills declarados.
 
         Registra servers MCP y dirs de skills de forma tolerante (config inválida
@@ -152,6 +172,7 @@ class RuntimeFactory:
                 storage=storage,  # TokenStorage OAuth por defecto sobre StorageProtocol
                 redirect_handler=caps.mcp_oauth_redirect_handler,
                 callback_handler=caps.mcp_oauth_callback_handler,
+                scope=scope,  # `ID-3`: sin esto el TokenStorage caía en `user_id="mcp"`
             )
             if caps.mcp_servers:
                 mcp.load_servers(caps.mcp_servers)  # tolerante; conecta en startup()
@@ -191,7 +212,9 @@ class RuntimeFactory:
         # Capabilities: manager con providers (Skills/MCP). El pool por turno
         # converge native + capability vía manager.build_tool_pool (alineado a
         # assembleToolPool). Los providers se conectan en startup() (MCP) / al cargar.
-        capability_manager = cls._build_capability_manager(config.capabilities, storage=storage)
+        capability_manager = cls._build_capability_manager(
+            config.capabilities, storage=storage, scope=config.scope
+        )
 
         # Resolver legacy — conservado para compatibilidad; el loop usa el pool.
         capabilities_resolver = CapabilitiesResolver(
@@ -231,10 +254,14 @@ class RuntimeFactory:
             small_llm=config.small_llm,
             background_result_max_chars=config.background_result_max_chars,
             model_id=config.model_id,
+            model_options=config.model_options,
+            input_processor=config.input_processor,
             initial_allowed_tools=config.initial_allowed_tools,
             root_context_modifier=config.root_context_modifier,
             root_turn_start_hooks=config.root_turn_start_hooks,
             agent_resolver=config.agent_resolver,
+            scope=config.scope,
+            session_repo=config.session_repo,
             stt=stt,
             tts=tts,
         )

@@ -289,3 +289,126 @@ async def test_model_error_surfaces_live_on_bus():
         "x", ToolUseContext(session_id="s1")
     )
     assert "ErrorEvent" in seen
+
+
+# ========================================================================== #
+# C3 · S5 EventBus — VERIFICACIÓN del canal único ordenado (tramo 1)
+# ========================================================================== #
+#
+# `TRAMO-1 §C3` clasifica esta capacidad como `existe-fiel`: **no se reconstruye,
+# se verifica**. Su prueba pedida es «orden total del canal en los 3 runners +
+# test de handler que lanza».
+#
+# ⚠ **interpretación declarada, no inferida en silencio:** la expresión «los 3
+# runners» aparece UNA sola vez en todo el corpus (`TRAMO-1.md:82`) y no está
+# definida en ningún sitio. Se lee contra el campo *cableado* de la misma ficha
+# —«caller/loop/runtime emiten»— como **los tres emisores del canal**, que es lo
+# que sí está verificado leyendo la fuente 1→EOF en esta ventana:
+#
+#   1. el **caller** (`S1`) produce los eventos del stream del proveedor;
+#   2. el **loop** los reemite en vivo (`agent_loop.py:312`) y añade los suyos
+#      —`ToolResultEvent` tras cada dispatch (`:405`) y tras un bloqueo de hook
+#      (`:393`)—;
+#   3. el **runtime** suscribe sus propios sumideros al mismo bus
+#      (`runtime.py:326-330`: registry por tipo, `on_event` global) .
+#
+# ⚠ **hallazgo de la verificación, escrito y no maquillado:** el orden real del
+# canal **no** es el `Init→…→Result` que enuncia la ficha. No existen `InitEvent`
+# ni `ResultEvent` (la taxonomía son 5, ver `FIND-EVT*` arriba), y el `DoneEvent`
+# llega **antes** que los `ToolResultEvent` del mismo turno, porque `Done` cierra
+# el mensaje del asistente y los resultados de tools se despachan después. Es
+# coherente con el canónico —allí el mensaje del asistente con sus `tool_use`
+# precede a los `tool_result`— pero **no** con la frase de la ficha, que describe
+# un terminal que este canal no tiene. Queda aseverado abajo: si alguien añade un
+# `ResultEvent` terminal, este test se pone rojo y obliga a revisar la ficha.
+
+@pytest.mark.asyncio
+async def test_c3_bus_channel_is_totally_ordered_across_the_three_emitters():
+    """Orden TOTAL: los tres emisores comparten un único canal secuencial.
+
+    Se observa por las dos vías de suscripción a la vez (`subscribe_all` y
+    `subscribe` por tipo) porque son caminos distintos dentro de `emit`
+    (`bus.py:40` concatena los tipados ANTES que los globales): si sólo se mirara
+    uno, un reordenamiento entre ambos pasaría inadvertido.
+    """
+    order: list[str] = []
+    tool_results_by_type: list[str] = []
+
+    async def _all(ev: Event) -> None:
+        order.append(type(ev).__name__)
+
+    async def _typed(ev: ToolResultEvent) -> None:
+        tool_results_by_type.append(ev.call_id)
+
+    bus = EventBus()
+    bus.subscribe(ToolResultEvent, _typed)
+    bus.subscribe_all(_all)
+
+    caller = _make_caller(
+        TokenEvent(content="pen"),
+        TokenEvent(content="sando"),
+        ToolCallEvent(tool_name="echo", tool_input={"text": "hola"}, call_id="c1"),
+        DoneEvent(stop_reason="stop", usage=EventsUsage(input_tokens=1, output_tokens=1)),
+    )
+    tool = RecordingTool()
+    await _loop(caller, _make_registry(tool), bus).run("x", ToolUseContext(session_id="s1"))
+
+    # 1. el turno corrió de verdad (si no, el orden de abajo sería el de la nada)
+    assert tool.calls == [{"text": "hola"}]
+
+    # 2. orden total, exacto y completo del canal — no «contiene», no «al menos»
+    assert order == [
+        "TokenEvent", "TokenEvent", "ToolCallEvent", "DoneEvent", "ToolResultEvent",
+    ], order
+
+    # 3. el `ToolResultEvent` del loop llegó a AMBAS vías, y a la tipada primero
+    #    (es lo que `bus.py:40` promete: tipados, luego globales).
+    assert tool_results_by_type == ["c1"]
+
+    # 4. el terminal que la ficha enuncia NO existe: aseverado, no narrado.
+    import agentic_runtime.events as _ev
+    assert not hasattr(_ev, "ResultEvent") and not hasattr(_ev, "InitEvent"), (
+        "apareció un evento terminal: `TRAMO-1 §C3` («Init→…→Result») ya no describe "
+        "este canal y hay que reconciliar la ficha"
+    )
+
+
+@pytest.mark.asyncio
+async def test_c3_a_throwing_handler_does_not_take_down_the_others():
+    """Un handler que revienta no tumba a los demás **ni corta el canal**.
+
+    Las dos mitades importan y sólo juntas prueban el aislamiento: que los otros
+    handlers del MISMO evento sigan recibiéndolo, y que los eventos POSTERIORES
+    sigan llegando (un `emit` que propagara mataría el turno entero).
+    """
+    survivors: list[str] = []
+    late: list[str] = []
+
+    async def _boom(ev: Event) -> None:
+        raise RuntimeError("handler roto a propósito")
+
+    async def _survivor(ev: Event) -> None:
+        survivors.append(type(ev).__name__)
+
+    async def _typed_late(ev: DoneEvent) -> None:
+        late.append(ev.stop_reason)
+
+    bus = EventBus()
+    bus.subscribe(TokenEvent, _boom)      # revienta por tipo…
+    bus.subscribe(DoneEvent, _typed_late)
+    bus.subscribe_all(_boom)              # …y también en el canal global
+    bus.subscribe_all(_survivor)
+
+    caller = _make_caller(
+        TokenEvent(content="a"),
+        DoneEvent(stop_reason="stop", usage=EventsUsage(input_tokens=1, output_tokens=1)),
+    )
+    ctx = ToolUseContext(session_id="s1")
+    await _loop(caller, _make_registry(RecordingTool()), bus).run("x", ctx)
+
+    # 1. el handler sano recibió TODO, pese a que otro reventó en cada evento
+    assert survivors == ["TokenEvent", "DoneEvent"], survivors
+    # 2. y el canal siguió vivo después de la excepción (evento posterior, vía tipada)
+    assert late == ["stop"]
+    # 3. el turno terminó normal: la excepción no escapó al loop
+    assert ctx.turn_count == 1

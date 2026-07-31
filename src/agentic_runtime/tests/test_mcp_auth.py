@@ -16,6 +16,7 @@ from agentic_runtime.capabilities.mcp import (
     parse_server_config,
     register_auth_strategy,
 )
+from agentic_runtime.contracts.identity import Scope
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +133,7 @@ async def test_token_storage_roundtrip_over_storage_protocol():
     from mcp.shared.auth import OAuthToken
 
     storage = _FakeStorage()
-    ts = StorageBackedTokenStorage(storage, "srv", user_id="u1")
+    ts = StorageBackedTokenStorage(storage, "srv", scope=Scope("u1"))
 
     assert await ts.get_tokens() is None  # vacío → None, sin excepción
     tok = OAuthToken(access_token="abc", token_type="Bearer", refresh_token="r")
@@ -149,8 +150,18 @@ async def test_token_storage_roundtrip_over_storage_protocol():
 # ---------------------------------------------------------------------------
 
 def test_provider_default_client_builds_token_storage_for_oauth():
-    provider = McpProvider(storage=_FakeStorage())
+    provider = McpProvider(storage=_FakeStorage(), scope=Scope("u1"))
     provider.add_server("srv", {"type": "http", "url": "https://x", "auth": "oauth"})
     client = provider._default_client(provider.state.servers["srv"])
     assert client._auth_deps is not None
     assert isinstance(client._auth_deps.token_storage, StorageBackedTokenStorage)
+
+
+def test_provider_without_scope_refuses_to_build_token_storage():
+    """Aquí vivía el default `user_id="mcp"` (`ID-3`): un solo cajón de tokens OAuth
+    compartido por todos los tenants. Sin `Scope` no se persiste nada: se avisa."""
+    provider = McpProvider(storage=_FakeStorage())
+    provider.add_server("srv", {"type": "http", "url": "https://x", "auth": "oauth"})
+    client = provider._default_client(provider.state.servers["srv"])
+    assert client._auth_deps is not None
+    assert client._auth_deps.token_storage is None

@@ -1,22 +1,14 @@
+"""Reexport del contrato T1 de eventos (`contracts.events`).
+
+El shape vive en `contracts/` porque es invariante; aquí queda sólo el punto de
+importación histórico del base. No añadir definiciones nuevas en este archivo.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Awaitable, Callable, Protocol, Type, TypeVar
+from typing import TypeVar
 
-T = TypeVar("T", bound="Event")
+from ..contracts.events import Event, EventBusProtocol, EventHandler
 
+T = TypeVar("T", bound=Event)
 
-@dataclass(frozen=True)
-class Event:
-    """Tipo base de todos los eventos del runtime. Frozen — inmutable post-construcción."""
-
-
-EventHandler = Callable[[Event], Awaitable[None]]
-
-
-class EventBusProtocol(Protocol):
-    # Genérico en el subtipo: un handler puede declarar el evento concreto que
-    # consume (p.ej. `Callable[[TokenEvent], ...]`) sin romper el tipado.
-    def subscribe(self, event_type: Type[T], handler: Callable[[T], Awaitable[None]]) -> None: ...
-    def subscribe_all(self, handler: EventHandler) -> None: ...
-    async def emit(self, event: Event) -> None: ...
+__all__ = ["Event", "EventBusProtocol", "EventHandler", "T"]

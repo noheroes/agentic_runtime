@@ -15,6 +15,8 @@ import asyncio
 
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.capabilities.mcp.config import (
     McpServerConfig,
     load_server_configs,
@@ -39,7 +41,7 @@ from agentic_runtime.tools.deferred import is_deferred_tool
 
 
 def _ctx(**kw) -> ToolUseContext:
-    return ToolUseContext(session_id="s1", stop=asyncio.Event(), **kw)
+    return ToolUseContext(session_id="s1", stop=AbortController(), **kw)
 
 
 async def _call_ok(tool_name: str, tool_input: dict) -> str:  # McpCall de prueba

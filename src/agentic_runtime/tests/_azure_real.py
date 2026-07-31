@@ -42,7 +42,7 @@ skip_marker = pytest.mark.skipif(
 )
 
 
-def build_caller(system_prompt: str):
+def build_caller(system_prompt: str, options=None):
     """Caller real apuntando al modelo Azure gpt-5.4-mini.
 
     `get_model` es ambiguo (varios providers comparten el id 'gpt-5.4-mini' y gana la
@@ -58,4 +58,12 @@ def build_caller(system_prompt: str):
 
     register_builtins()
     model = get_registry().get_by_provider("azure-openai-responses", "gpt-5.4-mini")
-    return AgenticModelsCaller(model=model, api_key=AZURE["api_key"], system_prompt=system_prompt)
+    return AgenticModelsCaller(
+        model=model,
+        api_key=AZURE["api_key"],
+        system_prompt=system_prompt,
+        # `options` = `StreamOptions` del integrador. `E1` la usa para colgar
+        # `on_payload`, que es el ÚNICO punto donde se ven los params exactos con
+        # los que el provider llama a Azure — la sonda del cable de `C2`.
+        options=options,
+    )

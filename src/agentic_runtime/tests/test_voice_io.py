@@ -103,8 +103,7 @@ async def test_stt_transcription_arrives_as_prompt(tmp_path):
         voice=VoiceConfig(stt=stt),
     ))
     await _dispatch_and_wait(runtime, RuntimeTask(
-        prompt="", description="voz", audio_prompt=AudioInput(data=b"\x00\x01"),
-    ))
+        prompt="", description="voz", audio_prompt=AudioInput(data=b"\x00\x01"), session_id="sess-test"))
     assert stt.calls, "el STT no se invocó"
     assert caller.user_prompts == ["arregla el login de sesión"]
 
@@ -118,8 +117,7 @@ async def test_stt_disabled_uses_text_prompt(tmp_path):
         voice=VoiceConfig(stt=stt, stt_enabled=False),  # canal apagado por config
     ))
     await _dispatch_and_wait(runtime, RuntimeTask(
-        prompt="texto directo", description="voz", audio_prompt=AudioInput(data=b"x"),
-    ))
+        prompt="texto directo", description="voz", audio_prompt=AudioInput(data=b"x"), session_id="sess-test"))
     assert stt.calls == []
     assert caller.user_prompts == ["texto directo"]
 
@@ -132,7 +130,7 @@ async def test_stt_without_audio_keeps_text_prompt(tmp_path):
         model_caller=caller,
         voice=VoiceConfig(stt=stt),
     ))
-    await _dispatch_and_wait(runtime, RuntimeTask(prompt="solo texto", description="voz"))
+    await _dispatch_and_wait(runtime, RuntimeTask(prompt="solo texto", description="voz", session_id="sess-test"))
     assert stt.calls == []
     assert caller.user_prompts == ["solo texto"]
 
@@ -149,7 +147,7 @@ async def test_tts_speaks_each_chunk_incrementally_then_flush(tmp_path):
         model_caller=caller,
         voice=VoiceConfig(tts=tts),
     ))
-    await _dispatch_and_wait(runtime, RuntimeTask(prompt="saluda", description="voz"))
+    await _dispatch_and_wait(runtime, RuntimeTask(prompt="saluda", description="voz", session_id="sess-test"))
     assert tts.spoken == ["Hola ", "mundo", "."]  # fragmento a fragmento, sin esperar el fin
     assert tts.flushes == 1
 
@@ -162,7 +160,7 @@ async def test_tts_disabled_does_not_speak(tmp_path):
         model_caller=caller,
         voice=VoiceConfig(tts=tts, tts_enabled=False),  # canal apagado por config
     ))
-    await _dispatch_and_wait(runtime, RuntimeTask(prompt="saluda", description="voz"))
+    await _dispatch_and_wait(runtime, RuntimeTask(prompt="saluda", description="voz", session_id="sess-test"))
     assert tts.spoken == []
     assert tts.flushes == 0
 
@@ -176,7 +174,7 @@ async def test_tts_text_is_sanitized_by_presentation(tmp_path):
         presentation=_RealPathPresentation(),
         voice=VoiceConfig(tts=tts),
     ))
-    await _dispatch_and_wait(runtime, RuntimeTask(prompt="dónde", description="voz"))
+    await _dispatch_and_wait(runtime, RuntimeTask(prompt="dónde", description="voz", session_id="sess-test"))
     assert tts.spoken == ["el log está en [ruta]/app.log"]
     assert all("/srv/secreto" not in s for s in tts.spoken)
 

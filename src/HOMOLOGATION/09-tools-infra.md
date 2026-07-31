@@ -477,7 +477,9 @@ re-desarrollan. Lo propio de 09 (deferral, dos registries, auto-mode) se desarro
 ### TiR5 · GAP-TOOL3 — precedencia de `is_deferred_tool` (alwaysLoad/isMcp/carve-outs)
 - **Comportamiento**: `is_deferred_tool` = `getattr(tool,'deferred',False)` plano; falta la precedencia
   canónica (`isDeferredTool`, prompt.ts:62): **`alwaysLoad`→false primero**, `isMcp`→true (MCP siempre
-  diferida), ToolSearch→false, carve-outs `FORK_SUBAGENT`(Agent)/`Brief`→false, luego `shouldDefer`.
+  diferida), ToolSearch→false, carve-outs `FORK_SUBAGENT`(Agent)/`Brief`/**`SendUserFile`**→false, luego
+  `shouldDefer`. *(`SendUserFile` restituido 2026-07-27: el grid `E1:134` lo lista y esta sección de
+  remediación lo había perdido — `A-CIERRE-P4 §2.2·P4-09-3`.)*
 - **Seam/firma**: `is_deferred_tool(tool)` lee `getattr(tool,'always_load',False)` (opt-out primero),
   `getattr(tool,'is_mcp',False)` (siempre diferida), carve-outs por nombre, luego `deferred`.
 - **Cableado**: verificar en **11** que el adaptador MCP setee `is_mcp=True` en vez de `deferred=True` a

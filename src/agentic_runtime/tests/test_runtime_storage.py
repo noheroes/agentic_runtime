@@ -3,6 +3,7 @@ import pytest
 
 from agentic_runtime.storage import StorageProtocol, StorageKeys, StorageRegistry
 from agentic_runtime.storage.filesystem import FilesystemStorage
+from agentic_runtime.contracts.identity import Scope
 
 
 # ---------------------------------------------------------------------------
@@ -107,20 +108,20 @@ def test_registry_register_custom_backend(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_storage_keys_main_transcript_at_session_root():
-    assert StorageKeys.transcript_key("u1", "s1") == "u1/s1/session.json"
-    assert StorageKeys.transcript_key("u1", "s1", "main") == "u1/s1/session.json"
+    assert StorageKeys.transcript_key(Scope("u1"), "s1") == "u1/s1/session.json"
+    assert StorageKeys.transcript_key(Scope("u1"), "s1", "main") == "u1/s1/session.json"
 
 
 def test_storage_keys_subagent_nested_subtree():
-    assert StorageKeys.transcript_key("u1", "s1", "a1") == "u1/s1/subagents/a1/session.json"
-    assert StorageKeys.work_key("u1", "s1", "out.csv", "a1") == "u1/s1/subagents/a1/work/out.csv"
+    assert StorageKeys.transcript_key(Scope("u1"), "s1", "a1") == "u1/s1/subagents/a1/session.json"
+    assert StorageKeys.work_key(Scope("u1"), "s1", "out.csv", "a1") == "u1/s1/subagents/a1/work/out.csv"
 
 
 def test_storage_keys_two_planes_distinct():
     """Conversación (transcript + sidecar meta) vs artefactos (work/) en claves distintas."""
-    transcript = StorageKeys.transcript_key("u1", "s1")
-    meta = StorageKeys.meta_key("u1", "s1")
-    work = StorageKeys.work_key("u1", "s1", "report.xlsx")
+    transcript = StorageKeys.transcript_key(Scope("u1"), "s1")
+    meta = StorageKeys.meta_key(Scope("u1"), "s1")
+    work = StorageKeys.work_key(Scope("u1"), "s1", "report.xlsx")
     assert transcript == "u1/s1/session.json"
     assert meta == "u1/s1/session.meta.json"  # sidecar mutable (is_backgrounded)
     assert work == "u1/s1/work/report.xlsx"
@@ -129,9 +130,9 @@ def test_storage_keys_two_planes_distinct():
 
 
 def test_storage_keys_config_scope_user():
-    assert StorageKeys.config_key("u1") == "u1/config.json"
-    assert StorageKeys.agent_md_key("u1") == "u1/agent.md"
-    assert StorageKeys.ltm_key("u1") == "u1/ltm/memories.json"
+    assert StorageKeys.config_key(Scope("u1")) == "u1/config.json"
+    assert StorageKeys.agent_md_key(Scope("u1")) == "u1/agent.md"
+    assert StorageKeys.ltm_key(Scope("u1")) == "u1/ltm/memories.json"
 
 
 # ---------------------------------------------------------------------------

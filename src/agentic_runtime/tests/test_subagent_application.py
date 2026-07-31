@@ -166,8 +166,7 @@ async def test_dispatch_resolves_definition_inherits_model_and_applies_prompt_to
         agent_resolver=_Resolver(defn),
     ))
     await _dispatch_and_wait(runtime, RuntimeTask(
-        prompt="busca", description="research", subagent_type="researcher",
-    ))
+        prompt="busca", description="research", subagent_type="researcher", session_id="sess-test"))
     # Modelo heredado del padre (la regresión era model_id='researcher' → ModelNotFound).
     assert caller.model_id == "parent-model"
     # System prompt de la def reemplaza el base.
@@ -186,7 +185,7 @@ async def test_dispatch_without_subagent_type_is_generic_fork(tmp_path):
         tools=ToolsConfig(extras=[_tool("alpha"), _tool("bravo")]),
         agent_resolver=_Resolver(AgentDefinition(subagent_type="researcher")),
     ))
-    await _dispatch_and_wait(runtime, RuntimeTask(prompt="x", description="y"))
+    await _dispatch_and_wait(runtime, RuntimeTask(prompt="x", description="y", session_id="sess-test"))
     assert caller.model_id == "parent-model"
     assert caller.system_override is None
     assert {"alpha", "bravo"} <= set(caller.tool_names)

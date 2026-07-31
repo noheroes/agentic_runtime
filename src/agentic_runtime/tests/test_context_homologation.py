@@ -33,6 +33,7 @@ from agentic_runtime.execution.fork import (
     RuntimeContextForker,
 )
 from agentic_runtime.tools.pool import ToolPool
+from agentic_runtime.contracts.identity import Scope
 
 
 # --- A · ToolUseContext: forma núcleo (par de Tool.ts:158-300) --------------
@@ -181,7 +182,7 @@ def test_subagent_context_isolation_defaults_mirror_canonical():
     pool = ToolPool()
     snap = ForkSnapshot(
         session_id="parent-sess",
-        user_id="parent-user",
+        scope=Scope("parent-user"),
         messages=({"role": "user", "content": "parent turn"},),
         permissions=perms,
         tool_pool=pool,
@@ -192,7 +193,7 @@ def test_subagent_context_isolation_defaults_mirror_canonical():
     )
     # identidad de ciclo de vida hereda por dato
     assert child.session_id == "parent-sess"
-    assert child.user_id == "parent-user"
+    assert child.scope == Scope("parent-user")
     # nuevo agent_id (cada subagente el suyo, como createAgentId())
     assert child.agent_id is not None and child.agent_id.startswith("agent_")
     # messages AISLADOS por defecto (inherit_messages=False)
@@ -229,9 +230,9 @@ def test_toolusecontext_tracks_read_file_state():
     assert hasattr(ctx, "read_file_state")
 
 
-@pytest.mark.xfail(strict=True, reason="GAP-02 (01·contracts): PermissionContext no "
-                   "tiene `mode` (PermissionMode); AppState.toolPermissionContext del "
-                   "canónico sí — AppStateStore.ts:109 + Tool.ts:124.")
+# GAP-02 pagado en su mitad de CONTRATO por C1 (tramo 1): `PermissionContext.mode`
+# existe, default `default`. El MOTOR de los modos sigue siendo `K1`, por encima de
+# la línea de corte — lo que este test acredita es el shape, no la política.
 def test_appstate_permissions_carry_mode():
     st = AppState()
     assert hasattr(st.permissions, "mode")

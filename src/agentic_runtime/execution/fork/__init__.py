@@ -7,13 +7,14 @@ RuntimeContextForker — service that applies the policy and returns a child Too
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...context.tool_use import AppState, ToolUseContext
+from ...contracts.abort import AbortController, AbortSignal
+from ...contracts.identity import Scope
 from ...contracts.permissions import PermissionContext
 from ...tools.pool import ToolPool
 
@@ -29,12 +30,21 @@ class ForkPolicy(BaseModel):
 
 
 class ForkSnapshot(BaseModel):
-    """Immutable capture of parent state at the moment of fork."""
+    """Immutable capture of parent state at the moment of fork.
 
-    model_config = ConfigDict(frozen=True)
+    `extra="forbid"` no es celo: mientras el default de pydantic estuvo activo, un
+    `ForkSnapshot(user_id=...)` —la grafía vieja del cable de identidad— se **descartaba
+    en silencio** y el test que lo usaba seguía verde sin probar nada. Es `AC-39`
+    mecanizado: cuatro grafías de un cable son cuatro implementaciones divergentes, y
+    aquí el tipo las convierte en un error en vez de en un campo perdido.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     session_id: str
-    user_id: str | None = None
+    # El hijo hereda el SCOPE del padre, no un `user_id` (`C9`/`D-11`): su transcript y
+    # su memoria caen bajo la misma frontera de aislamiento que los del padre.
+    scope: Scope | None = None
     subagent_depth: int = 0
     messages: tuple[Any, ...] = ()
     permissions: PermissionContext = Field(default_factory=PermissionContext)
@@ -64,7 +74,7 @@ class RuntimeContextForker:
     def fork(
         self,
         fork_ctx: ForkContext,
-        parent_stop: asyncio.Event | None = None,
+        parent_stop: AbortSignal | None = None,
     ) -> ToolUseContext:
         agent_id = f"agent_{uuid.uuid4().hex[:12]}"
         snap = fork_ctx.parent_snapshot
@@ -77,15 +87,25 @@ class RuntimeContextForker:
         # patrón de messages (tupla→list). El hijo puede añadir/quitar claves sin tocar al padre.
         capabilities = dict(snap.capabilities) if policy.inherit_capabilities else {}
 
-        if policy.propagate_abort:
-            stop = parent_stop
-        else:
-            stop = asyncio.Event()
+        # Aislado = controlador PROPIO, no «sin señal»: el hijo tiene que poder
+        # abortarse por su cuenta sin que eso toque al padre (`C2`/`S2`). Y si se pidió
+        # propagar pero nadie pasó la señal del padre, el hijo nace igualmente con la
+        # suya: quedarse en `None` dejaba al subagente literalmente inabortable.
+        # ⚠ diferido nombrado: que la señal del PADRE llegue sola hasta aquí exige que
+        # viaje con el despacho del subagente (hoy `_build_child` sólo tiene el
+        # `ForkSnapshot`, que es estado serializable y no porta el controlador vivo).
+        stop: AbortSignal | None = (
+            parent_stop if (policy.propagate_abort and parent_stop is not None) else AbortController()
+        )
 
         return ToolUseContext(
             session_id=snap.session_id,
-            user_id=snap.user_id,
+            scope=snap.scope,
             agent_id=agent_id,
+            # Identidad ESTABLE del subagente (`ID-5`): el `agent_id` de arriba sigue
+            # siendo el handle de ESTA ejecución, pero la clave de scope persistente es
+            # el tipo, que sí se repite entre despachos.
+            subagent_type=fork_ctx.subagent_type,
             messages=messages,
             tool_pool=tool_pool,
             app_state=AppState(permissions=permissions, capabilities=capabilities),

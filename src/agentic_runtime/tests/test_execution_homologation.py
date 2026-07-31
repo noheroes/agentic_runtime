@@ -35,6 +35,7 @@ from agentic_runtime.execution.local.notification import (
 )
 from agentic_runtime.execution.tasks.registry import TaskRecord
 from agentic_runtime.execution.tasks.status import TaskStatus
+from agentic_runtime.contracts.identity import Scope
 
 
 # --- lo homologado -----------------------------------------------------------
@@ -78,21 +79,21 @@ def test_fork_policy_defaults_isolate_messages_share_state():
 def test_fork_produces_child_context_with_fresh_agent_id():
     """RuntimeContextForker.fork devuelve un ctx hijo con agent_id nuevo y depth+heredado."""
     forker = RuntimeContextForker()
-    snap = ForkSnapshot(session_id="s1", user_id="u1", subagent_depth=2)
+    snap = ForkSnapshot(session_id="s1", scope=Scope("u1"), subagent_depth=2)
     ctx = forker.fork(ForkContext(prompt="do", policy=ForkPolicy(), parent_snapshot=snap))
     assert ctx.session_id == "s1"
-    assert ctx.user_id == "u1"
+    assert ctx.scope == Scope("u1")
     assert ctx.agent_id.startswith("agent_")
 
 
-def test_notification_channel_scoped_by_user_and_session():
-    """Canal <task-notification> desacoplado y escopado por (user_id, session_id):
+def test_notification_channel_scoped_by_scope_and_session():
+    """Canal <task-notification> desacoplado y escopado por (scope, session_id):
     supera al canónico (single-user). El hijo escribe sin referencia viva al padre."""
     put_notification(BackgroundNotification(
-        parent_user_id="userA", parent_session_id="sessX", task_id="t1",
+        parent_scope="userA", parent_session_id="sessX", task_id="t1",
         status="completed", description="d", notification_text="done",
     ))
-    # otro usuario, mismo session_id: aislado
+    # otro scope, mismo session_id: aislado
     assert drain_notifications("userB", "sessX") == []
     drained = drain_notifications("userA", "sessX")
     assert len(drained) == 1 and drained[0].task_id == "t1"
@@ -200,19 +201,47 @@ def test_observer_is_wired_into_runtime():
 
 # --- FIND-EXEC5: max_turns de task/agent no se cablea al loop -----------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FIND-EXEC5: AgentLoop usa _MAX_TURNS=50 fijo. RuntimeTask.max_turns y "
-    "ForkContext.max_turns existen pero _run_loop construye AgentLoop sin pasarlos, y "
-    "AgentLoop.__init__ ni siquiera acepta max_turns. El canónico pasa "
-    "maxTurns ?? agentDefinition.maxTurns a query(). El fork declara maxTurns=200 y se ignora.",
-)
-def test_max_turns_threaded_to_loop():
-    """AgentLoop debe aceptar un tope de turnos configurable por task/agent_def."""
-    from agentic_runtime.loop.agent_loop import AgentLoop
+async def test_max_turns_threaded_to_loop():
+    """`FIND-EXEC5` pagado por `C4`: `RuntimeTask.max_turns` llega **al loop**.
 
-    params = inspect.signature(AgentLoop.__init__).parameters
-    assert "max_turns" in params
+    Se prueba por el camino real (`runtime.dispatch` → `_run_loop` → `AgentLoop`) y
+    contando llamadas al modelo, no leyendo la firma con `inspect`: el gap original
+    no era que faltara el parámetro, era que **nadie lo pasaba**, y una aserción
+    sobre la firma no distingue esos dos mundos (`L09`).
+    """
+    import asyncio
+
+    from agentic_runtime.contracts.identity import Scope as _Scope
+    from agentic_runtime.contracts.runtime import RuntimeTask
+    from agentic_runtime.events import DoneEvent, ToolCallEvent
+    from agentic_runtime.execution.local.runtime import LocalAgentRuntime
+
+    class _AlwaysToolCalling:
+        """Pide una tool en cada vuelta: sin tope, el loop no pararía nunca."""
+
+        def __init__(self) -> None:
+            self.turns = 0
+
+        async def complete(self, messages, tools, **kwargs):
+            self.turns += 1
+            n = self.turns
+
+            async def _gen():
+                yield ToolCallEvent(call_id=f"c{n}", tool_name="nope", tool_input={})
+                yield DoneEvent(stop_reason="tool_calls")
+
+            return _gen()
+
+    caller = _AlwaysToolCalling()
+    runtime = LocalAgentRuntime(model_caller=caller, scope=_Scope("t"))
+    task_id = await runtime.dispatch(
+        RuntimeTask(
+            prompt="corre", description="max-turns", session_id="s-max-turns", max_turns=2
+        )
+    )
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    assert caller.turns == 2  # el tope de la TASK mordió; el default es 50
 
 
 # --- GAP-EXEC1: TaskRecord no tiene flag de dedup `notified` ------------------

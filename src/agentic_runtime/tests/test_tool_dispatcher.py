@@ -2,6 +2,8 @@
 import asyncio
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.tools import (
     ToolCategory,
     ToolDispatcher,
@@ -58,7 +60,7 @@ class PermissionedTool:
         return ToolResult(tool_name=self.name, output="secret")
 
 
-def _ctx(*tools: ToolProtocol, stop: asyncio.Event | None = None) -> ToolUseContext:
+def _ctx(*tools: ToolProtocol, stop: AbortController | None = None) -> ToolUseContext:
     # El dispatcher resuelve desde ctx.tool_pool (alineado al canónico): las tools
     # del turno se siembran en el pool, no en un registry aparte.
     return ToolUseContext(
@@ -147,8 +149,8 @@ async def test_dispatcher_applies_timeout():
 async def test_dispatcher_aborts_if_event_set():
     disp = ToolDispatcher()
 
-    stop = asyncio.Event()
-    stop.set()
+    stop = AbortController()
+    stop.abort()
     result = await disp.dispatch(tool_name="fast_tool", tool_input={}, ctx=_ctx(FastTool(), stop=stop))
     assert result.is_aborted
 

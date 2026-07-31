@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
+from agentic_runtime.contracts.abort import AbortController
 from pydantic import ValidationError
 
 from agentic_runtime.context.tool_use import ToolUseContext
@@ -197,7 +199,7 @@ def test_forker_child_has_parent_session_id():
 
 def test_forker_propagate_abort_shares_stop_event():
     """When propagate_abort=True, child receives the same stop event as parent."""
-    parent_stop = asyncio.Event()
+    parent_stop = AbortController()
     snap = ForkSnapshot(session_id="s1")
     child = RuntimeContextForker().fork(
         ForkContext(prompt="go", policy=ForkPolicy(propagate_abort=True), parent_snapshot=snap),
@@ -208,7 +210,7 @@ def test_forker_propagate_abort_shares_stop_event():
 
 def test_forker_no_propagate_abort_gets_own_stop_event():
     """When propagate_abort=False, child receives a different stop event."""
-    parent_stop = asyncio.Event()
+    parent_stop = AbortController()
     snap = ForkSnapshot(session_id="s1")
     child = RuntimeContextForker().fork(
         ForkContext(prompt="go", policy=ForkPolicy(propagate_abort=False), parent_snapshot=snap),

@@ -11,24 +11,12 @@ entra al pool. El runtime solo define las primitivas y la plomería; el motor re
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+from ..contracts.voice import AudioInput
 
 if TYPE_CHECKING:
     from ..context.tool_use import ToolUseContext
-
-
-@dataclass
-class AudioInput:
-    """Audio de entrada para STT.
-
-    El runtime es agnóstico al códec y al origen; el motor STT del integrador
-    interpreta `data` según `mime_type`/`sample_rate`."""
-
-    data: bytes
-    mime_type: str = "audio/wav"
-    sample_rate: int | None = None
-    metadata: dict = field(default_factory=dict)
 
 
 @runtime_checkable

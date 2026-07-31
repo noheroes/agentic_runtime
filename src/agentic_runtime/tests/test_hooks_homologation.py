@@ -260,9 +260,7 @@ def test_hookdecision_can_rewrite_tool_output():
     assert "updated_output" in fields
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-HOOK5/GAP-02: PermissionContext sin `mode` "
-                   "(default/plan/acceptEdits/bypassPermissions) — permission modes no "
-                   "homologados; su hogar canónico es hooks/toolPermission/")
+# GAP-02 (mitad de contrato) pagado por C1 del tramo 1. El motor = `K1`, sin tocar.
 def test_permission_context_has_mode():
     from agentic_runtime.contracts.permissions import PermissionContext
     fields = set(PermissionContext.model_fields)

@@ -1,16 +1,25 @@
 """Homologación 08·signals — cancelación/abort vs AbortController/AbortSignal canónico.
 
-Contrasta el mecanismo REAL de cancelación del runtime (`ctx.stop: asyncio.Event`,
-cableado loop→caller→models→dispatcher→fork) contra la maquinaria `AbortController`/
+Contrasta el mecanismo REAL de cancelación del runtime (`ctx.stop`, cableado
+loop→caller→models→dispatcher→fork) contra la maquinaria `AbortController`/
 `AbortSignal` del canónico, y documenta el estado HUÉRFANO de `signals/SignalBus`.
 
 Los `xfail(strict=True)` codifican los gaps (SIG1..SIG6): fallan HOY (comportamiento
 homologado ausente) y su fallo ES la evidencia del gap. Si alguno empezara a pasar,
 el strict lo convierte en error → señal de que hay que reclasificar el estado.
+
+**Actualizado por `C2` (TRAMO 1).** La primitiva ya no es `asyncio.Event`: es
+`AbortSignal`, que se CONSULTA (`.aborted`) y porta motivo (`.reason()`). Eso cierra
+`SIG2` y hace que el cable llegue de verdad al motor —los providers preguntan por
+`.aborted`, y un `Event` no lo tiene—. Lo que sigue abierto sigue marcado: `SIG1`
+(SignalBus huérfano), `SIG3` (direccionalidad padre↛hijo), `SIG4`, `SIG5`, `SIG6`,
+`SIG10` — todo eso es `08·signals`, **bajo la línea de corte del tramo**.
 """
 import asyncio
 
 import pytest
+
+from agentic_runtime.contracts.abort import AbortController, AbortReason
 
 from agentic_runtime.context.tool_use import AppState, ToolUseContext
 from agentic_runtime.execution.fork import (
@@ -29,14 +38,27 @@ from agentic_runtime.tools.protocol import ToolResult
 # ---------------------------------------------------------------------------
 
 def test_ctx_stop_is_the_real_cancellation_primitive():
-    """`ctx.stop` (asyncio.Event) vive en el ToolUseContext, espejo de
+    """`ctx.stop` vive en el ToolUseContext, espejo de
     `ToolUseContext.abortController` del canónico (Tool.ts:180)."""
-    stop = asyncio.Event()
+    stop = AbortController()
     ctx = ToolUseContext(session_id="s1", stop=stop)
     assert ctx.stop is stop
-    assert not ctx.stop.is_set()
-    ctx.stop.set()
-    assert ctx.stop.is_set()
+    assert not ctx.stop.aborted
+    ctx.stop.abort()
+    assert ctx.stop.aborted
+
+
+def test_ctx_stop_rejects_the_old_asyncio_event_instead_of_accepting_it():
+    """`C2`: el tipo viejo **revienta**, no se acepta calladamente.
+
+    Es la contraparte de `AC-39` para esta costura: mientras `stop` fue un
+    `asyncio.Event`, viajaba hasta el provider y ningún provider lo entendía
+    —todos consultan `.aborted`—, así que el abort se perdía sin un solo error.
+    Aceptar hoy un Event sería reabrir esa vía en silencio."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ToolUseContext(session_id="s1", stop=asyncio.Event())
 
 
 def test_tool_result_aborted_marks_is_aborted():
@@ -52,8 +74,8 @@ def test_abort_ownership_is_external_no_internal_setter():
     espejo de que el canónico sólo aborta vía interrupt()/keybinding externo."""
     import agentic_runtime  # noqa: F401
     # Un ctx recién forjado nunca trae stop activado por el runtime.
-    ctx = ToolUseContext(session_id="s1", stop=asyncio.Event())
-    assert not ctx.stop.is_set()
+    ctx = ToolUseContext(session_id="s1", stop=AbortController())
+    assert not ctx.stop.aborted
 
 
 # ---------------------------------------------------------------------------
@@ -65,24 +87,37 @@ def test_signalbus_abort_reaches_ctx_stop():
     """Homologado: enviar ABORT por el bus a un task debería reflejarse en el ctx.stop
     de ese task. Hoy los dos mecanismos están desconectados → no existe el puente."""
     bus = SignalBus()
-    ctx = ToolUseContext(session_id="s1", agent_id="a1", stop=asyncio.Event())
+    ctx = ToolUseContext(session_id="s1", agent_id="a1", stop=AbortController())
     bus.register(task_id="a1", parent_id=None)
     asyncio.run(bus.send(task_id="a1", signal=SignalType.ABORT))
     # No hay puente bus→ctx.stop; esto es lo que faltaría para homologar.
-    assert ctx.stop.is_set()
+    assert ctx.stop.aborted
 
 
 # ---------------------------------------------------------------------------
-# FIND-SIG2 — la primitiva de abort carece de `reason`
+# SIG2 — CERRADO por `C2`: la primitiva de abort porta `reason`
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="FIND-SIG2: asyncio.Event no porta reason (canónico: signal.reason)")
 def test_ctx_stop_carries_reason():
     """El canónico distingue 'interrupt' vs 'sibling_error' vs user (query.ts:1046,1501).
-    ctx.stop es binario → no puede portar reason."""
-    stop = asyncio.Event()
-    stop.set()
-    assert getattr(stop, "reason", None) == "interrupt"
+
+    Era `FIND-SIG2` mientras la primitiva fue `asyncio.Event` —binaria, sin motivo—.
+    `AbortSignal` deriva `aborted` DE la razón, así que no hay abort mudo ni estado
+    intermedio donde `aborted=True` y `reason()=None` puedan desincronizarse."""
+    stop = AbortController()
+    assert stop.reason() is None
+    stop.abort(AbortReason.AGENT_KILLED)
+    assert stop.aborted
+    assert stop.reason() is AbortReason.AGENT_KILLED
+
+
+def test_abort_is_one_shot_the_first_reason_wins():
+    """Un abort no se revierte ni se reetiqueta: el motivo que lee el motor tiene
+    que ser el que provocó el corte, no el último que pasó por ahí."""
+    stop = AbortController()
+    stop.abort(AbortReason.USER_INTERRUPT)
+    stop.abort(AbortReason.TIMEOUT)
+    assert stop.reason() is AbortReason.USER_INTERRUPT
 
 
 # ---------------------------------------------------------------------------
@@ -91,12 +126,12 @@ def test_ctx_stop_carries_reason():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="FIND-SIG3: fork.propagate_abort comparte el MISMO Event → hijo aborta al padre (viola direccionalidad)",
+    reason="FIND-SIG3: fork.propagate_abort comparte el MISMO controlador → hijo aborta al padre (viola direccionalidad)",
 )
 def test_child_abort_does_not_abort_parent():
     """Canónico: abortar el hijo NO afecta al padre (abortController.ts:56-57).
-    Runtime: propagate_abort=True comparte el objeto Event → hijo.set() aborta al padre."""
-    parent_stop = asyncio.Event()
+    Runtime: propagate_abort=True comparte el controlador → child.abort() aborta al padre."""
+    parent_stop = AbortController()
     forker = RuntimeContextForker()
     fork_ctx = ForkContext(
         prompt="child",
@@ -105,14 +140,14 @@ def test_child_abort_does_not_abort_parent():
     )
     child = forker.fork(fork_ctx, parent_stop=parent_stop)
     # El hijo aborta lo suyo:
-    child.stop.set()
+    child.stop.abort()
     # Homologado: el padre NO debería verse afectado.
-    assert not parent_stop.is_set()
+    assert not parent_stop.aborted
 
 
 def test_parent_abort_propagates_to_child_when_enabled():
     """La dirección padre→hijo SÍ funciona (objeto compartido): esto es correcto y pasa."""
-    parent_stop = asyncio.Event()
+    parent_stop = AbortController()
     forker = RuntimeContextForker()
     fork_ctx = ForkContext(
         prompt="child",
@@ -120,8 +155,8 @@ def test_parent_abort_propagates_to_child_when_enabled():
         parent_snapshot=ForkSnapshot(session_id="s1"),
     )
     child = forker.fork(fork_ctx, parent_stop=parent_stop)
-    parent_stop.set()
-    assert child.stop.is_set()
+    parent_stop.abort()
+    assert child.stop.aborted
 
 
 # ---------------------------------------------------------------------------
@@ -210,5 +245,5 @@ def test_fork_produces_ctx_with_appstate():
         policy=ForkPolicy(),
         parent_snapshot=ForkSnapshot(session_id="s1"),
     )
-    child = forker.fork(fork_ctx, parent_stop=asyncio.Event())
+    child = forker.fork(fork_ctx, parent_stop=AbortController())
     assert isinstance(child.app_state, AppState)

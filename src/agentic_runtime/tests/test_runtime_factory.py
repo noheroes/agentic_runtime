@@ -125,7 +125,7 @@ async def test_create_runtime_runs_task_end_to_end(tmp_path):
         model_caller=StubCaller(),
     ))
 
-    task_id = await runtime.dispatch(RuntimeTask(prompt="hola", description="e2e"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="hola", description="e2e", session_id="sess-test"))
     rec = runtime._task_registry.get(task_id)
     await rec.asyncio_task
 

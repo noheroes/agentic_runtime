@@ -72,7 +72,7 @@ async def test_skill_dir_registration_and_invocation_via_runtime(tmp_path):
     ))
     await runtime.startup()
 
-    task_id = await runtime.dispatch(RuntimeTask(prompt="usa la skill", description="reg"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="usa la skill", description="reg", session_id="sess-test"))
     rec = runtime._task_registry.get(task_id)
     await rec.asyncio_task
     await runtime.shutdown()
@@ -109,7 +109,7 @@ async def test_real_docx_xlsx_skills_register_and_invoke(tmp_path):
     catalog = {c.name for c in runtime._capability_manager.catalog(ToolUseContext(session_id="s"))}
     assert {"docx", "xlsx"} <= catalog
 
-    task_id = await runtime.dispatch(RuntimeTask(prompt="crea un word", description="real"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="crea un word", description="real", session_id="sess-test"))
     rec = runtime._task_registry.get(task_id)
     await rec.asyncio_task
     await runtime.shutdown()

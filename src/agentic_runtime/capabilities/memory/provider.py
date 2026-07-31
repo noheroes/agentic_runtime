@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ...contracts.errors import RuntimeIdentityError
 from .prompt import build_memory_activation
 from .recall import rank_memories
 from .store import MemoryHeader, MemoryStore
@@ -51,21 +52,34 @@ class MemoryProvider:
 
     @staticmethod
     def _scope(context: "ToolUseContext") -> str:
-        """Clave de scope de la memoria: `<user_id>/<agent>`.
+        """Clave de scope de la memoria: `<scope>/<agente>`.
 
-        Se scopea primero por USUARIO (identidad de ciclo de vida) para que un runtime
-        multi-tenant no mezcle memorias entre usuarios. Dentro del usuario, el agente
-        principal usa el slot ESTABLE `'main'` (su `agent_id` es un uuid distinto por
-        despacho, inservible como clave persistente) y los subagentes se aíslan por su
-        `agent_id` (A no ve memorias de B)."""
-        user = context.user_id or "anon"
-        agent = context.agent_id if context.is_subagent else "main"
-        return f"{user}/{agent}"
+        Se scopea primero por el `Scope` opaco del integrador (`C9`/`ID-3`) para que un
+        runtime multi-tenant no mezcle memorias entre tenants. Dentro de él, el agente
+        principal usa el slot ESTABLE `'main'`, y un subagente usa **su tipo**, que se
+        repite entre despachos (`ID-5`).
+
+        **Los dos defectos que esto corrige, ambos por keyear con un uuid:** el `user_id`
+        era autogenerado nuevo en cada despacho (`H-1`) ⇒ el agente principal nunca
+        recuperaba su memoria; y el `agent_id` es un uuid nuevo por fork ⇒ un
+        subagente-de-tipo-X tampoco recuperaba la suya. Sin `subagent_type` se cae al
+        `agent_id`, que aísla correctamente pero **no persiste** — y eso es un límite
+        declarado, no un default benigno."""
+        if context.scope is None:
+            raise RuntimeIdentityError(
+                "MemoryProvider necesita un `Scope` y el runtime no inventa uno "
+                "(C9/ID-3): inyecta `RuntimeConfig.scope` o `RuntimeTask.scope`."
+            )
+        if not context.is_subagent:
+            agent = "main"
+        else:
+            agent = context.subagent_type or context.agent_id or "unknown"
+        return f"{context.scope.key}/{agent}"
 
     async def startup(self) -> None:
-        # No-op: el dir de cada `<user_id>/<agent>` se crea de forma perezosa por turno
+        # No-op: el dir de cada `<scope>/<agente>` se crea de forma perezosa por turno
         # (`system_prompt_section` → `ensure_dir`); en multi-tenant no se conocen los
-        # usuarios al arrancar, así que no hay un dir único que pre-crear aquí.
+        # scopes al arrancar, así que no hay un dir único que pre-crear aquí.
         ...
 
     async def shutdown(self) -> None: ...

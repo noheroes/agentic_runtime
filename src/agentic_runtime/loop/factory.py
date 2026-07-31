@@ -12,6 +12,8 @@ def create_loop(
     capabilities_resolver: Any = None,
     tool_dispatcher: Any = None,
     model_id: str = "",
+    input_processor: Any = None,
+    max_turns: Any = None,
 ) -> LoopProtocol:
     """
     Factory de loops.
@@ -24,4 +26,6 @@ def create_loop(
         capabilities_resolver=capabilities_resolver,
         tool_dispatcher=tool_dispatcher,
         model_id=model_id,
+        input_processor=input_processor,
+        max_turns=max_turns,
     )

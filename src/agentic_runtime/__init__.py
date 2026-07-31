@@ -1,7 +1,7 @@
 from .models.caller import AgenticModelsCaller
 from .contracts.compaction import CompactionProvider, collect_compaction_context
 from .contracts.permissions import PermissionContext
-from .contracts.user_input import NoopUserInputProcessor, UserInputProcessor
+from .contracts.user_input import NoopUserInputProcessor, ProcessedInput, UserInputProcessor
 from .context.adapters import (
     apply_context_modifier_compat,
     sync_session_from_tool_use_context,
@@ -26,6 +26,7 @@ __all__ = [
     "NativeToolRegistry",
     "NoopUserInputProcessor",
     "PermissionContext",
+    "ProcessedInput",
     "RuntimeContextForker",
     "RuntimeTask",
     "ToolPool",

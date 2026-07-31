@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
+from ...contracts.identity import Scope
 from ..contracts import CapabilitySummary
 from .client import McpClient
 from .config import McpServerConfig, load_server_configs, parse_server_config
@@ -47,7 +48,7 @@ class McpProvider:
         storage: "Any | None" = None,
         redirect_handler: "Any | None" = None,
         callback_handler: "Any | None" = None,
-        user_id: str = "mcp",
+        scope: Scope | None = None,
     ) -> None:
         self._state = state or McpState()
         # Puerto de persistencia del registro de servers, scope-aware. El integrador
@@ -64,7 +65,11 @@ class McpProvider:
         self._storage = storage
         self._redirect_handler = redirect_handler
         self._callback_handler = callback_handler
-        self._user_id = user_id
+        # Scope de PERSISTENCIA del integrador (`C9`/`ID-3`, grafía `AC-39`). Ojo: no
+        # confundir con `McpScope` (`_scope_of`/`_scoped`), que es la PROCEDENCIA de una
+        # config de server (user/project/managed). Son dos ejes distintos que comparten
+        # la palabra: éste dice *bajo qué clave se escribe*, aquél *de dónde vino*.
+        self._scope = scope
         self._client_factory = client_factory or self._default_client
 
     @staticmethod
@@ -83,9 +88,17 @@ class McpProvider:
 
         deps = None
         if (config.auth or "").lower().strip() == "oauth":
+            # Sin scope no se persiste el token: antes había un default `user_id="mcp"`
+            # que hacía colisionar a todos los usuarios en `mcp/mcp/<srv>`. Se declina
+            # y se dice, en vez de inventar una clave compartida (`C9`/`ID-3`).
+            if self._storage is not None and self._scope is None:
+                logger.warning(
+                    "mcp oauth: sin `scope` no se persisten tokens de %s — inyecta "
+                    "`RuntimeConfig.scope` (C9/ID-3)", config.name,
+                )
             token_storage = (
-                StorageBackedTokenStorage(self._storage, config.name, user_id=self._user_id)
-                if self._storage is not None
+                StorageBackedTokenStorage(self._storage, config.name, scope=self._scope)
+                if self._storage is not None and self._scope is not None
                 else None
             )
             deps = AuthDeps(

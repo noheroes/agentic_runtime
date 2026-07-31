@@ -23,6 +23,7 @@ from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent
 from agentic_runtime.execution.fork import ForkSnapshot
 from agentic_runtime.factory import RuntimeConfig, StorageConfig, create_runtime
+from agentic_runtime.contracts.identity import Scope
 
 
 def _make_caller(*events):
@@ -80,13 +81,13 @@ async def test_root_turn_start_hooks_not_applied_to_subagents(tmp_path):
         root_turn_start_hooks=provider,
     ))
 
-    async for _ in rt.stream(RuntimeTask(prompt="p", description="root")):
+    async for _ in rt.stream(RuntimeTask(prompt="p", description="root", session_id="sess-test")):
         pass
     assert calls == ["root"]
 
-    snap = ForkSnapshot(session_id="s-parent", user_id="u-parent")
+    snap = ForkSnapshot(session_id="s-parent", scope=Scope("u-parent"))
     rec = rt._task_registry.register(description="sub")
-    await rt._run_loop(rec.task_id, RuntimeTask(prompt="p2", description="sub"), snap)
+    await rt._run_loop(rec.task_id, RuntimeTask(prompt="p2", description="sub", session_id="sess-test"), snap)
     assert calls == ["root"], "el subagente NO debe aplicar el provider de raíz"
 
 
@@ -98,7 +99,7 @@ async def test_provider_returning_empty_is_inert(tmp_path):
         model_caller=_make_caller(DoneEvent(stop_reason="stop")),
         root_turn_start_hooks=lambda task: [],
     ))
-    async for _ in rt.stream(RuntimeTask(prompt="p", description="t")):
+    async for _ in rt.stream(RuntimeTask(prompt="p", description="t", session_id="sess-test")):
         pass
 
 

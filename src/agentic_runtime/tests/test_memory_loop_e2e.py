@@ -31,6 +31,7 @@ from agentic_runtime.factory import (
     StorageConfig,
     create_runtime,
 )
+from agentic_runtime.contracts.identity import Scope
 
 _PROMPT = "necesito arreglar el login de sesión otra vez"
 
@@ -99,7 +100,7 @@ class _MemoryCaller:
 
 async def test_memory_activation_recall_save_and_restart(tmp_path):
     memory_root = tmp_path / "memory"
-    # scope = <user_id>/<agente>; el principal usa el slot estable 'main' bajo su usuario.
+    # clave de memoria = <scope>/<agente>; el principal usa el slot ESTABLE 'main'.
     main_dir = memory_root / "u1" / "main"
     main_dir.mkdir(parents=True)
     (main_dir / "auth.md").write_text(_SEEDED_MEMORY, encoding="utf-8")
@@ -121,7 +122,7 @@ async def test_memory_activation_recall_save_and_restart(tmp_path):
     ))
     await runtime.startup()
     try:
-        task_id = await runtime.dispatch(RuntimeTask(prompt=_PROMPT, description="memory-e2e", owner_id="u1"))
+        task_id = await runtime.dispatch(RuntimeTask(prompt=_PROMPT, description="memory-e2e", session_id="sess-test", scope=Scope("u1")))
         rec = runtime._task_registry.get(task_id)
         await rec.asyncio_task
     finally:
@@ -151,6 +152,6 @@ async def test_memory_activation_recall_save_and_restart(tmp_path):
     headers = {h.name for h in FilesystemMemoryStore(memory_root).scan("u1/main")}
     assert {"auth-flow", "estilo-commits"} <= headers
 
-    fresh_ctx = ToolUseContext(session_id="s2", user_id="u1", agent_id="otro_uuid")  # main: scope estable
+    fresh_ctx = ToolUseContext(session_id="s2", scope=Scope("u1"), agent_id="otro_uuid")  # main: scope estable
     section = fresh.system_prompt_section(fresh_ctx)
     assert section is not None and "feedback_estilo.md" in section  # índice actualizado visible

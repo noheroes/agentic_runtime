@@ -12,6 +12,8 @@ import asyncio
 
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.tools.deferred import is_deferred_tool
@@ -52,7 +54,7 @@ class _FakeTool:
 
 
 def _ctx(**kw) -> ToolUseContext:
-    return ToolUseContext(session_id="s1", stop=asyncio.Event(), **kw)
+    return ToolUseContext(session_id="s1", stop=AbortController(), **kw)
 
 
 # ===========================================================================
@@ -130,7 +132,7 @@ def test_dispatch_resolves_and_runs_from_ctx_pool():
 def test_dispatch_aborts_before_work_when_stop_set():
     """D2: abort-check pre-ejecución (ctx.stop). Binario, sin reason (gap SIG2)."""
     ctx = _ctx(tool_pool=ToolPool(native_tools=[_FakeTool("Echo")]))
-    ctx.stop.set()
+    ctx.stop.abort()
     r = asyncio.run(ToolDispatcher().dispatch(tool_name="Echo", tool_input={}, ctx=ctx))
     assert r.is_aborted
 
@@ -290,7 +292,7 @@ def test_confined_fs_blocks_dangerous_files_inside_workspace(tmp_path):
         fs.resolve(str(tmp_path / ".bashrc"), for_write=True)
 
 
-@pytest.mark.xfail(strict=True, reason="GAP-02: PermissionContext no modela permission mode (default/acceptEdits/plan/bypass)")
+# GAP-02 (mitad de contrato) pagado por C1 del tramo 1. El motor = `K1`, sin tocar.
 def test_permission_context_has_mode():
     pc = PermissionContext()
     assert pc.mode in ("default", "acceptEdits", "plan", "bypassPermissions")

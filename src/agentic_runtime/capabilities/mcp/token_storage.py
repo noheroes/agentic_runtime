@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from ...contracts.identity import Scope
+
 if TYPE_CHECKING:
     from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
@@ -19,9 +21,13 @@ class StorageBackedTokenStorage:
     etc.). El runtime solo define este contrato sobre su primitiva de storage.
     """
 
-    def __init__(self, storage: "StorageProtocol", server_name: str, *, user_id: str = "mcp") -> None:
+    def __init__(self, storage: "StorageProtocol", server_name: str, *, scope: Scope) -> None:
+        # `C9`/`ID-3`: aquí vivía `user_id: str = "mcp"`. Con ese default —que el factory
+        # nunca sobrescribía— TODOS los usuarios colisionaban en `mcp/mcp/<srv>` y el
+        # token OAuth de A era legible bajo B. `Scope` es obligatorio y sin default: la
+        # fuga sólo era posible porque el tipo admitía un valor de conveniencia.
         self._storage = storage
-        base = f"{user_id}/mcp/{server_name}"
+        base = f"{scope.key}/mcp/{server_name}"
         self._tokens_key = f"{base}/oauth_tokens.json"
         self._client_key = f"{base}/oauth_client.json"
 

@@ -8,14 +8,9 @@ del runtime vía StorageProtocol, no de la sesión.
 """
 from __future__ import annotations
 
-import uuid
-
 from pydantic import BaseModel, Field
 
-
-class Usage(BaseModel):
-    input_tokens: int = 0
-    output_tokens: int = 0
+from ...contracts.events import Usage
 
 
 class BackgroundTaskRef(BaseModel):
@@ -31,16 +26,21 @@ class SessionMetadata(BaseModel):
     background_tasks: list[BackgroundTaskRef] = Field(default_factory=list)
 
 
-def _new_session_id() -> str:
-    return f"sess_{uuid.uuid4().hex[:12]}"
-
-
 class Session(BaseModel):
-    session_id: str = Field(default_factory=_new_session_id)
+    #: Token **opaco**, atribuido por quien abre la sesión (integrador o `SessionRepo`).
+    #: **Sin default a propósito (C9/`ID-1`)**: el autogen `sess_<hex>` que vivía aquí
+    #: era la mímica que `SEAMS §S20` marca `existe-mímica`. Un runtime que inventa la
+    #: identidad impide al integrador imponer la suya sin pelear con el default.
+    session_id: str
     messages: list = Field(default_factory=list)
     turn_count: int = 0
     usage: Usage = Field(default_factory=Usage)
     metadata: SessionMetadata = Field(default_factory=SessionMetadata)
+
+    @property
+    def id(self) -> str:
+        """Lo único que el runtime lee de una sesión (`SEAMS §S20`, id opaco)."""
+        return self.session_id
 
     # Vistas planas para satisfacer RuntimeSessionProtocol
     @property

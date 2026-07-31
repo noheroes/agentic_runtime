@@ -16,12 +16,16 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from ...context.presentation import IdentityPresentation
 from ...context.tool_use import ToolUseContext
+from ...contracts.abort import AbortController
+from ...contracts.errors import RuntimeIdentityError
+from ...contracts.identity import Scope, SessionId, SessionRepo
 from ...contracts.permissions import PermissionContext
 from ...events.bus import EventBus
 from ...events.event_types import DoneEvent, TokenEvent, ToolCallEvent, ToolResultEvent
 from ...events.protocol import Event, EventHandler
 from ...hooks import HookEvent, HookRunner
 from ...loop.agent_loop import AgentLoop
+from ...models.protocol import ModelOptions
 from ...storage.protocol import StorageKeys, StorageProtocol
 from ..agents import resolve_subagent_model
 from ..fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContextForker
@@ -70,12 +74,16 @@ class LocalAgentRuntime:
         small_llm: Any = None,
         background_result_max_chars: int = 2000,
         model_id: str = "",
+        model_options: "ModelOptions | None" = None,
+        input_processor: Any = None,
         initial_allowed_tools: Optional[list[str]] = None,
         root_context_modifier: Any = None,
         root_turn_start_hooks: Any = None,
         stt: Any = None,
         tts: Any = None,
         agent_resolver: Any = None,
+        scope: Scope | None = None,
+        session_repo: "SessionRepo[Any] | None" = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._model_caller = model_caller
@@ -93,6 +101,11 @@ class LocalAgentRuntime:
         self._small_llm = small_llm
         self._max_chars = background_result_max_chars
         self._model_id = model_id
+        # Opciones de `S1` que el integrador quiere para todos los turnos (`C2`).
+        self._model_options = model_options or ModelOptions()
+        # `S11` (`C4`): el preproceso de entrada del integrador. El runtime NO lo
+        # compone — si no se inyecta, el loop usa su identidad (`NoopUserInputProcessor`).
+        self._input_processor = input_processor
         self._initial_allowed_tools = list(initial_allowed_tools or [])
         # Seam de autoría per-request del ctx raíz por el consumidor (ver RuntimeConfig).
         self._root_context_modifier = root_context_modifier
@@ -105,6 +118,16 @@ class LocalAgentRuntime:
         # Primitivas de voz ya resueltas por el factory (None = canal inactivo).
         self._stt = stt
         self._tts = tts
+        # Scope de persistencia POR DESPLIEGUE (grafía vinculante `AC-39`). Una task
+        # puede traer el suyo (`RuntimeTask.scope`) y entonces manda el de la task: un
+        # integrador multi-tenant sirve muchos scopes desde un solo host. `None` en
+        # ambos = sin scope, y los repos que necesiten clave fallan en vez de inventarla.
+        self._scope = scope
+        # `S20`/`ID-2`: repo de sesión del integrador, **opcional**. Con él inyectado, el
+        # runtime deja de ser el único sitio donde una sesión puede existir: quien
+        # decide si un `session_id` es válido —y qué id opaco le corresponde— es el
+        # repo. Sin él, el `Session` nativo mantiene al runtime ejecutable por sí solo.
+        self._session_repo = session_repo
         self._default_timeout = default_timeout
 
     @property
@@ -199,15 +222,39 @@ class LocalAgentRuntime:
         if parent_snapshot is not None:
             policy = ForkPolicy(inherit_messages=task.fork_context)
             ctx = RuntimeContextForker().fork(
-                ForkContext(prompt=task.prompt, policy=policy, parent_snapshot=parent_snapshot)
+                ForkContext(
+                    prompt=task.prompt,
+                    policy=policy,
+                    parent_snapshot=parent_snapshot,
+                    # `ID-5`: sin esto el tipo no llegaba al ctx y la clave de memoria
+                    # del subagente seguía siendo su uuid por fork.
+                    subagent_type=task.subagent_type,
+                )
             )
             return ctx, parent_snapshot.session_id, parent_snapshot.subagent_depth + 1
+        # `agent_id` es el handle de ESTA ejecución (no identidad persistente: para eso
+        # está `subagent_type`, `ID-5`), luego generarlo no es inventar identidad.
         agent_id = f"agent_{uuid.uuid4().hex[:12]}"
-        # Identidad inyectable por el consumidor; el interno solo se genera si no viene
-        # (simétrico para user_id y session_id), de modo que el runtime corra solo.
-        session_id = task.session_id or f"sess_{uuid.uuid4().hex[:12]}"
-        user_id = task.owner_id or f"user_{uuid.uuid4().hex[:12]}"
-        ctx = ToolUseContext(session_id=session_id, user_id=user_id, agent_id=agent_id)
+        # `C9`/`ID-1`: aquí vivía el autogen `sess_<hex>`/`user_<hex>`. Se ripea. El
+        # runtime NO inventa identidad — si no viene atribuida, falla en voz alta en vez
+        # de fabricar un id nuevo por despacho (que es lo que rompía la memoria, `H-1`).
+        if not task.session_id:
+            raise RuntimeIdentityError(
+                "RuntimeTask.session_id es obligatorio: el runtime transporta identidad, "
+                "no la inventa (C9/ID-1). Atribúyela el integrador o su SessionRepo."
+            )
+        ctx = ToolUseContext(
+            session_id=task.session_id,
+            scope=task.scope or self._scope,
+            agent_id=agent_id,
+            # `C2`/`S2`: la raíz nace con su controlador de abort ARMABLE. Antes
+            # `ctx.stop` quedaba en `None` en este camino, así que el chequeo del
+            # loop y el del dispatcher no podían dispararse jamás — la señal
+            # existía en el tipo y no existía en la ejecución. Quién lo dispara
+            # sigue siendo de fuera (integrador/HITL): el runtime porta el cable,
+            # no decide cuándo cortar.
+            stop=AbortController(),
+        )
         # Seed de permisos del agente principal: sin esto, tools `requires_permission`
         # (p.ej. `write_file`, que la memoria necesita para guardar) quedan fuera del
         # pool en un agente autónomo. Los subagentes los heredan vía snapshot.
@@ -291,13 +338,14 @@ class LocalAgentRuntime:
             "status": status, "result": result, "duration_ms": duration_ms,
         })
 
-    def _notify(self, parent_user_id: str | None, parent_session_id: str | None,
+    def _notify(self, parent_scope: Scope | None, parent_session_id: str | None,
                 task: "RuntimeTask", task_id: str, status: str, text: str,
                 final_text: str) -> None:
         if parent_session_id is None:
             return
         put_notification(BackgroundNotification(
-            parent_user_id=parent_user_id or "", parent_session_id=parent_session_id,
+            parent_scope=parent_scope.key if parent_scope else "",
+            parent_session_id=parent_session_id,
             task_id=task_id, status=status,
             description=task.description, notification_text=text,
             final_text=final_text,
@@ -311,88 +359,107 @@ class LocalAgentRuntime:
         on_event: EventHandler | None = None,
     ) -> None:
         t0 = time.monotonic()
-        ctx, parent_session_id, subagent_depth = self._build_child(task, parent_snapshot)
-        ctx.is_subagent = parent_snapshot is not None
-        ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
-        ctx.presentation = self._presentation
-        ctx.exec_env = self._exec_env
-        # Credenciales git (clone_repository): peer de exec_env — se asigna a CADA ctx
-        # (raíz y subagente), así el agente que clona siempre las tiene.
-        ctx.git_credentials = self._git_credentials
-        # fs: costura de confinamiento inyectada por el consumidor. Si no se inyecta, el ctx
-        # conserva su default seguro (ConfinedFilesystem confinado a cwd) — nunca ilimitado.
-        if self._fs is not None:
-            ctx.fs = self._fs
-        # Autoría per-request del consumidor SOLO en la raíz (los subagentes heredan su
-        # estado por el ForkSnapshot). Corre tras fijar los defaults para que el
-        # consumidor pueda sembrar `app_state.native` y/o sobrescribir `presentation`.
-        if self._root_context_modifier is not None and parent_snapshot is None:
-            ctx = self._root_context_modifier(ctx, task)
-        session = Session(session_id=ctx.session_id)
-        session.metadata.subagent_depth = subagent_depth
-        bus = self._make_bus(task_id, on_event)
-        # Salida por voz: el TTS se suscribe al stream antes de arrancar el loop.
-        self._wire_tts(bus, ctx)
-
-        # Subagente especializado (homologación subagent_type): resuelve la definición
-        # por su tipo (host-provided) y deriva modelo/system_prompt/tools de ELLA. El
-        # nombre del agente es la LLAVE de la definición, nunca el model_id. Sin resolver
-        # o sin tipo, el fork es genérico y hereda al padre.
-        agent_def = None
-        if task.subagent_type and self._agent_resolver is not None:
-            agent_def = self._agent_resolver.resolve(task.subagent_type)
-        if agent_def is not None:
-            model_id = resolve_subagent_model(
-                agent_def.model, self._model_id, task.model_override
-            )
-            system_prompt_override = agent_def.system_prompt
-            agent_allowed_tools = tuple(agent_def.allowed_tools)
-        else:
-            model_id = task.model_override or self._model_id
-            system_prompt_override = ""
-            agent_allowed_tools = ()
-
-        loop = AgentLoop(
-            model_caller=self._model_caller,
-            tool_registry=self._tool_registry,
-            capability_manager=self._capability_manager,
-            capabilities_resolver=self._capabilities_resolver,
-            tool_dispatcher=self._tool_dispatcher,
-            event_bus=bus,
-            hook_runner=self._hook_runner,
-            model_id=model_id,
-            system_prompt_override=system_prompt_override,
-            agent_allowed_tools=agent_allowed_tools,
-        )
-
-        # Hooks de inicio de run per-request del consumidor — SOLO en la raíz (los
-        # subagentes drenan su propio canal por su fork). Espeja el drain canónico
-        # dentro del loop; el seam los registra en el AgentLoop que el consumidor no
-        # puede alcanzar (ver RuntimeConfig.root_turn_start_hooks).
-        if self._root_turn_start_hooks is not None and parent_snapshot is None:
-            for hook in self._root_turn_start_hooks(task) or []:
-                loop.register_turn_start_hook(hook)
-
-        # Entrada por voz: el prompt efectivo puede venir de transcribir el audio.
-        prompt = await self._resolve_prompt(task, ctx)
-
+        # El `try:` abre AQUÍ, no en `loop.run`. `E6` (gate del tramo 1) encontró que
+        # con el `try:` tardío una identidad inválida reventaba en `_build_child`, la
+        # excepción se escapaba a la `asyncio.Task` que nadie espera, y el registry se
+        # quedaba en RUNNING para siempre: un fallo silencioso indistinguible de un
+        # agente vivo. Todo lo que puede fallar ANTES del turno (identidad, sesión,
+        # bus, resolver de agente, transcripción del prompt) es tan parte del run como
+        # el turno mismo y tiene que terminar en FAILED, con sus hooks y su aviso.
+        ctx: ToolUseContext | None = None
+        parent_session_id: str | None = None
+        session: Session | None = None
         try:
+            ctx, parent_session_id, subagent_depth = self._build_child(task, parent_snapshot)
+            ctx.is_subagent = parent_snapshot is not None
+            ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
+            ctx.presentation = self._presentation
+            ctx.exec_env = self._exec_env
+            # Credenciales git (clone_repository): peer de exec_env — se asigna a CADA ctx
+            # (raíz y subagente), así el agente que clona siempre las tiene.
+            ctx.git_credentials = self._git_credentials
+            # fs: costura de confinamiento inyectada por el consumidor. Si no se inyecta, el ctx
+            # conserva su default seguro (ConfinedFilesystem confinado a cwd) — nunca ilimitado.
+            if self._fs is not None:
+                ctx.fs = self._fs
+            # Autoría per-request del consumidor SOLO en la raíz (los subagentes heredan su
+            # estado por el ForkSnapshot). Corre tras fijar los defaults para que el
+            # consumidor pueda sembrar `app_state.native` y/o sobrescribir `presentation`.
+            if self._root_context_modifier is not None and parent_snapshot is None:
+                ctx = self._root_context_modifier(ctx, task)
+            session = self._open_session(ctx.session_id)
+            session.metadata.subagent_depth = subagent_depth
+            bus = self._make_bus(task_id, on_event)
+            # Salida por voz: el TTS se suscribe al stream antes de arrancar el loop.
+            self._wire_tts(bus, ctx)
+
+            # Subagente especializado (homologación subagent_type): resuelve la definición
+            # por su tipo (host-provided) y deriva modelo/system_prompt/tools de ELLA. El
+            # nombre del agente es la LLAVE de la definición, nunca el model_id. Sin resolver
+            # o sin tipo, el fork es genérico y hereda al padre.
+            agent_def = None
+            if task.subagent_type and self._agent_resolver is not None:
+                agent_def = self._agent_resolver.resolve(task.subagent_type)
+            if agent_def is not None:
+                model_id = resolve_subagent_model(
+                    agent_def.model, self._model_id, task.model_override
+                )
+                system_prompt_override = agent_def.system_prompt
+                agent_allowed_tools = tuple(agent_def.allowed_tools)
+            else:
+                model_id = task.model_override or self._model_id
+                system_prompt_override = ""
+                agent_allowed_tools = ()
+
+            loop = AgentLoop(
+                model_caller=self._model_caller,
+                tool_registry=self._tool_registry,
+                capability_manager=self._capability_manager,
+                capabilities_resolver=self._capabilities_resolver,
+                tool_dispatcher=self._tool_dispatcher,
+                event_bus=bus,
+                hook_runner=self._hook_runner,
+                model_id=model_id,
+                model_options=self._model_options,
+                # `S11` per-runtime (`C4`): el preproceso viaja por constructor, `S27`.
+                input_processor=self._input_processor,
+                # `max_turns` por TAREA gana al techo del runtime (`query.ts:1705`).
+                max_turns=task.max_turns,
+                system_prompt_override=system_prompt_override,
+                agent_allowed_tools=agent_allowed_tools,
+            )
+
+            # Hooks de inicio de run per-request del consumidor — SOLO en la raíz (los
+            # subagentes drenan su propio canal por su fork). Espeja el drain canónico
+            # dentro del loop; el seam los registra en el AgentLoop que el consumidor no
+            # puede alcanzar (ver RuntimeConfig.root_turn_start_hooks).
+            if self._root_turn_start_hooks is not None and parent_snapshot is None:
+                for hook in self._root_turn_start_hooks(task) or []:
+                    loop.register_turn_start_hook(hook)
+
+            # Entrada por voz: el prompt efectivo puede venir de transcribir el audio.
+            prompt = await self._resolve_prompt(task, ctx)
+
             await loop.run(prompt, ctx)
         except asyncio.CancelledError:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.kill(task_id)
             await self._fire_stop(task_id, task, "killed", None, duration_ms)
-            self._notify(ctx.user_id, parent_session_id, task, task_id, "killed",
+            self._notify(ctx.scope if ctx is not None else None, parent_session_id,
+                         task, task_id, "killed",
                          "Agent was killed (timeout or manual cancel)", "")
             raise
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.fail(task_id, str(exc), duration_ms=duration_ms)
             await self._fire_stop(task_id, task, "failed", None, duration_ms)
-            self._notify(ctx.user_id, parent_session_id, task, task_id, "failed", f"Error: {exc}", "")
+            self._notify(ctx.scope if ctx is not None else None, parent_session_id,
+                         task, task_id, "failed", f"Error: {exc}", "")
             logger.warning("agent %s failed: %s", task_id, exc)
             return
 
+        # Sólo se llega aquí si el `try:` corrió entero: ctx y session existen.
+        assert ctx is not None and session is not None
         final_text = _last_assistant_text(ctx.messages)
         session.messages = list(ctx.messages)
         session.turn_count = ctx.turn_count
@@ -410,22 +477,44 @@ class LocalAgentRuntime:
                 await summarize_if_needed(final_text, self._max_chars, self._small_llm)
                 if final_text else "(no output)"
             )
-            self._notify(ctx.user_id, parent_session_id, task, task_id, "completed",
+            self._notify(ctx.scope, parent_session_id, task, task_id, "completed",
                          notification_text, final_text)
 
         await self._persist(task, ctx, session)
 
+    def _open_session(self, session_id: str) -> Session:
+        """Abre la sesión del turno — por el repo del integrador si lo hay (`S20`).
+
+        Del handle que devuelve el repo el runtime lee **sólo `.id`**, que es la regla
+        entera de `SEAMS §S20`: la metadata es del integrador y es genérica, así que dos
+        integradores con metadatas incompatibles componen este mismo núcleo sin tocarlo.
+        El `Session` nativo sobrevive como **acumulador del turno** (messages/turn_count/
+        usage) — eso es estado de ejecución, no identidad; quien posee la identidad es el
+        repo, y el `create`/`list`/`delete`/`fork` del ciclo los invoca el integrador,
+        nunca el runtime (invocarlos sería componer identidad, `00-LEGEND §2.4`).
+        """
+        if self._session_repo is None:
+            return Session(session_id=session_id)
+        handle = self._session_repo.open(SessionId(session_id))
+        return Session(session_id=handle.id)
+
     async def _persist(self, task: "RuntimeTask", ctx: ToolUseContext, session: Session) -> None:
         if self._storage is None:
             return
-        # La identidad de usuario vive en el ctx (raíz: del task o autogenerada;
-        # subagente: heredada del snapshot del padre), no en task.owner_id —que un
-        # subagente no trae—, de modo que su transcript caiga bajo el mismo usuario.
-        user_id = ctx.user_id or "anon"
+        # `C9`/`ID-3`: el transcript se escribe bajo el SCOPE, no bajo un `user_id` (que
+        # el runtime ya no conoce). Sin scope no hay clave de aislamiento **y no se
+        # inventa una**: se declina persistir y se dice por qué. Antes había aquí un
+        # `or "anon"` que además era inalcanzable, porque el autogen nunca dejaba `None`.
+        if ctx.scope is None:
+            logger.info(
+                "persist omitido: la task no trae scope y el runtime no inventa uno "
+                "(C9/ID-3). Inyecta `RuntimeConfig.scope` o `RuntimeTask.scope`."
+            )
+            return
         # El agent_id aleatorio discrimina el subtree solo para subagentes (kind);
         # el main vive en la raíz de la sesión.
         agent_id = (ctx.agent_id if ctx.is_subagent else "main") or "main"
-        key = StorageKeys.transcript_key(user_id, ctx.session_id, agent_id)
+        key = StorageKeys.transcript_key(ctx.scope, ctx.session_id, agent_id)
         try:
             await self._storage.upload(key, session.model_dump_json().encode(), "application/json")
         except Exception as exc:

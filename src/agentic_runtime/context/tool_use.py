@@ -5,6 +5,8 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..contracts.abort import AbortSignal
+from ..contracts.identity import Scope
 from ..contracts.permissions import PermissionContext
 
 
@@ -31,20 +33,38 @@ class AppState(BaseModel):
 
 
 class ToolUseContext(BaseModel):
-    """Operational context for one agentic runtime turn."""
+    """Operational context for one agentic runtime turn.
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    **`user_id` ya no existe aquí (`C9` · `DEUDA-A ID-1`/`ID-3`, `D-11`).** El runtime
+    no interpreta identidad de usuario y no la inventa; lo que necesitaba de ella era
+    *scoping de persistencia*, y eso ahora viaja por `scope`, un token opaco que
+    **produce el integrador**. Un turno completo corre sin conocer ningún `user_id`
+    (gate `E6` del tramo 1) — que es la prueba de que Filosofía B se cumple.
+    """
+
+    # `extra="forbid"` (`C9`/`AC-39`): un kwarg con la grafía vieja del cable de
+    # identidad —`user_id=…`— debe REVENTAR, no descartarse en silencio dejando verde
+    # un test que ya no prueba nada.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     session_id: str
-    user_id: str | None = None  # identidad de ciclo de vida (peer de session_id); hereda al hijo vía ForkSnapshot
+    # Frontera de aislamiento de los repos (memoria, tokens MCP, skills, transcript).
+    # `None` = sin scope: los repos que necesiten clave **fallan**, no inventan una.
+    scope: Scope | None = None
     agent_id: str | None = None
     is_subagent: bool = False  # kind: subagente unattended → toolset filtrado a safe_for_background
+    # Tipo del subagente — identidad ESTABLE entre despachos (`ID-5`). El `agent_id` es
+    # un uuid por fork y por tanto inservible como clave persistente: keyear la memoria
+    # por él hacía que un subagente-de-tipo-X no recuperara nunca su memoria.
+    subagent_type: str | None = None
     subagent_depth: int = 0  # profundidad de anidamiento; la tool Agent la usa como tope
     turn_count: int = 0
     messages: list[Any] = Field(default_factory=list)
     tool_pool: Any = Field(default_factory=_default_pool)
     app_state: AppState = Field(default_factory=AppState)
-    stop: asyncio.Event | None = None
+    # `C2`/`S2`: señal de abort CONSULTABLE (`.aborted`/`.reason()`), no `asyncio.Event`.
+    # El tipo viejo viajaba hasta el provider y ningún provider sabía leerlo.
+    stop: AbortSignal | None = None
     event_queue: asyncio.Queue | None = None
     storage: Any = None
     presentation: Any = None

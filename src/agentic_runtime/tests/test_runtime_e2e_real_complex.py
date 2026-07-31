@@ -39,6 +39,7 @@ from agentic_runtime.tools import ToolCategory, ToolResult
 
 from ._azure_real import build_caller
 from ._azure_real import skip_marker as pytest_skip
+from agentic_runtime.contracts.identity import Scope
 
 pytestmark = pytest.mark.asyncio
 
@@ -177,7 +178,8 @@ async def test_real_complex_chain_via_primitive(tmp_path):
         "(3) extrae el CODIGO-INTERNO que contiene, (4) envíalo con submit_code, "
         "(5) dime el acuse exacto que recibas."
     )
-    task = RuntimeTask(prompt=prompt, description="cmplx", owner_id="user-cmplx")
+    task = RuntimeTask(prompt=prompt, description="cmplx", owner_id="user-cmplx", session_id="sess-test",
+                       scope=Scope("user-cmplx"))
     try:
         # Primitiva pública: dispatch con suscripción al stream en vivo + task_id para control.
         task_id = await runtime.dispatch(task, on_event=cap.sink)
@@ -236,9 +238,9 @@ async def test_real_complex_chain_via_primitive(tmp_path):
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def _load_persisted_messages(runtime, owner_id: str) -> list:
+async def _load_persisted_messages(runtime, scope_key: str) -> list:
     """Lee el transcript que el runtime persistió en storage (estado real, no in-memory)."""
-    keys = await runtime._storage.list_prefix(f"{owner_id}/")
+    keys = await runtime._storage.list_prefix(f"{scope_key}/")
     session_keys = [k for k in keys if k.endswith("/session.json")]
     assert session_keys, f"no se persistió la sesión: {keys}"
     raw = await runtime._storage.download(session_keys[0])

@@ -20,6 +20,8 @@ import asyncio
 
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.capabilities.skills import (
     SkillDefinition,
     SkillFrontmatter,
@@ -37,10 +39,11 @@ from agentic_runtime.capabilities.skills import (
 from agentic_runtime.capabilities.skills.store import StorageBackedSkillStore
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.tools.deferred import is_deferred_tool
+from agentic_runtime.contracts.identity import Scope
 
 
 def _ctx(**kw) -> ToolUseContext:
-    return ToolUseContext(session_id="s1", stop=asyncio.Event(), **kw)
+    return ToolUseContext(session_id="s1", stop=AbortController(), **kw)
 
 
 _SKILL_MD = """---
@@ -169,7 +172,7 @@ def test_store_backed_roundtrip_and_unregister():
             self.blobs.pop(key, None)
 
     async def _run():
-        store = StorageBackedSkillStore(_FakeStorage())
+        store = StorageBackedSkillStore(_FakeStorage(), scope=Scope("u1"))
         prov = SkillsProvider(skill_store=store)
         await prov.register_skill("greet", _SKILL_MD)
         assert await store.list() == ["greet"]

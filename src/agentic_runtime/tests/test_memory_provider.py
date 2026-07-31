@@ -7,6 +7,7 @@ from agentic_runtime.capabilities.memory import (
     MemoryProvider,
 )
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.identity import Scope
 
 
 def _write_memory(directory: Path, slug: str, name: str, description: str, mtype: str = "project") -> None:
@@ -18,8 +19,8 @@ def _write_memory(directory: Path, slug: str, name: str, description: str, mtype
 
 
 def _ctx(agent_id: str | None = None, user_text: str = "", is_subagent: bool = False,
-         user_id: str = "u1") -> ToolUseContext:
-    ctx = ToolUseContext(session_id="s1", user_id=user_id, agent_id=agent_id, is_subagent=is_subagent)
+         scope: str = "u1") -> ToolUseContext:
+    ctx = ToolUseContext(session_id="s1", scope=Scope(scope), agent_id=agent_id, is_subagent=is_subagent)
     if user_text:
         ctx.messages.append({"role": "user", "content": user_text})
     return ctx

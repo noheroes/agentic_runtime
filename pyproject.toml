@@ -68,4 +68,5 @@ testpaths = ["src/agentic_runtime/tests"]
 pythonpath = ["src"]
 markers = [
     "integration: tests that require external infrastructure such as MinIO",
+    "gate_tramo1: E2E reales del gate de fin de TRAMO 1 (E1..E9). Deben pasar TODAS a la vez, en una sola corrida (SEPARACION/TRAMO-1.md §4). Un skip no es un verde.",
 ]

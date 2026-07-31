@@ -78,7 +78,7 @@ class AgentTool:
 
         snapshot = ForkSnapshot(
             session_id=ctx.session_id,
-            user_id=ctx.user_id,
+            scope=ctx.scope,
             subagent_depth=ctx.subagent_depth,
             messages=tuple(ctx.messages) if inherit_messages else (),
             permissions=ctx.permission_context,

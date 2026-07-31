@@ -13,6 +13,8 @@ import asyncio
 
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.tools.fs_env import ConfinedFilesystem
 from agentic_runtime.tools.native.ask_user import AskUserQuestionTool
@@ -32,7 +34,7 @@ from agentic_runtime.tools.native.write_file import WriteFileTool
 def _ctx(tmp_path=None, **kw) -> ToolUseContext:
     if tmp_path is not None:
         kw.setdefault("fs", ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]))
-    return ToolUseContext(session_id="s1", stop=asyncio.Event(), **kw)
+    return ToolUseContext(session_id="s1", stop=AbortController(), **kw)
 
 
 # ===========================================================================

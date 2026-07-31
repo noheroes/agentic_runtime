@@ -95,7 +95,7 @@ class FilesystemMemoryStore:
     """Memoria en disco, scopeada por una clave opaca: `<root>/<scope|'main'>/`.
 
     La clave la compone quien llama (el `MemoryProvider` la arma como
-    `<user_id>/<agent>`); el store solo la namespacea. El modelo escribe los ficheros
+    `<scope>/<agente>`); el store solo la namespacea. El modelo escribe los ficheros
     con `Write` (guardado canónico, sin tool propia) y actualiza el índice `MEMORY.md`;
     este store solo lee índice + cabeceras.
     """

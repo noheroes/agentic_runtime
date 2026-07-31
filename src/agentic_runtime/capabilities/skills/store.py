@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from ...contracts.identity import Scope
+
 if TYPE_CHECKING:
     from ...storage.protocol import StorageProtocol
 
@@ -32,9 +34,11 @@ class StorageBackedSkillStore:
 
     _SUFFIX = "/SKILL.md"
 
-    def __init__(self, storage: "StorageProtocol", *, prefix: str = "skills") -> None:
+    def __init__(self, storage: "StorageProtocol", *, scope: Scope, prefix: str = "skills") -> None:
+        # `C9`/`ID-3`: el prefijo era `"skills"` FIJO, sin componente de identidad ⇒ dos
+        # tenants escribían sus skills bajo la misma clave. El `Scope` va delante.
         self._storage = storage
-        self._prefix = prefix.rstrip("/")
+        self._prefix = f"{scope.key}/{prefix.rstrip('/')}"
 
     def _key(self, name: str) -> str:
         return f"{self._prefix}/{name}{self._SUFFIX}"

@@ -173,7 +173,7 @@ async def test_office_skills_run_scripts_in_loop_and_produce_real_files(tmp_path
     ))
     await runtime.startup()
     try:
-        task_id = await runtime.dispatch(RuntimeTask(prompt="genera los documentos", description="office-e2e"))
+        task_id = await runtime.dispatch(RuntimeTask(prompt="genera los documentos", description="office-e2e", session_id="sess-test"))
         rec = runtime._task_registry.get(task_id)
         await rec.asyncio_task
     finally:

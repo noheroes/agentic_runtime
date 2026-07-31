@@ -21,6 +21,7 @@ from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.factory import CapabilitiesConfig, RuntimeConfig, StorageConfig, create_runtime
 from agentic_runtime.storage.filesystem import FilesystemStorage
+from agentic_runtime.contracts.identity import Scope
 
 _SERVER = str((Path(__file__).parent / "_mcp_echo_server.py").resolve())
 
@@ -137,7 +138,7 @@ async def test_register_and_operate_mcp_and_skill_end_to_end(tmp_path):
         # un server inalcanzable: debe AISLARSE (FAILED) sin tumbar al resto
         await mcp_store.save("dead", {"type": "http", "url": f"https://127.0.0.1:{_free_port()}/mcp"})
 
-        skill_store = StorageBackedSkillStore(storage)
+        skill_store = StorageBackedSkillStore(storage, scope=Scope("u1"))
         await skill_store.write("office", _OFFICE_SKILL)
 
         # --- el runtime ENCUENTRA lo registrado al arrancar ---
@@ -155,7 +156,7 @@ async def test_register_and_operate_mcp_and_skill_end_to_end(tmp_path):
             assert mcp.state.status("local").value == "connected"
             assert mcp.state.status("dead").value == "failed"  # aislado, no abortó al resto
 
-            task_id = await runtime.dispatch(RuntimeTask(prompt="haz la tarea", description="e2e"))
+            task_id = await runtime.dispatch(RuntimeTask(prompt="haz la tarea", description="e2e", session_id="sess-test"))
             rec = runtime._task_registry.get(task_id)
             await rec.asyncio_task  # espera a que el turno real termine
         finally:

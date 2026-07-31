@@ -20,6 +20,7 @@ from agentic_runtime.events import DoneEvent, ToolCallEvent
 from agentic_runtime.execution.fork import ForkSnapshot
 from agentic_runtime.factory import RuntimeConfig, StorageConfig, ToolsConfig, create_runtime
 from agentic_runtime.tools import ToolCategory, ToolResult
+from agentic_runtime.contracts.identity import Scope
 
 
 def _make_caller(*events):
@@ -61,13 +62,18 @@ class _Marker:
 async def test_root_modifier_runs_with_identity_and_seeds_native_and_presentation(tmp_path):
     """En la raíz: el modifier recibe el ctx con la identidad inyectada por el task,
     siembra `app_state.native` y puede sobrescribir `ctx.presentation`; ambos llegan a
-    la tool ejecutada en ese turno."""
+    la tool ejecutada en ese turno.
+
+    Este seam es además donde el integrador lee SU token de usuario (`task.owner_id`):
+    el runtime lo transporta sin interpretarlo y no lo usa para derivar el `scope`
+    (`D-11`) — son dos cables distintos, y aquí se ve que ambos llegan enteros."""
     captured: dict = {}
     marker = _Marker()
 
     def modifier(ctx, task):
         captured["session_id"] = ctx.session_id
-        captured["user_id"] = ctx.user_id
+        captured["scope"] = ctx.scope
+        captured["owner_id"] = task.owner_id
         captured["description"] = task.description
         ctx.app_state.native["probe"] = "seeded"
         ctx.presentation = marker
@@ -87,11 +93,14 @@ async def test_root_modifier_runs_with_identity_and_seeds_native_and_presentatio
 
     async for _ in rt.stream(RuntimeTask(
         prompt="usa probe", description="root-task",
-        session_id="S-ext", owner_id="U-ext",
+        session_id="S-ext", owner_id="U-ext", scope=Scope("SC-ext"),
     )):
         pass
 
-    assert captured == {"session_id": "S-ext", "user_id": "U-ext", "description": "root-task"}
+    assert captured == {
+        "session_id": "S-ext", "scope": Scope("SC-ext"),
+        "owner_id": "U-ext", "description": "root-task",
+    }
     assert probe.seen and probe.seen[0]["native_probe"] == "seeded"
     assert probe.seen[0]["presentation"] is marker
 
@@ -112,13 +121,13 @@ async def test_root_modifier_not_applied_to_subagents(tmp_path):
         root_context_modifier=modifier,
     ))
 
-    async for _ in rt.stream(RuntimeTask(prompt="p", description="root")):
+    async for _ in rt.stream(RuntimeTask(prompt="p", description="root", session_id="sess-test")):
         pass
     assert calls == ["root"], "la raíz SÍ aplica el modifier"
 
-    snap = ForkSnapshot(session_id="s-parent", user_id="u-parent")
+    snap = ForkSnapshot(session_id="s-parent", scope=Scope("u-parent"))
     rec = rt._task_registry.register(description="sub")
-    await rt._run_loop(rec.task_id, RuntimeTask(prompt="p2", description="sub"), snap)
+    await rt._run_loop(rec.task_id, RuntimeTask(prompt="p2", description="sub", session_id="sess-test"), snap)
     assert calls == ["root"], "el subagente NO debe aplicar el modifier de raíz"
 
 

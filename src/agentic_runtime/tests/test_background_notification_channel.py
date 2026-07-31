@@ -42,7 +42,7 @@ def _reset_channel():
 
 def _notif(**kw) -> BackgroundNotification:
     defaults = dict(
-        parent_user_id="u1",
+        parent_scope="u1",
         parent_session_id="s1",
         task_id="t1",
         status="completed",
@@ -100,7 +100,7 @@ def test_channel_isolates_sessions():
 # ---------------------------------------------------------------------------
 
 def test_process_injects_completed_xml(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     process_background_notification(s, _notif(status="completed", notification_text="result ok"))
     xml = s.messages[-1]["content"]
     assert 'status="completed"' in xml
@@ -109,7 +109,7 @@ def test_process_injects_completed_xml(monkeypatch):
 
 
 def test_process_injects_failed_xml(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     process_background_notification(s, _notif(status="failed", notification_text="Error: algo fallo"))
     xml = s.messages[-1]["content"]
     assert 'status="failed"' in xml
@@ -117,20 +117,20 @@ def test_process_injects_failed_xml(monkeypatch):
 
 
 def test_process_injects_killed_xml(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     process_background_notification(s, _notif(status="killed", notification_text="killed by timeout"))
     xml = s.messages[-1]["content"]
     assert 'status="killed"' in xml
 
 
 def test_process_xml_message_has_user_role(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     process_background_notification(s, _notif())
     assert s.messages[-1]["role"] == "user"
 
 
 def test_process_multiple_notifications_produce_multiple_messages(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     process_background_notification(s, _notif(task_id="t1", notification_text="first"))
     process_background_notification(s, _notif(task_id="t2", notification_text="second"))
     xmls = [m["content"] for m in s.messages]
@@ -143,21 +143,21 @@ def test_process_multiple_notifications_produce_multiple_messages(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_process_updates_background_task_ref(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     s.metadata.background_tasks.append(BackgroundTaskRef(task_id="t1", description="d"))
     process_background_notification(s, _notif(task_id="t1", status="completed"))
     assert s.metadata.background_tasks[0].status == "completed"
 
 
 def test_process_updates_failed_ref(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     s.metadata.background_tasks.append(BackgroundTaskRef(task_id="t1", description="d"))
     process_background_notification(s, _notif(task_id="t1", status="failed"))
     assert s.metadata.background_tasks[0].status == "failed"
 
 
 def test_process_missing_task_ref_is_noop(monkeypatch):
-    s = Session()
+    s = Session(session_id="sess-test")
     process_background_notification(s, _notif(task_id="no-such-task", status="failed"))
     # No debe lanzar excepción
 

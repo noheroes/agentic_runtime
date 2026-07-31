@@ -13,6 +13,7 @@ from agentic_runtime.execution.tasks.status import TaskStatus
 from agentic_runtime.hooks import HookEvent, HookRunner
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
+from agentic_runtime.contracts.identity import Scope
 
 
 def _make_caller(*events):
@@ -62,7 +63,7 @@ async def _await_task(runtime, task_id):
 async def test_dispatch_single_turn_completes():
     caller = _make_caller(TokenEvent(content="respuesta"), DoneEvent(stop_reason="stop"))
     runtime = _make_runtime(caller)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="hola", description="t"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="hola", description="t", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert runtime.status(task_id) == TaskStatus.COMPLETED
     assert runtime.result(task_id) == "respuesta"
@@ -76,7 +77,7 @@ async def test_dispatch_executes_tool_and_pushes_events():
     )
     registry = InMemoryTaskRegistry()
     runtime = _make_runtime(caller, tools=(EchoTool(),), task_registry=registry)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="usa echo", description="t"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="usa echo", description="t", session_id="sess-test"))
     await _await_task(runtime, task_id)
     rec = registry.get(task_id)
     types = [e["type"] for e in rec.events]
@@ -96,7 +97,7 @@ async def test_subagent_stop_hook_fired_on_completion():
 
     runner.register(HookEvent.SUBAGENT_STOP, handler)
     runtime = _make_runtime(caller, hook_runner=runner)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="hola", description="t"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="hola", description="t", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert len(fired) == 1
     assert fired[0]["status"] == "completed"
@@ -107,9 +108,9 @@ async def test_subagent_stop_hook_fired_on_completion():
 async def test_dispatch_with_parent_snapshot_notifies_parent():
     caller = _make_caller(TokenEvent(content="resultado hijo"), DoneEvent(stop_reason="stop"))
     runtime = _make_runtime(caller)
-    snap = ForkSnapshot(session_id="parent-sid", user_id="parent-uid", subagent_depth=0)
+    snap = ForkSnapshot(session_id="parent-sid", scope=Scope("parent-uid"), subagent_depth=0)
     task_id = await runtime.dispatch(
-        RuntimeTask(prompt="trabaja", description="bg"), parent_snapshot=snap
+        RuntimeTask(prompt="trabaja", description="bg", session_id="sess-test"), parent_snapshot=snap
     )
     await _await_task(runtime, task_id)
     notifs = drain_notifications("parent-uid", "parent-sid")
@@ -122,6 +123,6 @@ async def test_dispatch_with_parent_snapshot_notifies_parent():
 async def test_no_parent_snapshot_no_notification():
     caller = _make_caller(DoneEvent(stop_reason="stop"))
     runtime = _make_runtime(caller)
-    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="t"))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="t", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert drain_notifications("parent-uid", "parent-sid") == []

@@ -51,7 +51,7 @@ class ToolDispatcher:
         timeout: Optional[float] = None,
     ) -> ToolResult:
         # Abort check — antes de cualquier trabajo
-        if ctx.stop and ctx.stop.is_set():
+        if ctx.stop is not None and ctx.stop.aborted:
             return ToolResult.aborted(tool_name)
 
         tool = ctx.tool_pool.find(tool_name, ctx.permission_context)

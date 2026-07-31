@@ -6,12 +6,14 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from ..capabilities.resolver import CapabilitiesResolver
 from ..context.tool_use import ToolUseContext
+from ..contracts.user_input import NoopUserInputProcessor, UserInputProcessor
 from ..events.bus import EventBus
 from ..events.event_types import DoneEvent, ErrorEvent, Event, TokenEvent, ToolCallEvent, ToolResultEvent
 from ..hooks import HookEvent
-from ..models.protocol import ModelCallerProtocol
+from ..models.protocol import ModelCallerProtocol, ModelOptions
 from ..tools.dispatcher import ToolDispatcher
 from ..tools.pool import ToolPool
+from .outcome import LoopEndReason, LoopOutcome
 
 if TYPE_CHECKING:
     from ..capabilities.manager import CapabilityManager
@@ -21,7 +23,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MAX_TURNS = 50  # techo de seguridad para evitar loops infinitos
+_MAX_TURNS = 50  # techo de seguridad por DEFECTO — `max_turns` del constructor lo sustituye
+
+
+def _aborted(ctx: ToolUseContext) -> bool:
+    """`S2`: la señal se CONSULTA (`.aborted`), no se espera.
+
+    Un único punto de lectura para los tres chequeos del loop (pre-run, por turno
+    y **por evento del stream**). El de por evento es el que hace que el abort
+    corte de verdad: se midió en esta ventana que sólo el provider `anthropic`
+    de `agentic_models 0.2.0` mira la señal dentro de su iterador SSE; el camino
+    Azure/Responses la mira **después** de terminar el stream. Luego el corte a
+    mitad tiene que ser del runtime, o no lo hay.
+    """
+    return ctx.stop is not None and ctx.stop.aborted
 
 
 def _as_reminder(content: str) -> str:
@@ -60,6 +75,9 @@ class AgentLoop:
         system_prompt_override: str = "",
         agent_allowed_tools: tuple[str, ...] = (),
         deferred_strategy: "Optional[DeferredToolStrategy]" = None,
+        model_options: Optional[ModelOptions] = None,
+        input_processor: Optional[UserInputProcessor] = None,
+        max_turns: Optional[int] = None,
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -69,6 +87,10 @@ class AgentLoop:
         self._event_bus = event_bus
         self._hook_runner = hook_runner
         self._model_id = model_id
+        # `S1` enriquecida (`C2`): lo que el integrador quiere pedirle al motor y el
+        # runtime sólo transporta (razonamiento, muestreo, techo de tokens, metadata
+        # opaca de `ID-7`). Vacío = el motor decide, como hasta ahora.
+        self._model_options = model_options or ModelOptions()
         # Subagente especializado (homologación subagent_type): system prompt propio que
         # REEMPLAZA el base del padre (espejo getAgentSystemPrompt → [agentPrompt]); `""`
         # = heredar el base. `agent_allowed_tools` restringe el pool a ese subconjunto
@@ -81,6 +103,14 @@ class AgentLoop:
         self._deferred_strategy_override = deferred_strategy
         self._deferred_strategy_cached: "Optional[DeferredToolStrategy]" = None
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
+        # `S11` (`C4`/`GAP-01`): el preproceso de entrada deja de ser superficie
+        # exportada sin consumidor. Default = passthrough, para que un runtime que no
+        # inyecte nada se comporte exactamente como antes de existir la costura.
+        self._input_processor: UserInputProcessor = input_processor or NoopUserInputProcessor()
+        # `02·A5`: el tope de vueltas era una constante de módulo, y `RuntimeTask.max_turns`
+        # existía en el contrato **sin llegar a ningún sitio** (`05·FIND-EXEC5`). Ahora entra
+        # por constructor; `None` = el techo de seguridad por defecto.
+        self._max_turns = max_turns if max_turns is not None else _MAX_TURNS
 
     def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
         """Ensambla el pool del turno (= `assembleToolPool`): native (filtrado por
@@ -168,22 +198,46 @@ class AgentLoop:
     # Ciclo principal
     # ------------------------------------------------------------------
 
-    async def run(self, prompt: str, ctx: ToolUseContext) -> None:
+    async def run(self, prompt: str, ctx: ToolUseContext) -> LoopOutcome:
         # Abort antes de empezar
-        if ctx.stop and ctx.stop.is_set():
-            return
+        if _aborted(ctx):
+            return LoopOutcome(LoopEndReason.ABORTED_PRE_RUN, ctx.turn_count)
 
         await self._run_turn_start_hooks()
 
-        # Inserta el prompt como mensaje user
-        ctx.messages.append({"role": "user", "content": prompt})
+        # `S11` PRE-TURNO (`C4`, paga `GAP-01`). El orden es el del canónico: el
+        # preproceso corre **antes** de que nada entre al historial, porque puede
+        # reescribir el prompt, y puede resolverlo entero sin modelo.
+        processed = await self._input_processor.process(prompt, ctx)
+
+        # El mensaje del usuario entra al historial en los DOS caminos, corte incluido:
+        # el canónico empuja `messagesFromUserInput` siempre (`QueryEngine.ts:431`) y sólo
+        # después mira `shouldQuery` (`:556`). Un slash-command resuelto no borra de la
+        # conversación que el usuario lo escribió.
+        ctx.messages.append({"role": "user", "content": processed.prompt})
+
+        if processed.short_circuit:
+            # Turno resuelto localmente: NO se llama al modelo. Lo ya resuelto se
+            # persiste como turno del asistente para que el consumidor lo lea por el
+            # mismo camino que cualquier otra respuesta (`_last_assistant_text`).
+            text = processed.result_text or ""
+            if text:
+                ctx.messages.append({"role": "assistant", "content": text})
+            logger.debug("AgentLoop: `S11` cortó el turno sin ir al modelo")
+            return LoopOutcome(LoopEndReason.SHORT_CIRCUIT, ctx.turn_count, text or None)
 
         if self._model_caller is None:
             logger.warning("AgentLoop.run: no hay model_caller — loop no puede ejecutar")
-            return
+            return LoopOutcome(LoopEndReason.NO_MODEL_CALLER, ctx.turn_count)
 
-        for _turn in range(_MAX_TURNS):
-            if ctx.stop and ctx.stop.is_set():
+        reason = LoopEndReason.COMPLETED
+        detail: Optional[str] = None
+
+        for _turn in range(self._max_turns):
+            if _aborted(ctx):
+                # Frontera de vuelta: espejo del chequeo que el canónico hace tras las
+                # tools (`query.ts:1515`).
+                reason = LoopEndReason.ABORTED_TOOLS
                 break
 
             ctx.turn_count += 1
@@ -225,6 +279,9 @@ class AgentLoop:
             # robustez ante callers de terceros que aún no adoptan el kwarg (un
             # caller compatible con `ModelCallerProtocol` lo acepta con default None).
             complete_kwargs: dict[str, Any] = {"stop": ctx.stop, "model_id": self._model_id}
+            # Sólo lo poblado: un caller de terceros que aún no adopte un kwarg de
+            # la `S1` enriquecida no se rompe si nadie pidió esa opción.
+            complete_kwargs.update(self._model_options.as_kwargs())
             if system_sections:
                 complete_kwargs["system_sections"] = system_sections
             # Subagente especializado: su system prompt REEMPLAZA el base del caller
@@ -244,7 +301,14 @@ class AgentLoop:
             done: Optional[DoneEvent] = None
             error: Optional[ErrorEvent] = None
 
+            aborted_mid_stream = False
             async for event in stream:
+                # Corte a mitad de stream: se consulta ANTES de rendir el evento, así
+                # que lo que llegó tras el abort no se emite ni se acumula. Es el
+                # único punto de control que existe para el camino Azure/Responses.
+                if _aborted(ctx):
+                    aborted_mid_stream = True
+                    break
                 await self._emit(event)  # observación en vivo
                 if isinstance(event, TokenEvent):
                     token_buffer.append(event.content)
@@ -257,6 +321,21 @@ class AgentLoop:
                     error = event
                     break
 
+            if aborted_mid_stream:
+                # Se cierra el generador para que el provider suelte la conexión en vez
+                # de quedarse consumiendo la respuesta que ya no le importa a nadie.
+                aclose = getattr(stream, "aclose", None)
+                if callable(aclose):
+                    await aclose()
+                abort_reason = ctx.stop.reason() if ctx.stop is not None else None
+                logger.info("AgentLoop turno %d: abortado a mitad de stream (%s)",
+                            ctx.turn_count, getattr(abort_reason, "value", abort_reason))
+                # Lo parcial NO se registra como turno del asistente ni se despachan sus
+                # tool calls: un turno abortado no dejó una respuesta, dejó un corte.
+                reason = LoopEndReason.ABORTED_STREAMING
+                detail = str(getattr(abort_reason, "value", abort_reason) or "")
+                break
+
             logger.debug(
                 "AgentLoop turno %d: respuesta (%d tokens, %d tool_calls, stop=%s)",
                 ctx.turn_count, len(token_buffer), len(tool_calls),
@@ -267,6 +346,8 @@ class AgentLoop:
             if error is not None:
                 logger.error("AgentLoop: error del modelo — %s", error.message)
                 ctx.messages.append({"role": "assistant", "content": f"[error: {error.message}]"})
+                reason = LoopEndReason.MODEL_ERROR
+                detail = error.message
                 break
 
             # Persiste respuesta del asistente
@@ -346,7 +427,14 @@ class AgentLoop:
             # Decide si continuar. `_ends_turn`: una tool pidió cerrar el turno (HITL multi-turno) →
             # no se re-llama al modelo; el control vuelve al consumidor para recabar la respuesta.
             if _ends_turn or done is None or done.stop_reason != "tool_calls":
+                reason = LoopEndReason.ENDS_TURN if _ends_turn else LoopEndReason.COMPLETED
                 break
 
         else:
-            logger.warning("AgentLoop: alcanzado límite de %d turnos", _MAX_TURNS)
+            # Tope agotado sin que el modelo cerrara: el canónico lo distingue con su
+            # propio reason-code y adjunta `max_turns_reached` (`query.ts:1705-1711`).
+            logger.warning("AgentLoop: alcanzado límite de %d turnos", self._max_turns)
+            reason = LoopEndReason.MAX_TURNS
+            detail = str(self._max_turns)
+
+        return LoopOutcome(reason, ctx.turn_count, detail)

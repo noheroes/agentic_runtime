@@ -41,7 +41,8 @@ def test_local_agent_runtime_satisfies_agent_runtime_protocol() -> None:
 
 
 def test_runtime_task_defaults_are_self_contained() -> None:
-    """RuntimeTask es ejecutable sola: identidad de ciclo de vida opcional."""
+    """RuntimeTask es autocontenida: el DATACLASS no exige identidad — el que la exige
+    es el runtime al arrancar la raíz (`C9`: no la inventa, la reclama)."""
     task = RuntimeTask(prompt="hola", description="saludo")
     assert task.owner_id is None
     assert task.session_id is None
@@ -49,6 +50,7 @@ def test_runtime_task_defaults_are_self_contained() -> None:
     assert task.model_override is None
     assert task.fork_context is False
     assert task.audio_prompt is None
+    assert task.scope is None
 
 
 def test_runtime_task_accepts_injected_lifecycle_identity() -> None:
@@ -90,14 +92,19 @@ def test_storage_contract_is_structurally_checkable() -> None:
 # ----------------------------------------------------- UserInputProcessor
 
 async def test_noop_user_input_processor_is_passthrough() -> None:
+    """`C4`: el default de `S11` tiene que ser identidad EXACTA.
+
+    Es lo que sostiene que cablear la costura no cambió el comportamiento de
+    ningún runtime que no inyecte procesador propio.
+    """
     proc = NoopUserInputProcessor()
-    # NOTA: UserInputProcessor NO es @runtime_checkable (a diferencia de
-    # AgentRuntime/StorageContract/PathPresentation) → conformidad por duck-typing.
-    for m in ("process_slash_command", "expand_inline_invocation", "get_inline_name"):
-        assert callable(getattr(proc, m))
-    assert await proc.process_slash_command("/x", None, None, None, None) is None
-    assert proc.expand_inline_invocation("texto") == "texto"
-    assert proc.get_inline_name("texto") is None
+    # `C4` pagó `FIND-01` para esta costura: ya es @runtime_checkable, así que la
+    # conformidad se comprueba, no se supone.
+    assert isinstance(proc, UserInputProcessor)
+    out = await proc.process("texto", None)  # type: ignore[arg-type]
+    assert out.prompt == "texto"
+    assert out.short_circuit is False
+    assert out.result_text is None
 
 
 def test_runtime_checkable_is_inconsistent_across_contracts() -> None:
@@ -111,30 +118,23 @@ def test_runtime_checkable_is_inconsistent_across_contracts() -> None:
     assert is_rc(AgentRuntime) is True
     assert is_rc(StorageContract) is True
     assert is_rc(PathPresentation) is True
-    # Inconsistentes: sin @runtime_checkable
-    assert is_rc(UserInputProcessor) is False
+    # `UserInputProcessor` salió de esta lista con `C4`: al cablearlo se le puso
+    # @runtime_checkable, porque un consumidor tiene que poder comprobar lo que
+    # inyecta antes de un turno real, no descubrirlo con un AttributeError.
+    assert is_rc(UserInputProcessor) is True
+    # Sigue inconsistente (su ciclo dueño está bajo la línea de corte):
     assert is_rc(CompactionProvider) is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GAP-01: UserInputProcessor no está cableado en el loop; ningún "
-    "consumidor invoca process_slash_command/expand_inline. Ver 01-contracts.md.",
-)
-def test_agent_loop_consumes_user_input_processor() -> None:
-    """Homologado: el loop debe preprocesar slash/inline vía UserInputProcessor
-    (canónico: commands.ts + query). Hoy el seam existe pero está muerto."""
-    from agentic_runtime.loop import agent_loop
-
-    src = inspect.getsource(agent_loop)
-    assert "UserInputProcessor" in src or "process_slash_command" in src
+# `GAP-01` PAGADO por `C4`. Aquí vivía un xfail que leía el **código fuente** del loop
+# buscando la cadena "UserInputProcessor" — un test de grado `grep`, que habría pasado
+# igual con la costura exportada y muerta (`L09`). Su sustituto prueba el
+# comportamiento y vive donde vive el loop:
+#   test_loop_homologation.py::test_loop_consumes_user_input_processor_and_honors_short_circuit
+# (el processor corta, el modelo NO se llama, y el historial conserva ambos mensajes).
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GAP-02: PermissionContext no modela los permission modes del canónico "
-    "(acceptEdits/bypassPermissions/plan/default). Ver 01-contracts.md.",
-)
+# GAP-02 (mitad de contrato) pagado por C1 del tramo 1. El motor = `K1`, sin tocar.
 def test_permission_context_models_permission_modes() -> None:
     """Homologado: el canónico decide permisos por MODO además de allow/deny."""
     from agentic_runtime.contracts.permissions import PermissionContext

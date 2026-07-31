@@ -2,6 +2,8 @@
 import asyncio
 import pytest
 
+from agentic_runtime.contracts.abort import AbortController
+
 from agentic_runtime.loop import AgentLoop, BasicLoop
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
@@ -44,7 +46,7 @@ def _make_registry(*tools) -> ToolRegistry:
     return reg
 
 
-def _make_ctx(stop: asyncio.Event | None = None) -> ToolUseContext:
+def _make_ctx(stop: AbortController | None = None) -> ToolUseContext:
     return ToolUseContext(session_id="s1", stop=stop)
 
 
@@ -107,8 +109,8 @@ async def test_loop_executes_tool_call():
 
 @pytest.mark.asyncio
 async def test_loop_aborts_on_stop_event():
-    stop = asyncio.Event()
-    stop.set()
+    stop = AbortController()
+    stop.abort()
 
     called = []
 
