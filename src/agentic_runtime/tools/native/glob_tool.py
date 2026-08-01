@@ -36,7 +36,8 @@ class GlobTool:
             return ToolResult.error(self.name, str(exc))
         pattern = input["pattern"]
         try:
-            matches = sorted(str(p) for p in base.glob(pattern))
+            # `S12`: cada match es una ruta HOST; se presenta en los términos del deployment.
+            matches = sorted(ctx.presentation.to_llm(p) for p in base.glob(pattern))
             shown = matches[:DEFAULT_GLOB_LIMIT]
             output = "\n".join(shown)
             if len(matches) > DEFAULT_GLOB_LIMIT:

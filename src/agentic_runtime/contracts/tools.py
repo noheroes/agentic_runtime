@@ -13,6 +13,7 @@ encima de la línea de corte.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
@@ -49,7 +50,33 @@ class ToolContext(Protocol):
 
 
 class ToolResult:
-    """Resultado de la ejecución de un tool."""
+    """Resultado de la ejecución de un tool.
+
+    `context_modifier` es **opcional y por defecto `None`**, grafía exacta de
+    `Tool.ts:330` (`contextModifier?: (context: ToolUseContext) => ToolUseContext`).
+    El canónico lo honra *sólo* para tools que no son concurrency-safe; el tramo 1
+    corre en **serie** (`is_concurrency_safe` está fuera, arriba), así que aquí se
+    honra sin condición — correcto-para-serie y **declarado**: cuando entre la
+    concurrencia, este es el punto que vuelve a abrirse.
+
+    `ends_turn` **no tiene homólogo en el canónico** (`endsTurn` no existe en A).
+    Es extensión de B y se declara como tal: A cede el turno bloqueando en
+    `checkPermissions → behavior:'ask' + updatedInput` (verificado 1→EOF en
+    `AskUserQuestionTool.tsx`, cuyo `call()` sólo devuelve `data`), y esa capa de
+    interacción es `GAP-02`/`K1`, **por encima de la línea de corte**. Mientras no
+    exista, B necesita un cable para ceder el turno; cuando `check_permissions`
+    entre, `ends_turn` se re-examina contra ella y no antes.
+
+    Ambos estaban siendo **inyectados por monkeypatch** con `type: ignore[attr-defined]`
+    desde 9 call-sites y leídos por `getattr` en el loop: portantes pero invisibles
+    para cualquier tercero que implemente el contrato (`FIND-TOOL4/A24`).
+
+    El tipo de `context_modifier` es `Callable[[Any], Any]` **a propósito**: el contrato
+    no puede nombrar el `ToolUseContext` del base sin forkear el ecosistema (mismo motivo
+    por el que existe `ToolContext`, e invariante que `test_contracts_invariant` vigila
+    incluso bajo `TYPE_CHECKING`). El alias preciso vive en el base, donde sí puede
+    nombrarlo: `context.tool_use.ContextModifier = (ToolUseContext) -> ToolUseContext`.
+    """
 
     def __init__(
         self,
@@ -60,6 +87,8 @@ class ToolResult:
         is_timeout: bool = False,
         is_aborted: bool = False,
         metadata: dict[str, Any] | None = None,
+        context_modifier: Callable[[Any], Any] | None = None,
+        ends_turn: bool = False,
     ) -> None:
         self.tool_name = tool_name
         self.output = output
@@ -67,6 +96,8 @@ class ToolResult:
         self.is_timeout = is_timeout
         self.is_aborted = is_aborted
         self.metadata = metadata or {}
+        self.context_modifier = context_modifier
+        self.ends_turn = ends_turn
 
     @classmethod
     def error(cls, tool_name: str, message: str) -> ToolResult:

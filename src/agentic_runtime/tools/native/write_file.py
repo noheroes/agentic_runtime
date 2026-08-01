@@ -33,6 +33,8 @@ class WriteFileTool:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(input["content"])
-            return ToolResult(tool_name=self.name, output=str(path))
+            # `S12`: la ruta resuelta es HOST. El modelo debe verla en los términos del
+            # deployment (`/workspace/...` bajo fake-path), no la real. Bajo identidad es no-op.
+            return ToolResult(tool_name=self.name, output=ctx.presentation.to_llm(path))
         except Exception as exc:
             return ToolResult.error(self.name, str(exc))

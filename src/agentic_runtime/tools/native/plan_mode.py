@@ -48,16 +48,15 @@ class EnterPlanModeTool:
             c.app_state.native.pop(_PLAN_FULL_SHOWN_KEY, None)
             return c
 
-        result = ToolResult(
+        return ToolResult(
             tool_name=self.name,
             output=(
                 "Entered plan mode. Explore the codebase and design an implementation approach. "
                 "DO NOT write or edit any files yet. "
                 "When ready, use ExitPlanMode to present your plan for approval."
             ),
+            context_modifier=modifier,
         )
-        result.context_modifier = modifier  # type: ignore[attr-defined]
-        return result
 
 
 class ExitPlanModeTool:
@@ -94,14 +93,20 @@ class ExitPlanModeTool:
             c.app_state.native[_PLAN_EXIT_PENDING_KEY] = True
             return c
 
-        result = ToolResult(
-            tool_name=self.name,
-            output=f"Plan submitted for approval:\n\n{plan}",
-        )
-        result.context_modifier = modifier  # type: ignore[attr-defined]
         # Presentar el plan CIERRA el turno: el agente se detiene a esperar la aprobación del
         # usuario en vez de seguir generando (sin esto el modelo narra el plan como aprobado y
-        # anuncia implementación). Espejo del canónico `requiresUserInteraction()->true`, que
-        # detiene el turno en el gate de aprobación; mismo primitivo que `AskUserQuestion`.
-        result.ends_turn = True  # type: ignore[attr-defined]
-        return result
+        # anuncia implementación).
+        #
+        # ⚠ Esto **no** es espejo del canónico, y la nota anterior que lo llamaba «espejo de
+        # `requiresUserInteraction()->true`» sobre-afirmaba: `requiresUserInteraction()` existe
+        # en A (`AskUserQuestionTool.tsx:155`) pero NO cierra el turno — marca que la tool
+        # necesita al usuario para que el gate de permisos la resuelva por
+        # `checkPermissions → behavior:'ask' + updatedInput`, y el turno **continúa**. `endsTurn`
+        # no existe en A. Es cable propio de B mientras esa capa de interacción (`GAP-02`/`K1`)
+        # esté por encima de la línea de corte. Ver `ToolResult.ends_turn`.
+        return ToolResult(
+            tool_name=self.name,
+            output=f"Plan submitted for approval:\n\n{plan}",
+            context_modifier=modifier,
+            ends_turn=True,
+        )

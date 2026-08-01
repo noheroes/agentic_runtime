@@ -64,12 +64,14 @@ class GrepTool:
                     continue
                 if not file_path.is_file():
                     continue
+                # `S12`: ruta HOST → términos del deployment, una vez por archivo (no por línea).
+                shown_path = ctx.presentation.to_llm(file_path)
                 try:
                     for i, line in enumerate(file_path.read_text(errors="replace").splitlines(), 1):
                         if regex.search(line):
                             if len(line) > MAX_LINE_LEN:
                                 line = line[:MAX_LINE_LEN] + "…"
-                            results.append(f"{file_path}:{i}: {line}")
+                            results.append(f"{shown_path}:{i}: {line}")
                 except OSError:
                     pass
             total = len(results)

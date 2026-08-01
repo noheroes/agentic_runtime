@@ -806,3 +806,357 @@ async def test_e9_the_background_child_notification_reaches_the_parent_live_hist
 
     # 4. y se consume UNA vez: el canal queda limpio tras aplicarla.
     assert runtime._notification_sink.drain(scope.key, session_id) == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2 · turno REAL con tools NATIVAS reales (bash + fs), aplanado y re-entrada
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `TRAMO-1 §4·E2`: *turno real con tool nativa real (bash + fs), resultado
+# aplanado, re-entrada*. Acredita `C4`·`C5`·`C6` por el camino de producción
+# entero: `create_runtime` → `create_tools` (nativas, no fakes) → `ToolPool` del
+# turno → `ToolDispatcher` (schema + permisos + timeout + choke `S12`) → efecto
+# REAL en disco → aplanado → re-entrada del loop.
+#
+# El token es un `uuid` que **sólo existe dentro de un archivo sembrado**: no está
+# en el prompt, ni en el system prompt, ni en ninguna descripción. Si el modelo lo
+# cita, es porque `bash` corrió de verdad y su stdout volvió aplanado (`L09`: se
+# verifica el cable, no el catálogo). Y no basta con que lo cite: `write_file`
+# tiene que haber dejado el archivo EN DISCO, que es el efecto que ninguna
+# narración puede fingir.
+#
+# El `fs` se inyecta confinado a `tmp_path` por la costura real
+# (`RuntimeConfig.fs`) — el default seguro confina a `cwd()` y rechazaría escribir
+# ahí. Esa misma costura es la que `E7` ataca por el lado NEGATIVO.
+
+@_needs_azure
+async def test_e2_real_turn_with_real_native_tools_bash_and_fs(tmp_path):
+    """bash lee un token que sólo está en disco; write_file lo deja en otro archivo."""
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    code = f"EXP-{uuid.uuid4().hex[:8].upper()}"
+    seeded = tmp_path / "expediente.txt"
+    seeded.write_text(f"codigo de verificacion: {code}\n", encoding="utf-8")
+    out = tmp_path / "copia.txt"
+
+    probe = ModelSeamProbe(_build_caller(
+        "Trabajas con herramientas reales sobre un sistema de archivos. Usa la herramienta "
+        "bash para leer archivos con cat, y la herramienta write_file para escribirlos. "
+        "Haz exactamente lo que se te pida, un paso por herramienta, y termina respondiendo "
+        "solo con el codigo que hayas leido."
+    ))
+    runtime = _runtime(
+        tmp_path, probe, (), Scope("scope-e2"),
+        fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+        initial_allowed_tools=["bash", "write_file"],
+    )
+
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt=(
+            f"1) Con la herramienta bash, ejecuta: cat {seeded}\n"
+            f"2) Con la herramienta write_file, escribe en la ruta {out} exactamente el "
+            "codigo de verificacion que acabas de leer, y nada mas.\n"
+            "3) Dime ese codigo."
+        ),
+        description="gate-e2-tools-nativas-reales",
+        session_id=f"sess-E2-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    result = runtime.result(task_id) or ""
+    assert runtime.status(task_id) is TaskStatus.COMPLETED, result
+
+    # 1. `bash` corrió de VERDAD: el token sólo estaba en disco, y cruzó el cable del
+    #    modelo como resultado de tool. Sin esto, citarlo sería adivinarlo.
+    payload = probe.wire_payload()
+    assert code in payload, (
+        f"el stdout de bash no volvió aplanado al modelo: {payload[-1500:]}"
+    )
+
+    # 2. `write_file` produjo el EFECTO real — lo que ninguna narración finge.
+    assert out.exists(), f"write_file no escribió en disco: {sorted(p.name for p in tmp_path.iterdir())}"
+    assert code in out.read_text(encoding="utf-8")
+
+    # 3. re-entrada: tras el resultado de la tool el loop volvió al modelo, y la
+    #    respuesta final del turno depende de lo que la tool devolvió.
+    assert code in result, f"el turno no re-entró con el resultado de la tool: {result!r}"
+
+    # 4. hubo MÁS de una llamada al modelo — un turno de una sola pasada no pudo
+    #    haber despachado tool y luego respondido con su salida.
+    assert len(probe.calls) >= 2, f"no hubo re-entrada: {len(probe.calls)} llamada(s) al modelo"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2·b · el INVARIANTE DEL POOL ÚNICO, sobre el ctx de producción
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `TRAMO-1 §2·C5`: *anuncio y ejecución resuelven del MISMO objeto* ⇒ diferida =
+# **visibilidad, no disponibilidad**. Es la pieza que impide que vuelva el modo de
+# fallo de `FIND-EXEC1`/`S19`: dos caminos (uno para anunciar, otro para ejecutar)
+# que pueden divergir y de hecho divergen.
+#
+# No lleva `@_needs_azure` **a propósito**: no necesita modelo, así que corre
+# siempre y el gate no puede acreditarse con esta pieza saltada.
+#
+# Se mide sobre el ctx REAL que el runtime compone, capturado por la costura de
+# producción `root_context_modifier` — no sobre un `ToolUseContext` fabricado aquí.
+
+async def test_e2b_unique_pool_deferred_is_visibility_not_availability(tmp_path):
+    """Una tool diferida NO se anuncia y SÍ se despacha — del mismo pool."""
+    from agentic_runtime.tools.dispatcher import ToolDispatcher
+
+    code = f"POOL-{uuid.uuid4().hex[:8].upper()}"
+
+    class _DeferredWitness:
+        name = "consultar_expediente_diferido"
+        description = "Consulta diferida."
+        input_schema = {"type": "object", "properties": {}}
+        category = ToolCategory.UTILITY
+        requires_permission = False
+        safe_for_background = True
+        timeout_seconds = 10.0
+        deferred = True  # `S26`: fuera del anuncio hasta que ToolSearch la descubra
+
+        async def execute(self, input: dict, ctx: ToolUseContext) -> ToolResult:
+            return ToolResult(tool_name=self.name, output=code)
+
+    captured: dict[str, Any] = {}
+
+    def _capture_ctx(ctx: ToolUseContext, task: Any) -> ToolUseContext:
+        captured["ctx"] = ctx
+        return ctx
+
+    class _OneShotCaller:
+        """Caller mínimo: el turno no necesita modelo real para medir el POOL.
+
+        Lo que se mide aquí es el ensamblado del pool y la resolución del
+        dispatcher sobre el ctx de producción; el turno real con modelo es `E2`.
+        """
+
+        def supports_native_tool_search(self, model_id: str = "") -> bool:
+            return False
+
+        async def complete(self, messages, tools, *, stop=None, **kwargs):
+            captured["announced"] = [t.get("name") for t in tools]
+
+            async def _gen():
+                from agentic_runtime.contracts.events import DoneEvent
+                yield DoneEvent(stop_reason="end_turn")
+
+            return _gen()
+
+    runtime = _runtime(
+        tmp_path, _OneShotCaller(), (_DeferredWitness(),), Scope("scope-e2b"),
+        root_context_modifier=_capture_ctx,
+    )
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt="hola",
+        description="gate-e2b-pool-unico",
+        session_id=f"sess-E2b-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    ctx = captured.get("ctx")
+    assert ctx is not None, "no se capturó el ctx de producción"
+    announced = captured.get("announced")
+    assert announced is not None, "el turno no llegó a llamar al modelo"
+
+    # 1. VISIBILIDAD: la diferida no se anunció...
+    assert "consultar_expediente_diferido" not in announced, (
+        f"la tool diferida se anunció: {announced}"
+    )
+    # ...pero el anuncio NO está vacío: si lo estuviera, (1) sería trivial.
+    assert "bash" in announced, f"el anuncio no trae las nativas: {announced}"
+
+    # 2. DISPONIBILIDAD: y aun así se resuelve y ejecuta desde ese MISMO pool.
+    r = await ToolDispatcher().dispatch(
+        tool_name="consultar_expediente_diferido", tool_input={}, ctx=ctx,
+    )
+    assert r.is_error is False, r.output
+    assert r.output == code
+
+    # 3. mismo OBJETO, no dos pools equivalentes: lo que se anunció y lo que se
+    #    despachó salieron de `ctx.tool_pool`.
+    assert ctx.tool_pool.find("consultar_expediente_diferido", ctx.permission_context) is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E7 · CONFINAMIENTO — la NEGATIVA del tramo
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `TRAMO-1 §4·E7`: *confinamiento: traversal/symlink/allow-set rechazados*.
+# Acredita `C6` y es lo que lo promueve **G2→G1**: la ficha lo tenía `existe-fiel
+# por lectura, no corrido`, y leer no es correr.
+#
+# Tres piezas, porque cada una sola es satisfacible sin que el confinamiento sirva:
+#
+#   · `E7·a` **mecanismo** — las cuatro formas de salirse rebotan en `ctx.fs`.
+#   · `E7·b` **la costura `S15` es load-bearing** — `bash` va al backend inyectado,
+#     no al host: si `exec_env` no estuviera cableado, el comando correría igual y
+#     nadie lo notaría (es el modo de fallo de `FIND-EXEC1`, otra vez).
+#   · `E7·c` **extremo a extremo, NEGATIVA real** — un secreto vive fuera de las
+#     raíces y el modelo, con tools reales, no consigue traerlo. Lo que se asevera
+#     es que el token **no aparece en ningún sitio**: ni en la respuesta, ni en el
+#     cable del modelo. Una negativa que sólo mirase `is_error` sería verde también
+#     con un runtime que no hace nada.
+#
+# `E7·a`/`E7·b` no llevan `@_needs_azure`: no necesitan modelo y por tanto el gate
+# no puede acreditarse con ellas saltadas.
+
+def test_e7a_negative_confinement_rejects_traversal_symlink_and_outside_allow_set(tmp_path):
+    """Las cuatro formas de salirse del allow-set rebotan en la costura `S14`."""
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem, PathOutsideWorkspace
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "fuera"
+    outside.mkdir()
+    (outside / "secreto.txt").write_text("no-debe-salir", encoding="utf-8")
+
+    fs = ConfinedFilesystem(roots=[workspace], write_roots=[workspace])
+
+    # 1. traversal léxico
+    with pytest.raises(PathOutsideWorkspace):
+        fs.resolve(str(workspace / ".." / "fuera" / "secreto.txt"), for_write=False)
+
+    # 2. absoluto fuera del allow-set
+    with pytest.raises(PathOutsideWorkspace):
+        fs.resolve(str(outside / "secreto.txt"), for_write=False)
+
+    # 3. symlink que apunta fuera — el chequeo mira también la forma con symlinks
+    #    resueltos, así que no se evade creando el enlace DENTRO del workspace.
+    link = workspace / "atajo.txt"
+    link.symlink_to(outside / "secreto.txt")
+    with pytest.raises(PathOutsideWorkspace):
+        fs.resolve(str(link), for_write=False)
+
+    # 4. allow-set de ESCRITURA más estrecho que el de lectura: leer sí, escribir no.
+    solo_lectura = tmp_path / "ro"
+    solo_lectura.mkdir()
+    split = ConfinedFilesystem(roots=[workspace, solo_lectura], write_roots=[workspace])
+    assert split.resolve(str(solo_lectura / "x.txt"), for_write=False)
+    with pytest.raises(PathOutsideWorkspace):
+        split.resolve(str(solo_lectura / "x.txt"), for_write=True)
+
+    # 5. `FIND-C6-1` (regresión): un token RELATIVO se autoriza expandido contra el
+    #    root y debe DEVOLVERSE expandido. Devolverlo crudo hacía que la tool lo
+    #    abriera contra el cwd del proceso: pasaba el gate y escribía fuera.
+    relativo = fs.resolve("notas.txt", for_write=True)
+    assert relativo.is_absolute(), f"token relativo devuelto sin expandir: {relativo!r}"
+    assert relativo == workspace / "notas.txt"
+
+
+async def test_e7b_bash_goes_through_the_injected_exec_env_not_the_host(tmp_path):
+    """`S15` load-bearing: el backend inyectado por `RuntimeConfig` es el que corre."""
+    from agentic_runtime.tools.exec_env import ShellResult
+
+    token = f"FAKE-{uuid.uuid4().hex[:8].upper()}"
+    seen: list[str] = []
+
+    class _FakeExecEnv:
+        async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
+            seen.append(command)
+            return ShellResult(output=token, returncode=0)
+
+    captured: dict[str, Any] = {}
+
+    def _capture_ctx(ctx: ToolUseContext, task: Any) -> ToolUseContext:
+        captured["ctx"] = ctx
+        return ctx
+
+    class _NoopCaller:
+        def supports_native_tool_search(self, model_id: str = "") -> bool:
+            return False
+
+        async def complete(self, messages, tools, *, stop=None, **kwargs):
+            async def _gen():
+                from agentic_runtime.contracts.events import DoneEvent
+                yield DoneEvent(stop_reason="end_turn")
+
+            return _gen()
+
+    runtime = _runtime(
+        tmp_path, _NoopCaller(), (), Scope("scope-e7b"),
+        exec_env=_FakeExecEnv(),
+        initial_allowed_tools=["bash"],
+        root_context_modifier=_capture_ctx,
+    )
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt="hola", description="gate-e7b-exec-env", session_id=f"sess-E7b-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    ctx = captured["ctx"]
+    from agentic_runtime.tools.dispatcher import ToolDispatcher
+
+    # Un comando que en el host REAL produciría otra cosa: si el resultado es el
+    # token del fake, es que no tocó el host.
+    r = await ToolDispatcher().dispatch(
+        tool_name="bash", tool_input={"command": "echo host-real"}, ctx=ctx,
+    )
+    assert r.is_error is False, r.output
+    assert r.output == token, f"bash no fue por el backend inyectado: {r.output!r}"
+    assert seen == ["echo host-real"], f"el comando no llegó verbatim al backend: {seen}"
+
+
+@_needs_azure
+async def test_e7c_negative_end_to_end_the_model_cannot_read_outside_its_roots(tmp_path):
+    """NEGATIVA real: el secreto vive fuera de las raíces y no cruza por ningún cable."""
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "fuera"
+    outside.mkdir()
+    secret = outside / "secreto.txt"
+    token = f"SECRETO-{uuid.uuid4().hex[:8].upper()}"
+    secret.write_text(f"codigo: {token}\n", encoding="utf-8")
+
+    # Señuelo DENTRO del workspace: prueba que las fs-tools funcionan en esta corrida.
+    # Sin él, «no leyó el secreto» sería cierto también si las tools estuvieran rotas.
+    bait = workspace / "permitido.txt"
+    bait_token = f"PERMITIDO-{uuid.uuid4().hex[:8].upper()}"
+    bait.write_text(f"codigo: {bait_token}\n", encoding="utf-8")
+
+    probe = ModelSeamProbe(_build_caller(
+        "Trabajas con herramientas de archivos reales. Usa read_file para leer rutas. "
+        "Si una lectura falla, informa del error y sigue con lo que si puedas leer. "
+        "Termina diciendo los codigos que hayas conseguido leer."
+    ))
+    runtime = _runtime(
+        tmp_path, probe, (), Scope("scope-e7c"),
+        # El allow-set NO incluye `outside`, aunque esté bajo el mismo tmp_path.
+        fs=ConfinedFilesystem(roots=[workspace], write_roots=[workspace]),
+        initial_allowed_tools=["read_file", "write_file"],
+    )
+
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt=(
+            f"Lee con read_file estos dos archivos y dime los codigos que contienen:\n"
+            f"1) {bait}\n"
+            f"2) {secret}\n"
+        ),
+        description="gate-e7c-confinamiento-negativo",
+        session_id=f"sess-E7c-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    result = runtime.result(task_id) or ""
+    assert runtime.status(task_id) is TaskStatus.COMPLETED, result
+    payload = probe.wire_payload()
+
+    # 1. control POSITIVO: dentro de las raíces las fs-tools sí funcionan en esta
+    #    misma corrida. Sin esto, (2) sería verde con un runtime inerte.
+    assert bait_token in payload, (
+        f"ni siquiera leyó lo permitido: las fs-tools no corrieron. {payload[-1500:]}"
+    )
+
+    # 2. la NEGATIVA: el secreto de fuera no cruzó NINGÚN cable.
+    assert token not in payload, "el contenido de fuera del allow-set llegó al modelo"
+    assert token not in result, "el contenido de fuera del allow-set llegó a la respuesta"
+
+    # 3. y el rechazo fue explícito, no un silencio: la tool devolvió el error de
+    #    confinamiento al modelo.
+    assert "outside the allowed" in payload, (
+        f"no hubo rechazo explícito de confinamiento en el turno: {payload[-1500:]}"
+    )

@@ -453,13 +453,17 @@ class AgentLoop:
                 # Aplica el context_modifier que la tool haya producido (skills →
                 # allowed-tools/skill activa; worktree/plan_mode → estado nativo).
                 # Convención: el modifier muta ctx in-place y lo retorna (no forka).
-                modifier = getattr(result, "context_modifier", None)
+                # Lectura del miembro DECLARADO en `ToolResult` (`FIND-TOOL4/A24` pagado):
+                # antes se sondeaba por `getattr` porque el contrato no lo tenía y las tools
+                # lo inyectaban por monkeypatch. El `getattr` sobre `result` se conserva sólo
+                # donde el objeto puede no ser nuestro `ToolResult` (tools de terceros).
+                modifier = result.context_modifier
                 if modifier is not None:
                     try:
                         ctx = modifier(ctx) or ctx
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("AgentLoop: context_modifier de %s falló: %s", tc.tool_name, exc)
-                if getattr(result, "ends_turn", False):
+                if result.ends_turn:
                     _ends_turn = True
                 logger.debug(
                     "AgentLoop turno %d: tool %s(%s) -> %s",

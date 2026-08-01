@@ -72,21 +72,21 @@
 | S9 | `CompactionProvider` (+ trigger del loop) | T2-COSTURA | existe-sin-motor | 01·CTR-09 · 02·B6 · 07·H1 · 16·C2 |
 | S10 | `RetryPolicy` / `with_retry` (+ fallback) | T2-COSTURA (+T1-MOTOR) | ausente | 16·B1/B2/B3 · 02·C4/C5/C7/D2 · 07·J3 |
 | S11 | `UserInputProcessor` | T2-COSTURA | **existe-fiel** (`C4` 2026-07-31: cableado pre-turno; firma DIVERGE del borrador, ver §S11) | 01·CTR-12 · 02·G1/F8 |
-| S12 | `PathPresentation` (sanitize choke) | T2-COSTURA (+base default) | **existe-parcial** (A3.CAT: `to_llm` sin call-site) | 01·CTR-11 · 09·D9 · 17·§2.7.1 |
+| S12 | `PathPresentation` (sanitize choke) | T2-COSTURA (+base default) | **existe-fiel** (`C5` 2026-08-01: `to_llm` CABLEADA en 3 puntos; el defecto per-chunk de `sanitize` sigue abierto → `S31`) | 01·CTR-11 · 09·D9 · 17·§2.7.1 |
 | S13 | `StorageContract` (roots + token→path) | T2-COSTURA | existe-fiel | 01·CTR-10 · 05·E7 · 09·G6 · 15 |
-| S14 | `ConfinedFilesystem` (confinamiento) | T2-BASE + costura S13 | existe-fiel | 09·G1-G8 |
+| S14 | `ConfinedFilesystem` (confinamiento) | T2-BASE + costura S13 | existe-fiel (`C6` 2026-08-01: G2→**G1**, corrida; `FIND-C6-1` PAGADO) | 09·G1-G8 |
 | S15 | `ToolExecEnvironment` (backend shell) | T2-COSTURA (AÑADIDA) | existe-fiel | 09·F1/F2/F3/F4 |
-| S16 | `ToolProtocol` (contrato de tool) | T1-CONTRATO + costura | existe-enriquecer | 09·A1-A26 |
+| S16 | `ToolProtocol` (contrato de tool) | T1-CONTRATO + costura | existe-enriquecer (`C5` 2026-08-01: `09·A24` DECLARADO, `FIND-TOOL4` pagado; siguen fuera los miembros de comportamiento) | 09·A1-A26 |
 | S17 | `PermissionGate` (`check_permissions` per-input) | T2-COSTURA | existe-parcial | 09·A6-A9/D3/G8 · 02·F2 · 06 |
-| S18 | `SubagentRunnerProtocol` | T2-COSTURA | existe-sin-poblar | 05·E24 (FIND-EXEC1) |
-| S19 | `TaskRegistryProtocol` (repo id-opaco) | T2-COSTURA | existe-doble-camino | 05·E9/E10/E32 |
+| S18 | `SubagentRunnerProtocol` | T2-COSTURA | **poblada por DI** (`C8` 2026-07-31: `FIND-EXEC1` PAGADO) | 05·E24 (FIND-EXEC1) |
+| S19 | `TaskRegistryProtocol` (repo id-opaco) | T2-COSTURA | **camino único** (`C7` 2026-07-31; `TaskRecord` sin enriquecer, diferido) | 05·E9/E10/E32 |
 | S20 | `SessionRepo` (repo id-opaco de sesión) | T3-INTEGRADOR / costura | existe-mímica | 05·E30 【id-opaco central】 |
-| S21 | `NotificationSink` (drain/process) | T2-COSTURA | existe-put-sin-drain | 05·E5/E19 |
+| S21 | `NotificationSink` (drain/process) | T2-COSTURA | **put+drain+apply con call-site** (`C8` 2026-07-31: CORE-GAP `H-5` PAGADO) | 05·E5/E19 |
 | S22 | `ForceAsyncPolicy` | T2-COSTURA | ausente | 05·E34 |
 | S23 | `on_agent_teardown(agent_id)` (reaping) | T2-COSTURA | ausente | 05·E35 |
 | S24 | `arm_watchdog` (timeout/watchdog) | T2-COSTURA | existe-noop | 01·CTR-15 · 05 · 16·B4 |
 | S25 | `AgentDefinition` (contrato ampliado) | T1-CONTRATO + costura | existe-parcial | 05·E28/E22 |
-| S26 | `DeferredToolStrategy` | T2-BASE-MECANISMO (+T1-MOTOR) | existe-fiel | 09·E1-E10 |
+| S26 | `DeferredToolStrategy` | T2-BASE-MECANISMO (+T1-MOTOR) | existe-fiel (`C5` 2026-08-01: verificada CORRIENDO — `E2b`, deferred = visibilidad) | 09·E1-E10 |
 | S27 | deps-DI seam (constructor) | T2-COSTURA (test) | existe-fiel | 02·E6 |
 | S30 | `PromptSourceProtocol` (entrada no-textual, pre-loop) | T2-COSTURA (AÑADIDA A3.CAT) | existe-horneada | 17·C1/§2.7 · `BATTERIES §4.5` |
 | S31 | `SpeechSink` (salida hablada sobre S5) | T2-COSTURA (AÑADIDA A3.CAT) | existe-horneada | 17·§2.7 · `BATTERIES §4.5` · K4 |
@@ -212,6 +212,13 @@
 - **estado:** `existe-fiel` (09·G1/G3/G5 byte-idénticos; G2/G4 omiten normalización macOS = menor).
 - **firma:** `resolve(token, *, for_write: bool) -> HostPath` (`fs_env.py:144`), sobre `roots`/`write_roots` + `StorageContract` (S13).
 - **nota:** el **mecanismo** (traversal/symlink/allow-set) es base; la **política** (roots, token→path, safety-fs G8) es del integrador (→S13/S17).
+- **estado tras `C6` (2026-08-01):** grado **G2 → G1** (corrida, no sólo leída) — y correrla encontró **`FIND-C6-1`, PAGADO
+  en la misma ventana**: `resolve()` validaba el path **expandido** y devolvía `Path(host)` **sin expandir**, así que un token
+  RELATIVO pasaba el gate (expandido contra `roots[0]`) y la tool lo abría contra el **cwd del proceso** — `write_file` con
+  `path="notas.txt"` escribía en `cwd()/notas.txt` con `is_error=False`. Medido con sonda, no razonado. Hoy devuelve
+  `Path(expand_path(...))`: lo autorizado y lo usado son el MISMO path. Expansión **léxica** a propósito (la forma con symlinks
+  resueltos es para el CHEQUEO, no para la E/S — mismo reparto que el canónico). Acreditado por `E7a` (traversal · absoluto-fuera
+  · symlink-que-apunta-fuera · roots asimétricos read/write · la regresión relativa) y por la negativa E2E real `E7c`.
 
 ### S26 · `DeferredToolStrategy`
 - **estado:** `existe-fiel` (09·E2/E3/E10; Simulada client-side + Nativa `defer_loading` server-side).
@@ -224,6 +231,12 @@
   ```
 - **productor:** `AgentLoop._resolve_deferred_strategy` (`agent_loop.py:132-150`), elige por `supports_native_tool_search` (S1).
 - **cabo:** delta tipado (09·E4), multi-select (E6), keyword-quality (E7), precedencia (E1) = mejoras del base; auto-mode umbral →16.
+- **estado tras `C5` (2026-08-01):** `existe-fiel` **verificado corriendo**, no por lectura. `E2b` acredita el invariante que
+  importa: **`deferred` es VISIBILIDAD, no disponibilidad** — una tool diferida NO aparece en el anuncio al modelo (con control
+  positivo: `"bash"` sí aparece, para que el verde no sea trivial) y aun así se **despacha con éxito** por un `ToolDispatcher`
+  real **sobre el mismo `ctx`**, porque anuncio y ejecución resuelven del MISMO objeto (invariante de pool único). El atributo
+  `deferred` NO se cuenta como defecto (`L10`): es mímica fiel del `shouldDefer` opcional de A con default seguro, y sus setters
+  lo declaran como atributo normal de clase — sin monkeypatch y sin `type: ignore`, al contrario que `context_modifier`.
 
 > **Otros mecanismos base** (firma = base, no costura rellenable): `AgentLoop` (esqueleto del turno, 02·A1/C1/F1), `ToolPool`
 > (assemble/find, invariante pool-único, 09·C1-C4/D1), `ToolDispatcher` (dispatch+timeout, 09·D1/D5), `fork` (snapshot/policy/
@@ -329,6 +342,15 @@
   battery de voz, el saneo pasa a método de **S31** (`BATTERIES §4.5`).
 - **productor:** `tools/dispatcher.py:42` (todo `output` pasa antes de `ctx.messages` Y EventBus, 09·D9). **consumidor:** base default `IdentityPresentation` (no-op bajo identidad) / integrador.
 - **firma BORRADOR:** `sanitize_output(text: str) -> str` (+ `to_llm(path)->str` latente, cablear o borrar). 【id-opaco: no filtrar rutas reales del contenedor】.
+- **estado tras `C5` (2026-08-01): `existe-parcial` → `existe-fiel` en el eje `to_llm`.** La disyuntiva «cablear o borrar» se
+  cerró LEYENDO (`D-08`), no razonando: en TODO el árbol había **una sola** invocación `.to_llm(` y era un test, pero
+  `new_core/src/agent_core/prompts/path_presentation.py` (59 L, abierto 1→EOF) **la implementa de verdad** (mapea paths host a
+  `/workspace/...`), luego borrarla dejaba huérfano al integrador containerizado ⇒ **se cablea**. Tres puntos de emisión de ruta
+  HOST, y sólo esos: `tools/native/write_file.py:36`, `tools/native/glob_tool.py:39`, `tools/native/grep_tool.py:68` (una vez por
+  archivo, no por línea). NO se cablea en `read_file` (no emite ruta) ni en `file_edit` (devuelve el string de entrada tal cual).
+  Motivo de fondo: `sanitize_output` es una red de regex **con pérdidas** (`FIND-VOICE1` prueba que se escapa a caballo entre
+  chunks); `to_llm` es la traducción directa y exacta. El defecto per-chunk de `sanitize` sigue abierto y **por encima de la línea**
+  (→ `S31`, `BATTERIES §4.5`): esta entrada NO lo declara pagado.
 
 ### S13 · `StorageContract` (roots + traducción token→path)
 - **estado:** `existe-fiel` (consumido por plan_file + `fs_env.py:124` + `_persist` de execution). **Unificar con `StorageProtocol` de 15.**
@@ -369,6 +391,24 @@
   # ToolResult: output:str + is_error/is_timeout/is_aborted + metadata
   #   A CRECER: new_messages 09·A23 · context_modifier(ctx) 09·A24 (ya aplicado agent_loop.py:332-337, declarar) · structured 09·A22 · mcp_meta 09·A25
   ```
+- **estado tras `C5` (2026-08-01): `09·A24` DECLARADO — `FIND-TOOL4` PAGADO.** `ToolResult` declara ahora **dos** miembros que
+  antes se **inyectaban por monkeypatch** con `type: ignore[attr-defined]` desde **9 call-sites** y se leían por `getattr` en el
+  loop: portantes en producción pero invisibles para cualquier tercero que implemente el contrato. Los 9 monkeypatch están
+  RETIRADOS (`plan_mode.py` ×3, `worktree.py` ×2, `todo_write.py`, `config.py`, `ask_user.py`, `skills/skill_tool.py`) y hoy son
+  kwargs del constructor; `agent_loop.py:453-465` los lee como miembros.
+  - `context_modifier: Callable[[Any], Any] | None = None` — grafía exacta de `Tool.ts:330` (`contextModifier?`, **opcional**,
+    leído 1→EOF). A lo honra *sólo* para tools no concurrency-safe; el tramo 1 corre en **serie**, así que aquí se honra sin
+    condición: correcto-para-serie y **declarado** — cuando entre la concurrencia, este es el punto que vuelve a abrirse. El tipo
+    es `Any` **a propósito**: `contracts/` no puede nombrar el `ToolUseContext` del base (invariante que `test_contracts_invariant`
+    vigila **incluso bajo `TYPE_CHECKING`** — el intento de importarlo así puso el test en rojo). El alias preciso vive en el base.
+  - `ends_turn: bool = False` — **NO tiene homólogo canónico**: `endsTurn` no existe en A (grep = cero). Es **extensión declarada
+    de B**, no des-fusión acreditada: A cede el turno bloqueando en `checkPermissions → behavior:'ask' + updatedInput` (verificado
+    1→EOF en `AskUserQuestionTool.tsx` 266 L, cuyo `call()` devuelve **sólo** `data`), y esa capa es `GAP-02`/`K1`, **por encima de
+    la línea de corte**. Queda atada a ella: cuando `check_permissions` entre, `ends_turn` se re-examina contra ella y no antes.
+    Se corrigió además el comentario de `plan_mode.py` que lo vendía como espejo de `requiresUserInteraction()`.
+- **NO pagado, nombrado entero (`L07`):** `NativeToolRegistry` tiene **cero call-sites de producción** (tercer registro junto a
+  `ToolRegistry` y `ToolPool` — la misma forma de doble-camino que `C7` cerró para `S19`); y `ToolRegistry.list_available(permission_ctx=…)`
+  es **parámetro muerto**: sus dos únicos llamadores (`agent_loop.py:128`, `capabilities/resolver.py:46`) pasan sólo `mode`.
 
 ### S17 · `PermissionGate` (`check_permissions` por-input + modos)
 - **estado:** `existe-parcial` (el gate del dispatcher es deny-por-nombre `dispatcher.py:62-65`; el **seam input-aware VIVE** en `PRE_TOOL_USE` `agent_loop.py:300-313` honrando `block`/`modified_input`; falta `check_permissions` per-tool + modos).

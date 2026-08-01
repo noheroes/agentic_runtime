@@ -15,6 +15,15 @@ def _default_pool() -> "Any":
     return ToolPool()
 
 
+def _default_presentation() -> "Any":
+    # Default seguro simétrico al de `fs`: identidad (= comportamiento CLI canónico,
+    # el FS del usuario ES el del agente). Antes era `None` y cada consumidor repetía
+    # el fallback `ctx.presentation or IdentityPresentation()` por su cuenta; una tool
+    # que olvidara la guarda emitía la ruta host cruda bajo un deployment fake-path.
+    from .presentation import IdentityPresentation
+    return IdentityPresentation()
+
+
 def _default_fs() -> "Any":
     # Default seguro: confina a cwd() — nunca ilimitado. El consumidor lo sobreescribe
     # con el allow-set real (workspace_dir / pwd) por sesión.
@@ -67,7 +76,10 @@ class ToolUseContext(BaseModel):
     stop: AbortSignal | None = None
     event_queue: asyncio.Queue | None = None
     storage: Any = None
-    presentation: Any = None
+    # `S12`: traducción de rutas host → texto que ve el modelo. `to_llm` en el punto de
+    # emisión (forward, exacto) + `sanitize_output` en el choke del dispatcher (red de
+    # seguridad, regex y por tanto perdible — `FIND-VOICE1` probó que la red se escapa).
+    presentation: Any = Field(default_factory=_default_presentation)
     exec_env: Any = None
     fs: Any = Field(default_factory=_default_fs)
     # Seam de credenciales git (clone_repository): el integrador lo cablea al token del

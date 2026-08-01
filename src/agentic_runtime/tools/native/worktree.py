@@ -95,12 +95,11 @@ class EnterWorktreeTool:
             }
             return c
 
-        result = ToolResult(
+        return ToolResult(
             tool_name=self.name,
             output=f"Created worktree at {worktree_path} on branch {branch}.",
+            context_modifier=modifier,
         )
-        result.context_modifier = modifier  # type: ignore[attr-defined]
-        return result
 
 
 class ExitWorktreeTool:
@@ -159,9 +158,8 @@ class ExitWorktreeTool:
             c.app_state.native.pop(_WORKTREE_KEY, None)
             return c
 
-        result = ToolResult(
+        return ToolResult(
             tool_name=self.name,
             output=f"Exited worktree (action={action}). Path: {path}",
+            context_modifier=modifier,
         )
-        result.context_modifier = modifier  # type: ignore[attr-defined]
-        return result

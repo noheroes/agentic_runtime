@@ -10,8 +10,8 @@
 ## Tablero de capacidades
 
 Ninguna capacidad se marca ✅ por existir: se marca por **correr** su prueba (`L09`). `E1..E9` son el gate del
-tramo (`TRAMO-1 §4`); **6 de 9 escritas y en verde en una misma corrida** (`E1`, `E3`, `E4`, `E5`, `E6`, `E9`), así
-que las capacidades que esas seis acreditan —y sólo ésas— llegan a ✅.
+tramo (`TRAMO-1 §4`); **8 de 9 escritas y en verde en una misma corrida** (`E1`, `E2`, `E3`, `E4`, `E5`, `E6`, `E7`,
+`E9`), así que las capacidades que esas ocho acreditan —y sólo ésas— llegan a ✅.
 
 | cap | grado guion | estado | qué corre hoy |
 |---|---|---|---|
@@ -19,15 +19,15 @@ que las capacidades que esas seis acreditan —y sólo ésas— llegan a ✅.
 | C2 model-caller + AbortSignal | G1 | ✅ **implementada y acreditada por `E1`+`E5`** | `S1` enriquecida y poblada, `stop: AbortSignal` en toda la cadena, `AbortController` concreto, `ModelsConfig` retirado; 2 violaciones inyectadas revertidas por `sha256` |
 | C3 EventBus + `stream()` | G1 | ✅ **verificada** (no reconstruida, `L11`) | orden total exacto por las DOS vías de suscripción + handler que revienta sin cortar el canal; hallazgo del orden real escrito, no maquillado |
 | C4 AgentLoop | G1 | ✅ **implementada y acreditada por `E4`** | `S11` pre-turno cableado, `LoopOutcome`/`LoopEndReason`, `max_turns` por tarea, `try:` de `_run_loop` abriendo en `_build_child` |
-| C5 tools + pool + dispatcher | G1 | ⛔ sin empezar | |
-| C6 exec-env + confinamiento | G2 | ⛔ sin empezar | |
+| C5 tools + pool + dispatcher | G1 | ✅ **implementada y acreditada por `E2`+`E7`** | `FIND-TOOL4`/`09·A24` pagado: `context_modifier` y `ends_turn` DECLARADOS en `ToolResult`, 9 monkeypatch con `type: ignore` retirados · `to_llm` (`S12`) cableada en los 3 puntos de emisión de ruta host · `E2b` prueba que `deferred` es visibilidad, no disponibilidad (pool único) |
+| C6 exec-env + confinamiento | G2→**G1** | ✅ **corrida y acreditada por `E7`** | `FIND-C6-1` PAGADO (encontrado CORRIENDO, no leyendo: `resolve()` autorizaba el path expandido y devolvía el token crudo ⇒ un token relativo escribía en el `cwd` del proceso con `is_error=False`) · `E7b` prueba que `bash` pasa por el `exec_env` inyectado y no por el host |
 | C7 façade + registry | G1 | ✅ **implementada y acreditada por `E3`** | doble camino cerrado: `set_registry`/`get_registry` retirados, `task_tools.py` lee `ctx.task_registry`; `S4` gana `join(task_id)` (enriquecimiento declarado) |
 | C8 subagentes DI + drenador | G1 | ✅ **implementada y acreditada por `E3`+`E9`** | `FIND-EXEC1` pagado (runner por factory inyectada → `ctx.runner`, global retirado) · `H-5` pagado (`apply_notification` sobre el historial vivo, drenaje como paso propio del loop y sólo en la raíz) |
 | C9 hilo de identidad | G3 (excepción) | ✅ **rip hecho y acreditado por `E6`** (promovida G3→G1) | turno real sin `user_id` + probe en `S1` + negativa + guardia de grafía `AC-39` |
 | C10 ensamblador único | G1 | ⛔ sin empezar | pero `create_runtime` ya puebla `S18`/`S21`; lo que falta es su propia ficha y `E8` |
 
-**Gate `E1..E9`: 6 de 9 escritas (`E1`·`E3`·`E4`·`E5`·`E6`·`E9`), 12 tests, verdes en una sola corrida. Faltan
-`E2`·`E7`·`E8`.**
+**Gate `E1..E9`: 8 de 9 escritas (`E1`·`E2`·`E3`·`E4`·`E5`·`E6`·`E7`·`E9`), 17 tests, verdes en una sola corrida,
+0 skipped. Falta `E8` — y con ella `C10`, la única capacidad que sigue ⛔.**
 
 ## Cronología
 
@@ -149,3 +149,40 @@ Faltan `E2`·`E7`·`E8`. Deuda re-medida, nada heredado: suite **688 passed / 3 
 a `C7`/`C8`, no-determinismo del modelo ya diagnosticado el 2026-07-31) falló en 2 de 4 corridas completas de esta
 ventana y pasó aislado y en las otras 2 completas. El verde simultáneo se apoya en las corridas 3ª y 4ª, dicho tal
 cual.
+
+## 2026-08-01 · ventana 5ª del tramo — `C5` + `C6`: `FIND-TOOL4` y `FIND-C6-1` pagados, `E2` y `E7` escritas
+
+**`C5` (tools).** El defecto no estaba en las firmas sino debajo: `context_modifier` y `ends_turn` se **inyectaban
+por monkeypatch** con `type: ignore[attr-defined]` desde **9 call-sites** y se leían por `getattr` en el loop —
+portantes en producción, invisibles para cualquier tercero que implemente el contrato (`FIND-TOOL4`/`09·A24`). Hoy
+son miembros declarados de `ToolResult`, los 9 monkeypatch están retirados y `agent_loop.py:453-465` los lee como
+miembros. `context_modifier` es grafía exacta de `Tool.ts:330` (opcional, leído 1→EOF). `ends_turn` **no tiene
+homólogo canónico** — `endsTurn` no existe en A — y se declara como **extensión de B** atada a `GAP-02`/`K1`: A cede
+el turno por `checkPermissions → 'ask' + updatedInput` (verificado 1→EOF en `AskUserQuestionTool.tsx`, cuyo `call()`
+devuelve **sólo** `data`), y esa capa está por encima de la línea de corte.
+
+**La disyuntiva de `to_llm` se cerró LEYENDO (`D-08`), no razonando.** La ficha exigía «o se cablea o se borra». En
+todo el árbol había **una sola** invocación `.to_llm(` y era un test — pero `new_core/.../path_presentation.py`
+(59 L, abierto 1→EOF) la implementa de verdad, luego borrarla dejaba huérfano al integrador containerizado ⇒ **se
+cablea**, en los tres puntos que emiten ruta host (`write_file`, `glob`, `grep` una vez por archivo) y en ningún
+otro (`read_file` no emite ruta; `file_edit` devuelve el string de entrada). `sanitize_output` es una red de regex
+con pérdidas (`FIND-VOICE1`); `to_llm` es la traducción exacta.
+
+**`C6` pasa de G2 a G1, y correrla encontró el defecto.** `FIND-C6-1`: `resolve()` validaba el path **expandido** y
+devolvía `Path(host)` **sin expandir** ⇒ un token RELATIVO pasaba el gate y la tool lo abría contra el **cwd del
+proceso**. Medido con sonda, no razonado: `write_file(path="notas.txt")` devolvía `is_error=False` y escribía en
+`cwd()/notas.txt`, fuera del workspace. Pagado en la misma ventana. Es la justificación concreta de por qué G2 ≠ G1.
+
+**Un `xfail(strict=True)` estaba mintiendo** (aseveraba que `ToolResult` no llevaba `context_modifier`): reescrito
+como test de comportamiento, más otro para `ends_turn`. Cero `XPASS` en la suite ⇒ ningún strict se volteó en
+silencio.
+
+**Gate: 17 passed, 0 skipped en una sola corrida** (`E1`×2 · `E2`×2 · `E3`×1 · `E4`×4 · `E5`×1 · `E6`×3 · `E7`×3 ·
+`E9`×1) = **8 de 9**. Falta `E8`. Deuda re-medida, nada heredado: suite **695 passed / 3 skipped / 111 xfailed /
+0 failed** · `mypy --strict` **139 err / 55 f** (sin cambio) · `ruff` **502** (desde 500; los 2 nuevos son idénticos
+en idioma a su hermano inmediato en el mismo módulo). Delta de la suite cuadrado exacto: +5 gate, +1 test nuevo,
++1 xfail volteado (−1 xfailed).
+
+**NO pagado, nombrado entero (`L07`):** `NativeToolRegistry` tiene **cero call-sites de producción** (tercer registro
+junto a `ToolRegistry` y `ToolPool`, la misma forma de doble-camino que `C7` cerró para `S19`), y
+`ToolRegistry.list_available(permission_ctx=…)` es **parámetro muerto** (sus dos llamadores pasan sólo `mode`).

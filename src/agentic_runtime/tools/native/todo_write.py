@@ -55,9 +55,8 @@ class TodoWriteTool:
             c.app_state.native[_TODOS_KEY] = todos
             return c
 
-        result = ToolResult(
+        return ToolResult(
             tool_name=self.name,
             output=json.dumps({"old_todos": old_todos, "new_todos": todos}),
+            context_modifier=modifier,
         )
-        result.context_modifier = modifier  # type: ignore[attr-defined]
-        return result

@@ -251,10 +251,36 @@ def test_tool_result_carries_new_messages():
     assert isinstance(r.new_messages, list)
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL4/A24: ToolResult no transporta context_modifier")
 def test_tool_result_carries_context_modifier():
-    r = ToolResult(tool_name="x", output="ok")
-    assert hasattr(r, "context_modifier") and r.context_modifier is not None
+    """`FIND-TOOL4/A24` PAGADO — `ToolResult` declara `context_modifier`.
+
+    La aserción anterior (`... and r.context_modifier is not None` sobre un resultado
+    desnudo) exigía algo que el canónico **no** hace: `Tool.ts:330` declara
+    `contextModifier?: (context: ToolUseContext) => ToolUseContext`, opcional, luego
+    ausente = `undefined`. Homologado = el miembro EXISTE, defaultea a `None`, y
+    transporta el modifier cuando la tool lo produce.
+    """
+    assert ToolResult(tool_name="x", output="ok").context_modifier is None
+
+    def modifier(c):
+        return c
+
+    r = ToolResult(tool_name="x", output="ok", context_modifier=modifier)
+    assert r.context_modifier is modifier
+    sentinel = object()
+    assert r.context_modifier(sentinel) is sentinel  # aplicable, no sólo presente
+
+
+def test_tool_result_carries_ends_turn_as_declared_b_extension():
+    """`ends_turn` declarado en el contrato — **extensión de B, no espejo de A**.
+
+    `endsTurn` no existe en el canónico: `AskUserQuestionTool.call()` devuelve sólo
+    `data` y las respuestas vuelven en el MISMO turno vía
+    `checkPermissions → behavior:'ask' + updatedInput`. Esa capa es `GAP-02`/`K1`,
+    por encima de la línea de corte; hasta que entre, B cede el turno con este cable.
+    """
+    assert ToolResult(tool_name="x", output="ok").ends_turn is False
+    assert ToolResult(tool_name="x", output="ok", ends_turn=True).ends_turn is True
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-TOOL5/SIG10: ToolResult.aborted no lleva reason ni tool_use_id (str genérico)")

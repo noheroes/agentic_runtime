@@ -63,7 +63,7 @@ class ConfigTool:
             c.app_state.native.setdefault(_CONFIG_KEY, {})[setting] = value
             return c
 
-        result = ToolResult(
+        return ToolResult(
             tool_name=self.name,
             output=json.dumps({
                 "operation": "set",
@@ -71,6 +71,5 @@ class ConfigTool:
                 "previous_value": previous,
                 "new_value": value,
             }),
+            context_modifier=modifier,
         )
-        result.context_modifier = modifier  # type: ignore[attr-defined]
-        return result

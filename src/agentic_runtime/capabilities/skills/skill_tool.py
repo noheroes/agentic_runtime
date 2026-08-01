@@ -115,9 +115,11 @@ class SkillTool:
                 self.name, f"skill '{command}' no encontrada. Disponibles: {available}"
             )
 
-        result = ToolResult(tool_name=self.name, output=render_skill(skill))
-        result.context_modifier = build_skill_context_modifier(skill)  # type: ignore[attr-defined]
-        return result
+        return ToolResult(
+            tool_name=self.name,
+            output=render_skill(skill),
+            context_modifier=build_skill_context_modifier(skill),
+        )
 
 
 __all__ = ["SKILL_TOOL_NAME", "SkillTool", "build_skill_context_modifier", "render_skill"]

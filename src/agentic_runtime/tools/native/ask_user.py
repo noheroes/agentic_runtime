@@ -89,10 +89,16 @@ class AskUserQuestionTool:
         `tool_call` en el stream) y CIERRA el turno vía `ends_turn`; el usuario responde y el
         resultado REAL ('User has answered your questions: …') lo reinyecta el consumidor como el
         tool_result de esta llamada al inicio del turno siguiente. Aquí solo dejamos un placeholder.
+
+        ⚠ **Divergencia declarada con A.** El canónico NO cierra el turno: su `call()` sólo
+        devuelve `{data:{questions,answers,annotations}}` (leído 1→EOF en
+        `AskUserQuestionTool.tsx:209-220`) y las respuestas llegan **dentro del mismo turno**
+        por `checkPermissions → behavior:'ask' + updatedInput`, capa de interacción que en B
+        es `GAP-02`/`K1` y está por encima de la línea de corte. `ends_turn` es el cable de B
+        mientras eso no exista, no un espejo. Ver `ToolResult.ends_turn`.
         """
-        result = ToolResult(
+        return ToolResult(
             tool_name=self.name,
             output="Awaiting the user's answers to the questions above.",
+            ends_turn=True,
         )
-        result.ends_turn = True  # type: ignore[attr-defined]
-        return result

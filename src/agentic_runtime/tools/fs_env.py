@@ -149,7 +149,17 @@ class ConfinedFilesystem:
                 f"path {token!r} resolves outside the allowed "
                 f"{'write ' if for_write else ''}workspace"
             )
-        return Path(host)
+        # `FIND-C6-1`: se devuelve el path **expandido**, que es el que se acaba de
+        # autorizar — no el token crudo. Antes se validaba lo expandido y se devolvía
+        # `Path(host)` sin expandir, así que un token RELATIVO pasaba el gate (expandido
+        # contra `roots[0]`) y la tool lo abría contra el **cwd del proceso**: el archivo
+        # caía fuera del workspace con `is_error=False`. Medido, no razonado: `write_file`
+        # con `path="notas.txt"` escribía en `cwd()/notas.txt`. El confinamiento sólo vale
+        # si lo autorizado y lo usado son el MISMO path.
+        # Lexical a propósito (`expand_path` no resuelve symlinks): la forma con symlinks
+        # resueltos es para el CHEQUEO (`paths_for_permission_check`), no para la E/S —
+        # mismo reparto que el canónico. Para un token absoluto esto es un no-op.
+        return Path(expand_path(str(host), self._base_dir))
 
 
 __all__ = [
