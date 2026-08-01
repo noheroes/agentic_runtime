@@ -41,6 +41,8 @@ trabajo.
 from __future__ import annotations
 
 import json
+import os
+import random
 import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -1641,3 +1643,372 @@ async def test_e2d_the_model_selects_native_tools_by_name_from_the_full_census(t
     # 4. Re-entrada: el turno volvió al modelo con el resultado de las tools.
     assert code in result, f"el turno no re-entró con el resultado: {result!r}"
     assert len(probe.calls) >= 3, f"no hubo cadena de tools: {len(probe.calls)} llamada(s)"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2·e — la rama POSITIVA del descubrimiento: `ToolSearch` ACTIVA una diferida
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `E2c` prueba la rama negativa (una diferida no descubierta NO se anuncia) y
+# `E2b` que sigue siendo despachable. Falta la mitad que hace útil al mecanismo:
+# que `ToolSearch` la **descubra** y que a partir de ahí SÍ se anuncie. Sin esto,
+# lo acreditado es un mecanismo que sólo sabe esconder.
+#
+# ⚠ **Hallazgo declarado, y es la razón de que el sujeto haya que construirlo:**
+# en el runtime **ninguna tool nativa marca `deferred`** (`grep -c "deferred = True"
+# tools/native/*.py` = cero). El único sujeto del camino diferido en producción es
+# MCP (`capabilities/mcp/tool_adapter.py:30`), que lo setea a mano — exactamente lo
+# que `09·E1` anticipaba. Lo que difiere `WebFetch`/`WebSearch` en el canónico es
+# `shouldDefer` dentro de la precedencia de `isDeferredTool` (`prompt.ts:62`), y esa
+# precedencia es `GAP-TOOL3`/`09·TiR5`, **no implementada**. Así que aquí se
+# CONFIGURA el runtime como el canónico lo configura —`WebFetch`/`WebSearch`
+# diferidas— y se mide el ciclo entero sobre ese supuesto, declarado y no disimulado.
+#
+# Las dos aserciones que hacen que esto no sea un interruptor global:
+#   · se descubre `WebFetch` y **sólo** `WebFetch`; `WebSearch`, diferida y no
+#     seleccionada, sigue oculta en el mismo turno;
+#   · el resultado de `ToolSearch` trae el **schema completo** de la descubierta,
+#     que es lo que permite al modelo invocarla ya, sin esperar al anuncio.
+
+async def test_e2e_tool_search_discovers_a_deferred_tool_and_it_becomes_announced(
+    tmp_path, monkeypatch,
+):
+    """`S26` de ida y vuelta: oculta → `ToolSearch` → anunciada, y sólo la elegida."""
+    from agentic_runtime.contracts.events import DoneEvent, ToolCallEvent
+    from agentic_runtime.tools.deferred import discovered_tool_names
+    from agentic_runtime.tools.native.web_fetch import WebFetchTool
+    from agentic_runtime.tools.native.web_search import WebSearchTool
+
+    # El runtime no marca ninguna nativa como diferida (ver cabecera). `monkeypatch`
+    # revierte esto al salir del test — no queda estado global tocado.
+    monkeypatch.setattr(WebFetchTool, "deferred", True, raising=False)
+    monkeypatch.setattr(WebSearchTool, "deferred", True, raising=False)
+
+    captured: dict[str, Any] = {}
+
+    def _capture_ctx(ctx: ToolUseContext, task: Any) -> ToolUseContext:
+        captured["ctx"] = ctx
+        return ctx
+
+    class _SearchThenStopCaller:
+        """Turno 1: invoca `ToolSearch(select:WebFetch)`. Turno 2: termina.
+
+        Sin modelo real a propósito: lo que se mide es el mecanismo de
+        descubrimiento y el re-anuncio del turno siguiente. Que un modelo de verdad
+        sepa llegar hasta aquí es `E2f`.
+        """
+
+        def __init__(self) -> None:
+            self.announced: list[set[str]] = []
+            self.messages: list[list[dict]] = []
+
+        def supports_native_tool_search(self, model_id: str = "") -> bool:
+            return False
+
+        async def complete(self, messages, tools, *, stop=None, **kwargs):
+            self.announced.append({t.get("name") for t in tools})
+            self.messages.append(messages)
+            first = len(self.announced) == 1
+
+            async def _gen():
+                if first:
+                    yield ToolCallEvent(
+                        tool_name="ToolSearch",
+                        tool_input={"query": "select:WebFetch"},
+                        call_id="call-e2e-1",
+                    )
+                # `agent_loop.py:476` re-entra SÓLO con `stop_reason == "tool_calls"`.
+                yield DoneEvent(stop_reason="tool_calls" if first else "end_turn")
+
+            return _gen()
+
+    caller = _SearchThenStopCaller()
+    runtime = _runtime(
+        tmp_path, caller, (), Scope("scope-e2e"),
+        root_context_modifier=_capture_ctx,
+        initial_allowed_tools=sorted(_NATIVE_CENSUS),
+    )
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt="descubre la herramienta de red",
+        description="gate-e2e-descubrimiento",
+        session_id=f"sess-E2e-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    assert len(caller.announced) >= 2, (
+        f"el turno no re-entró tras ToolSearch: {len(caller.announced)} llamada(s) — "
+        "sin segundo turno no hay nada que medir sobre el re-anuncio"
+    )
+    before, after = caller.announced[0], caller.announced[1]
+
+    # 1. ANTES: las dos diferidas ocultas, y `ToolSearch` presente para alcanzarlas.
+    assert "WebFetch" not in before, "una diferida no descubierta se anunció"
+    assert "WebSearch" not in before, "una diferida no descubierta se anunció"
+    assert "ToolSearch" in before, "hay diferidas y `ToolSearch` no se anunció: inalcanzables"
+
+    # 2. DESPUÉS: la descubierta se anuncia...
+    assert "WebFetch" in after, (
+        f"`ToolSearch` la marcó descubierta pero el turno siguiente no la anuncia: {sorted(after)}"
+    )
+    # 3. ...y SÓLO ella. El descubrimiento es por tool, no un interruptor global.
+    assert "WebSearch" not in after, (
+        "descubrir una diferida destapó también a la otra: el descubrimiento no discrimina"
+    )
+
+    # 4. El estado de descubrimiento es exactamente el pedido.
+    ctx = captured.get("ctx")
+    assert ctx is not None, "no se capturó el ctx de producción"
+    assert discovered_tool_names(ctx) == {"WebFetch"}, discovered_tool_names(ctx)
+
+    # 5. El resultado de `ToolSearch` trae el SCHEMA COMPLETO — sin él, «descubierta»
+    #    sería una etiqueta: el modelo sabría el nombre y no cómo llamarla.
+    #    Se PARSEA en vez de buscar la cadena: el payload viaja serializado dentro
+    #    del contenido del mensaje, así que un `'"WebFetch"' in wire` da falso
+    #    negativo por el escapado — lo comprobé poniendo el test en rojo.
+    payload = next(
+        (p for p in _tool_result_payloads(caller.messages[-1])
+         if isinstance(p, dict) and "matches" in p),
+        None,
+    )
+    assert payload is not None, (
+        f"el resultado de ToolSearch no viajó al modelo: "
+        f"{json.dumps(caller.messages[-1], default=str)[:400]}"
+    )
+    match = next((m for m in payload["matches"] if m["name"] == "WebFetch"), None)
+    assert match is not None, payload
+    assert match["parameters"].get("properties", {}).get("url"), (
+        f"la descubierta llegó sin schema invocable: {match}"
+    )
+    assert payload["total_deferred_tools"] == 2, (
+        f"el censo de diferidas del pool no cuadra: {payload['total_deferred_tools']}"
+    )
+
+
+def _tool_result_payloads(messages: list[dict]) -> list[Any]:
+    """Todo bloque de texto del historial que sea JSON, ya parseado.
+
+    Deliberadamente tolerante con el ENVOLTORIO (el test mide el contenido
+    descubierto, no fija la forma del mensaje de resultado — eso lo fija `E2`) y
+    estricto con el CONTENIDO: sólo devuelve lo que parsea, así que el test acaba
+    aseverando sobre estructura, no sobre subcadenas.
+    """
+    out: list[Any] = []
+
+    def _maybe(val: Any) -> None:
+        if not isinstance(val, str):
+            return
+        try:
+            out.append(json.loads(val))
+        except (ValueError, TypeError):
+            pass
+
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    for key in ("content", "output", "text"):
+                        _maybe(block.get(key))
+        else:
+            _maybe(content)
+    return out
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2·f — SOLVENCIA del modelo sobre el censo: enunciado de OBJETIVO, no de tool
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `E2d` nombra la herramienta en el enunciado («con la herramienta grep, …»): mide
+# que el modelo sabe INVOCAR lo que se le dice. Esto es otra cosa y es la que falla
+# en la práctica: se enuncia el **objetivo** y el modelo tiene que **elegir** entre
+# las 25, conducir la tool y usar su salida. Es el modo de fallo que el usuario vio
+# en `agent_core`.
+#
+# Tres decisiones de diseño, cada una para cerrar una forma de aprobar sin mérito:
+#
+#   1. **Los datos son aleatorios por corrida** (centinelas `uuid4`). Nada de lo que
+#      se pide puede salir del conocimiento paramétrico del modelo ni de una corrida
+#      anterior: si la respuesta trae el centinela, la tool se ejecutó y su salida se
+#      consumió. El **orden** de los escenarios también se baraja.
+#   2. **Se asevera el OBJETIVO, no una tool exacta**, salvo donde el enunciado deja
+#      una sola opción legítima. Exigir `grep` cuando `bash`+`grep(1)` resuelve
+#      igual mediría obediencia, no solvencia — y castigaría una elección correcta.
+#   3. **La red de `WebSearch` va sustituida** (`urlopen` devuelve un SERP canónico
+#      con el centinela). Lo que se mide aquí es *el modelo elige WebSearch, la
+#      parametriza y usa lo que devuelve*, no la disponibilidad de Serper: un gate
+#      que dependa de una API de pago de terceros no es un gate. El egress REAL de
+#      esa tool ya está medido, y acotado, en `E7f`.
+#
+# La semilla se imprime en el fallo y se puede fijar con `GATE_E2F_SEED` para
+# reproducir exactamente una corrida roja.
+
+_E2F_SYSTEM = (
+    "Eres un agente con herramientas reales. Elige tu la herramienta adecuada para "
+    "cada objetivo; nadie te va a decir cual usar. No inventes datos: si necesitas "
+    "un dato que no tienes, obtenlo con una herramienta. Responde al final con el "
+    "dato pedido, sin adornos."
+)
+
+
+def _e2f_scenarios(tmp_path: Path, rnd: random.Random) -> list[dict]:
+    """Escenarios objetivo→resultado, con carga útil aleatoria por corrida."""
+    def tag(prefix: str) -> str:
+        return f"{prefix}-{uuid.uuid4().hex[:10].upper()}"
+
+    # 1 · BÚSQUEDA WEB. El enunciado cierra la puerta a WebFetch a propósito (no hay
+    #     URL que traer), así que aquí el conjunto aceptable sí es de una sola tool.
+    web_code = tag("ORBITA")
+    web_topic = rnd.choice(["zarpuel", "quivandro", "melbrisa", "tandroque"])
+
+    # 2 · BÚSQUEDA EN ARCHIVOS. Varias tools resuelven esto legítimamente.
+    grep_code = tag("LEGAJO")
+    haystack = tmp_path / "archivo"
+    haystack.mkdir(exist_ok=True)
+    for i in range(6):
+        (haystack / f"nota_{i}.txt").write_text(f"linea de relleno {i}\n", encoding="utf-8")
+    (haystack / f"nota_{rnd.randrange(6)}.txt").write_text(
+        f"referencia interna: {grep_code}\n", encoding="utf-8",
+    )
+
+    # 3 · ESCRITURA. El efecto es verificable en disco, no en la narración.
+    write_code = tag("ACTA")
+    target = tmp_path / f"salida_{rnd.randrange(1000)}.txt"
+
+    return [
+        {
+            "id": "web",
+            "prompt": (
+                f"Necesito saber cual es el numero de registro del proyecto '{web_topic}'. "
+                "No lo conoces y no tienes ninguna URL: busca en la web por palabras clave "
+                "y dime el numero de registro que encuentres."
+            ),
+            "acceptable": {"WebSearch"},
+            "expect_in_answer": web_code,
+            "serp": web_code,
+        },
+        {
+            "id": "buscar-en-archivos",
+            "prompt": (
+                f"En el directorio {haystack} hay varios archivos. Uno contiene una "
+                "'referencia interna'. Dime su valor exacto."
+            ),
+            "acceptable": {"grep", "bash", "glob", "read_file"},
+            "expect_in_answer": grep_code,
+            "serp": None,
+        },
+        {
+            "id": "escribir",
+            "prompt": (
+                f"Deja constancia del identificador {write_code} guardandolo, tal cual y "
+                f"sin nada mas, en el archivo {target}. Luego confirma diciendo el "
+                "identificador."
+            ),
+            "acceptable": {"write_file", "bash", "Edit"},
+            "expect_in_answer": write_code,
+            "expect_file": (target, write_code),
+            "serp": None,
+        },
+    ]
+
+
+@_needs_azure
+async def test_e2f_the_model_is_solvent_choosing_tools_from_goal_statements(
+    tmp_path, monkeypatch,
+):
+    """Enunciado de objetivo → el modelo ELIGE de las 25, conduce la tool y usa su salida."""
+    import urllib.request
+
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    seed = int(os.getenv("GATE_E2F_SEED") or uuid.uuid4().int % (2**32))
+    rnd = random.Random(seed)
+
+    scenarios = _e2f_scenarios(tmp_path, rnd)
+    rnd.shuffle(scenarios)
+
+    monkeypatch.setenv("SERPER_API_KEY", "gate-e2f-stub")
+
+    #: SERP sustituido — ver decisión 3 en la cabecera. `current` lo apunta al
+    #: escenario en curso para que el centinela sea distinto en cada uno.
+    current: dict[str, Any] = {"serp": None}
+
+    class _StubResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    def _fake_urlopen(req: Any, *a: Any, **k: Any):
+        code = current["serp"]
+        assert code is not None, (
+            "una tool salio a la red en un escenario que no la esperaba: "
+            f"{getattr(req, 'full_url', req)}"
+        )
+        return _StubResponse(json.dumps({"organic": [{
+            "title": "Registro oficial de proyectos",
+            "link": "https://example.invalid/registro",
+            "snippet": f"El numero de registro asignado es {code}.",
+        }]}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    fallos: list[str] = []
+    for n, sc in enumerate(scenarios):
+        current["serp"] = sc["serp"]
+        probe = ModelSeamProbe(_build_caller(_E2F_SYSTEM))
+        runtime = _runtime(
+            tmp_path / f"rt_{n}", probe, (), Scope(f"scope-e2f-{n}"),
+            fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+            initial_allowed_tools=sorted(_NATIVE_CENSUS),
+        )
+        task_id = await runtime.dispatch(RuntimeTask(
+            prompt=sc["prompt"],
+            description=f"gate-e2f-{sc['id']}",
+            session_id=f"sess-E2f-{sc['id']}-{uuid.uuid4().hex}",
+        ))
+        await runtime._task_registry.get(task_id).asyncio_task
+
+        answer = runtime.result(task_id) or ""
+        status = runtime.status(task_id)
+        announced = {t.get("name") for call in probe.calls for t in call["tools"]}
+        chosen_wire = json.dumps([c["messages"] for c in probe.calls], default=str)
+        selected = {t for t in _NATIVE_CENSUS if f'"{t}"' in chosen_wire}
+
+        # Los datos del escenario se pasan explícitos y no se capturan del bucle:
+        # una clausura sobre `sc`/`answer` funcionaría hoy (se llama en la misma
+        # iteración) y mentiría en cuanto alguien acumulara los fallos para después.
+        def _fail(msg: str, *, sc=sc, announced=announced, selected=selected, answer=answer) -> None:
+            fallos.append(
+                f"[{sc['id']}] {msg}\n"
+                f"    anunciadas={len(announced)} elegidas={sorted(selected)}\n"
+                f"    respuesta={answer[:200]!r}"
+            )
+
+        if status is not TaskStatus.COMPLETED:
+            _fail(f"la tarea no completó ({status})")
+            continue
+        # El censo entero estuvo delante: la elección fue una elección, no un menú de dos.
+        assert len(announced) >= 20, f"[{sc['id']}] anuncio incompleto: {sorted(announced)}"
+
+        if not (selected & sc["acceptable"]):
+            _fail(f"no eligió ninguna tool capaz de resolverlo (aceptables: {sorted(sc['acceptable'])})")
+        if sc["expect_in_answer"] not in answer:
+            _fail(f"el centinela {sc['expect_in_answer']} no llegó a la respuesta")
+        if "expect_file" in sc:
+            path, want = sc["expect_file"]
+            if not path.exists():
+                _fail(f"no se creó {path.name}")
+            elif want not in path.read_text(encoding="utf-8"):
+                _fail(f"{path.name} no contiene {want}")
+
+    assert not fallos, (
+        f"SOLVENCIA: {len(fallos)}/{len(scenarios)} escenarios fallaron "
+        f"(GATE_E2F_SEED={seed} para reproducir)\n" + "\n".join(fallos)
+    )

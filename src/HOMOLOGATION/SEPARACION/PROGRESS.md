@@ -19,16 +19,16 @@ tramo (`TRAMO-1 §4`); **8 de 9 escritas y en verde en una misma corrida** (`E1`
 | C2 model-caller + AbortSignal | G1 | ✅ **implementada y acreditada por `E1`+`E5`** | `S1` enriquecida y poblada, `stop: AbortSignal` en toda la cadena, `AbortController` concreto, `ModelsConfig` retirado; 2 violaciones inyectadas revertidas por `sha256` |
 | C3 EventBus + `stream()` | G1 | ✅ **verificada** (no reconstruida, `L11`) | orden total exacto por las DOS vías de suscripción + handler que revienta sin cortar el canal; hallazgo del orden real escrito, no maquillado |
 | C4 AgentLoop | G1 | ✅ **implementada y acreditada por `E4`** | `S11` pre-turno cableado, `LoopOutcome`/`LoopEndReason`, `max_turns` por tarea, `try:` de `_run_loop` abriendo en `_build_child` |
-| C5 tools + pool + dispatcher | G1 | ✅ **implementada y acreditada por `E2`+`E7`** | `FIND-TOOL4`/`09·A24` pagado: `context_modifier` y `ends_turn` DECLARADOS en `ToolResult`, 9 monkeypatch con `type: ignore` retirados · `to_llm` (`S12`) cableada en los 3 puntos de emisión de ruta host · `E2b` prueba que `deferred` es visibilidad, no disponibilidad (pool único) · **`NativeToolRegistry` RETIRADO** (3er registro con cero call-sites) y `list_available(permission_ctx=…)` retirado · censo de **25 tools / 18 módulos** congelado y acreditado: `E2c`×2 (censo + anuncio en sus dos ramas), `E2d` (**selección por el LLM** con el censo entero anunciado) |
+| C5 tools + pool + dispatcher | G1 | ✅ **implementada y acreditada por `E2`+`E7`** | `FIND-TOOL4`/`09·A24` pagado: `context_modifier` y `ends_turn` DECLARADOS en `ToolResult`, 9 monkeypatch con `type: ignore` retirados · `to_llm` (`S12`) cableada en los 3 puntos de emisión de ruta host · `E2b` prueba que `deferred` es visibilidad, no disponibilidad (pool único) · **`NativeToolRegistry` RETIRADO** (3er registro con cero call-sites) y `list_available(permission_ctx=…)` retirado · censo de **25 tools / 18 módulos** congelado y acreditado: `E2c`×2 (censo + anuncio en sus dos ramas), `E2d` (**selección por el LLM** con el censo entero anunciado) · `E2e` (descubrimiento de ida y vuelta: `ToolSearch` ACTIVA una diferida y sólo ésa) · **`E2f` SOLVENCIA**: enunciado de OBJETIVO, el modelo elige entre las 24, con centinelas aleatorios por corrida y violación inyectada |
 | C6 exec-env + confinamiento | G2→**G1** | ✅ **corrida y acreditada por `E7`** | `FIND-C6-1` PAGADO (encontrado CORRIENDO, no leyendo: `resolve()` autorizaba el path expandido y devolvía el token crudo ⇒ un token relativo escribía en el `cwd` del proceso con `is_error=False`) · `E7b` prueba que `bash` pasa por el `exec_env` inyectado y no por el host · **`E7f` barre las 25 CORRIENDO: 23 pasan por la costura, se escapan exactamente 2** (`WebFetch`/`WebSearch`, `red-directa`, diferidas por `09·F3`+`S17` arriba de la línea) · `FIND-C6-2` medido (el timeout no acota a una tool que bloquea el loop) |
 | C7 façade + registry | G1 | ✅ **implementada y acreditada por `E3`** | doble camino cerrado: `set_registry`/`get_registry` retirados, `task_tools.py` lee `ctx.task_registry`; `S4` gana `join(task_id)` (enriquecimiento declarado) |
 | C8 subagentes DI + drenador | G1 | ✅ **implementada y acreditada por `E3`+`E9`** | `FIND-EXEC1` pagado (runner por factory inyectada → `ctx.runner`, global retirado) · `H-5` pagado (`apply_notification` sobre el historial vivo, drenaje como paso propio del loop y sólo en la raíz) |
 | C9 hilo de identidad | G3 (excepción) | ✅ **rip hecho y acreditado por `E6`** (promovida G3→G1) | turno real sin `user_id` + probe en `S1` + negativa + guardia de grafía `AC-39` |
 | C10 ensamblador único | G1 | ⛔ sin empezar | pero `create_runtime` ya puebla `S18`/`S21`; lo que falta es su propia ficha y `E8` |
 
-**Gate `E1..E9`: 8 de 9 escritas (`E1`·`E2`·`E3`·`E4`·`E5`·`E6`·`E7`·`E9`), **23 tests**, verdes en una sola
+**Gate `E1..E9`: 8 de 9 escritas (`E1`·`E2`·`E3`·`E4`·`E5`·`E6`·`E7`·`E9`), **25 tests**, verdes en una sola
 corrida, 0 skipped. Falta `E8` — y con ella `C10`, la única capacidad que sigue ⛔.** (Cifra vigente 2026-08-01
-tras la TERCERA CORRECCIÓN; la secuencia real de la 5ª ventana fue 17 → 19 → 23.)
+tras la CUARTA CORRECCIÓN; la secuencia real de la 5ª ventana fue 17 → 19 → 23 → 25.)
 
 ## Cronología
 
@@ -396,3 +396,81 @@ Censo real medido: **25 tools registradas en 18 módulos** (de ahí «las 18 too
   explicativo empezaba por «`# noqa` a propósito» y ruff lo leyó como directiva desnuda → `RUF100`. Reescrito.)*
 - `mypy --strict` = **138 errores / 54 ficheros** (desde 139/55): **−1 fichero y −1 error**, exactamente el
   huérfano retirado.
+
+### 2026-08-01 · CUARTA CORRECCIÓN — la rama POSITIVA del descubrimiento y la SOLVENCIA del modelo
+
+**Qué pidió el usuario.** Dos cosas, la segunda marcada por él como la más importante:
+1. «deberíamos también probar el caso donde **sí** se espera que puedan ser descubiertas las tools
+   `WebFetch`/`WebSearch`; lo opuesto ya lo tienes».
+2. «lo que yo creo más importante, y que en `agent_core` **fallaba**: la **solvencia** del LLM para usar
+   `WebSearch` en **pruebas aleatorias guiadas por enunciado** sobre las 25 tools».
+
+Tenía razón en el diagnóstico: `E2c` y `E2b` acreditaban un mecanismo **que sólo sabe esconder**. Que una
+diferida no se anuncie y aun así se despache no prueba que `ToolSearch` sirva para algo.
+
+#### 1 · `E2·e` — descubrimiento de ida y vuelta (sin modelo)
+
+Turno 1 invoca `ToolSearch(select:WebFetch)` por el dispatcher real; turno 2 mide el re-anuncio. Se asevera:
+antes, `WebFetch`/`WebSearch` ocultas y `ToolSearch` presente (si no, serían inalcanzables); después,
+**`WebFetch` anunciada y `WebSearch` NO** —el descubrimiento es por tool, no un interruptor global—;
+`discovered_tool_names(ctx) == {"WebFetch"}`; y el resultado de `ToolSearch` lleva el **schema completo** de la
+descubierta, sin el cual «descubierta» sería una etiqueta: el modelo sabría el nombre y no cómo llamarla.
+
+**⚠ Hallazgo que obligó a construir el sujeto, declarado y no disimulado:** en el runtime **ninguna tool nativa
+marca `deferred`** (`grep -c "deferred = True" tools/native/*.py` = **cero**). El único sujeto del camino
+diferido en producción es **MCP** (`capabilities/mcp/tool_adapter.py:30`), que lo setea a mano — exactamente lo
+que `09·E1` anticipaba. Lo que difiere `WebFetch`/`WebSearch` en el canónico es `shouldDefer` dentro de la
+precedencia de `isDeferredTool` (`prompt.ts:62`), y esa precedencia es `GAP-TOOL3`/`09·TiR5`, **no
+implementada**. Así que el test **configura** el runtime como el canónico lo configura y lo dice en su cabecera.
+
+*Rojo en primera corrida, dos veces, ambas mías:* (a) usé `stop_reason="tool_use"` y el loop re-entra sólo con
+`"tool_calls"` (`agent_loop.py:476`) ⇒ no había segundo turno que medir; (b) buscaba `'"WebFetch"'` como
+subcadena en el cable, y el payload viaja **escapado** dentro del contenido del mensaje ⇒ falso negativo.
+Corregido **parseando** en vez de buscando subcadenas, que además hace que el test asevere sobre estructura.
+
+#### 2 · `E2·f` — SOLVENCIA: enunciado de OBJETIVO, no de herramienta
+
+`E2d` nombra la tool en el enunciado («con la herramienta `grep`, …»): mide que el modelo sabe **invocar** lo
+que se le dice. `E2f` mide otra cosa —la que falla— : se enuncia el **objetivo**, el modelo ve las 24
+anunciadas y tiene que **elegir**, parametrizar y **usar la salida**. Tres escenarios (búsqueda web · búsqueda
+en archivos · escritura), **barajados** y con **centinelas `uuid4` distintos en cada corrida**.
+
+Las tres decisiones de diseño, cada una para cerrar una forma de aprobar sin mérito:
+- **Datos aleatorios por corrida.** Nada de lo pedido puede salir del conocimiento paramétrico ni de una corrida
+  anterior: si el centinela aparece en la respuesta, la tool se ejecutó **y su salida se consumió**.
+- **Se asevera el OBJETIVO, no una tool exacta**, salvo donde el enunciado deja una sola opción legítima
+  (en `web` el enunciado dice «no tienes ninguna URL», lo que cierra la puerta a `WebFetch`). Exigir `grep`
+  cuando `bash`+`grep(1)` resuelve igual mediría **obediencia, no solvencia**, y castigaría una elección
+  correcta.
+- **La red de `WebSearch` va sustituida** (`urlopen` devuelve un SERP canónico con el centinela). Lo que se mide
+  es *el modelo elige `WebSearch`, la parametriza y usa lo que devuelve*, no la disponibilidad de Serper: un
+  gate que dependa de una API de pago de terceros no es un gate. El egress **real** de esa tool ya está medido
+  y acotado en `E7f`. La sustitución **levanta** si una tool sale a la red en un escenario que no la esperaba.
+
+La semilla se imprime en el fallo y se fija con `GATE_E2F_SEED` para reproducir una corrida roja exacta.
+
+**Acreditado con violación inyectada, porque pasó a la primera y eso obliga a comprobar el porqué.** Copia
+previa por `sha256` (`be4c419933c78eba…b695a`), anuncio antes de tocar, mutación: el SERP devuelve un código
+**distinto** del esperado. Resultado — rojo exactamente donde debía, y el diagnóstico salió mejor de lo
+esperado:
+
+```
+SOLVENCIA: 1/3 escenarios fallaron (GATE_E2F_SEED=3800932971 para reproducir)
+  [web] el centinela ORBITA-4BCDE8C6DB no llegó a la respuesta
+      anunciadas=24 elegidas=['WebSearch']
+      respuesta='No he podido verificar un número de registro fiable para “tandroque”.'
+```
+
+Es decir: con **24 tools delante** el modelo **sí eligió `WebSearch`** (la elección no era el punto débil), y al
+recibir un dato que no cuadraba **se negó a fabricarlo**. La cadena que el test acredita —elegir → parametrizar
+→ **consumir la salida**— es load-bearing en su eslabón final, que es justo el que no se puede fingir. Revert
+byte a byte desde la copia (`sha256` idéntico, **nunca `git checkout`**).
+
+#### 3 · Mediciones (re-corridas enteras, ninguna heredada)
+
+- gate `-m gate_tramo1` = **25 passed, 0 skipped, en UNA corrida** (eran 23): `E2` pasa de 5 a **7** piezas.
+  **Sigue siendo 8 de 9: falta sólo `E8`.**
+- `ruff` = **505** — **cero deuda de lint neta** por las dos piezas. Las 6 brutas se pagaron enteras, y 4 eran
+  un olor real (`B023`: una clausura que capturaba la variable del bucle; funciona hoy porque se llama en la
+  misma iteración y mentiría en cuanto alguien acumulara los fallos para después) ⇒ arregladas, no silenciadas.
+- `mypy --strict` = **138 errores / 54 ficheros** (sin cambio).

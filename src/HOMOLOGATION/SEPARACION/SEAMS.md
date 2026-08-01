@@ -466,6 +466,19 @@
   forma de `FIND-EXEC1` pre-empaquetada para integradores. Test **invertido**, no borrado ⇒ reintroducirlo se pone rojo. Con él cayó
   `ToolRegistry.list_available(permission_ctx=…)` (parámetro muerto: insinuaba un segundo sitio donde se filtra por permisos, cuando
   el gate vive aguas abajo — `assemble_tool_pool` + `resolver.py:40` `denied_names()`).
+- **acreditación del DESCUBRIMIENTO y de la SOLVENCIA (2026-08-01, cuarta corrección):** `E2c`/`E2b` sólo acreditaban
+  que el mecanismo sabe **esconder**. `E2e` cierra la ida y vuelta sin modelo: `ToolSearch(select:…)` por el dispatcher
+  real ⇒ la descubierta pasa a anunciarse en el turno siguiente **y sólo ella** (el descubrimiento es por tool, no un
+  interruptor global), con el **schema completo** en el resultado — sin él «descubierta» sería una etiqueta: el modelo
+  sabría el nombre y no cómo llamarla. `E2f` mide la **solvencia**: enunciado de OBJETIVO (no de herramienta),
+  centinelas `uuid4` por corrida y escenarios barajados, así que un acierto no puede venir del conocimiento paramétrico
+  ni de una corrida anterior. Acreditado con **violación inyectada** (SERP con un código distinto ⇒ rojo), que además
+  midió que con 24 tools delante el modelo **sí elige `WebSearch`** y **se niega a fabricar** el dato que no cuadra.
+- **⚠ `S26` no tiene sujeto nativo en producción:** **ninguna** tool nativa marca `deferred` (`grep -c "deferred = True"
+  tools/native/*.py` = **cero**). El único sujeto real es MCP (`capabilities/mcp/tool_adapter.py:30`, a mano), tal como
+  `09·E1` anticipaba. Lo que difiere `WebFetch`/`WebSearch` en el canónico es `shouldDefer` dentro de la precedencia de
+  `isDeferredTool` (`prompt.ts:62`) = `GAP-TOOL3`/`09·TiR5`, **no implementada** ⇒ `E2e` **configura** el runtime como
+  el canónico lo configura y lo declara en su cabecera, en vez de fingir que el sujeto ya existía.
 - **acreditación del censo (2026-08-01):** `E2c`×2 congela el censo **en literal** —25 tools en **18 módulos**— y lo asevera contra
   `create_tools()`; el anuncio se prueba en **sus dos ramas** (24 siempre · `ToolSearch` **sii** hay una diferida en el pool, tal como
   `deferred_strategy.py:64-66` espeja al canónico; esta rama puso el test ROJO en su primera corrida y la aserción equivocada era la

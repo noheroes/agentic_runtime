@@ -196,7 +196,7 @@ El tramo 1 se declara terminado cuando **todas** estas pasan, corriendo:
 | # | prueba | qué acredita | estado 2026-07-31 | por qué no basta con menos |
 |---|---|---|---|---|
 | E1 | turno real texto-solo, con verificación **en el cable** de qué llegó al proveedor | C1·C2·C3 | 🟢 2 tests | un mock no distingue passthrough de traducción-en-el-bridge |
-| E2 | turno real con **tool nativa real** (bash + fs), resultado aplanado, re-entrada **+ censo, anuncio y SELECCIÓN por el modelo sobre las 18 tools nativas** | C4·C5·C6 | 🟢 5 tests (turno real `bash`+`write_file` con token que sólo vive en disco · invariante del **pool único** · `E2c`×2: censo congelado en literal == `create_tools()` (25 tools / 18 módulos) y anuncio en **sus dos ramas** —24 siempre, `ToolSearch` sii hay diferida— · `E2d`: turno real con el censo entero anunciado y el modelo eligiendo `grep`→`read_file`→`write_file` por nombre, separando ANUNCIADO de ELEGIDO) | `add_numbers` no ejercita confinamiento; y con 2 tools anunciadas, «seleccionar» sale por descarte |
+| E2 | turno real con **tool nativa real** (bash + fs), resultado aplanado, re-entrada **+ censo, anuncio, descubrimiento y SOLVENCIA del modelo sobre las 18 tools nativas** | C4·C5·C6 | 🟢 7 tests (turno real `bash`+`write_file` · invariante del **pool único** · `E2c`×2: censo congelado en literal == `create_tools()` (25 tools / 18 módulos) y anuncio en **sus dos ramas** · `E2d`: el modelo elige por nombre del censo entero · `E2e`: `ToolSearch` **descubre** una diferida y **sólo ésa** pasa a anunciarse, con schema invocable · **`E2f`: SOLVENCIA** — enunciado de OBJETIVO (no de herramienta), centinelas `uuid4` por corrida, escenarios barajados, acreditado con violación inyectada) | `add_numbers` no ejercita confinamiento; con 2 tools anunciadas «seleccionar» sale por descarte; y un mecanismo de diferidas que sólo sabe ESCONDER no está acreditado |
 | E3 | turno real **padre→subagente**, resultado citado por el padre | C7·C8·C10 | ✅ **en verde** | es el único camino que cruza las 10 capacidades |
 | E4 | **NEGATIVA**: runtime sin cablear (`runner=None`) ⇒ `is_error` limpio, no excepción | que las costuras son *load-bearing* | 🟢 4 tests (control positivo · negativa de costura · `FIND-EXEC1` aseverado · negativa **E2E real**), acreditada con violación inyectada | sin ella, verde ≠ cableado (`L09`) |
 | E5 | **abort real**: `stop.aborted=True` corta el stream a mitad | C2 / `S2` | 🟢 1 test | hoy el abort se ignora en silencio |
@@ -205,20 +205,21 @@ El tramo 1 se declara terminado cuando **todas** estas pasan, corriendo:
 | E8 | **aislamiento**: battery importada sólo por su compositor; el base no la conoce | C10 | ⛔ sin escribir | el agnosticismo se asevera, no se narra |
 | E9 | **notificación**: el padre recibe y **aplica** al historial vivo la notificación de un hijo | C8 / `H-5` | ✅ **en verde** | los 7 tests actuales verifican la función, no el comportamiento |
 
-**Estado del gate — MEDICIÓN VIGENTE (2026-08-01, 5ª ventana, tras la TERCERA CORRECCIÓN):**
-`-m gate_tramo1` = **23 passed, 0 skipped, en una sola corrida** (`E1`×2 · `E2`×**5** · `E3`×1 · `E4`×4 ·
+**Estado del gate — MEDICIÓN VIGENTE (2026-08-01, 5ª ventana, tras la CUARTA CORRECCIÓN):**
+`-m gate_tramo1` = **25 passed, 0 skipped, en una sola corrida** (`E1`×2 · `E2`×**7** · `E3`×1 · `E4`×4 ·
 `E5`×1 · `E6`×3 · `E7`×**6** · `E9`×1). **8 de 9 — falta sólo `E8`. El tramo NO está cerrado.**
-Deuda de cierre re-medida entera en esta corrección (nada heredado): `mypy --strict` **138 err / 54 f**
-(−1/−1: exactamente el huérfano `native_registry.py` retirado) · `ruff` **505** · suite **701 passed /
-2 skipped / 112 xfailed / 0 failed**.
+Deuda de cierre re-medida entera (nada heredado): `mypy --strict` **138 err / 54 f** (−1/−1 respecto de la
+firma anterior: exactamente el huérfano `native_registry.py` retirado) · `ruff` **505** — las dos piezas de la
+cuarta corrección añadieron **cero deuda neta** (6 brutas pagadas enteras, 4 de ellas `B023`, un olor real) ·
+suite **703 passed / 2 skipped / 112 xfailed / 0 failed**.
 
 > ⚠ Las cifras que este bloque publicaba antes (**17 passed**, `ruff` 502, suite 695/3/111) eran de **mitad de
 > ventana**: se escribieron cuando el gate iba por 17 y la ventana cerró en 19 sin volver aquí. No se sobrescriben
-> en silencio — se dicen. La secuencia real de la ventana fue **17 → 19 → 23**.
+> en silencio — se dicen. La secuencia real de la ventana fue **17 → 19 → 23 → 25**.
 
 El delta cuadra entero contra la medición firmada anterior (19 passed · 697/2/111 · ruff 503 · mypy 139/55):
-**+4 passed** = `E2c`×2, `E7f`, `E2d`; **+1 xfailed** = `FIND-C6-2` (el timeout que no acota a una tool
-bloqueante); el test invertido del registry sustituye al que lo ejercitaba, sin mover el conteo. `ruff` **+2**
+**+6 passed** = `E2c`×2, `E7f`, `E2d`, `E2e`, `E2f`; **+1 xfailed** = `FIND-C6-2` (el timeout que no acota a
+una tool bloqueante); el test invertido del registry sustituye al que lo ejercitaba, sin mover el conteo. `ruff` **+2**
 netos: +4 brutos, 2 pagados con `noqa` razonado (`ASYNC251`, `BLE001`) y 2 `RUF012` calcados del idioma de su
 propio fichero. Ningún `xfail` estricto pasó en silencio (cero `XPASS`).
 
