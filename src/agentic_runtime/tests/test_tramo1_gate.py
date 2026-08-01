@@ -1280,3 +1280,364 @@ async def test_e7c_negative_end_to_end_the_model_cannot_read_outside_its_roots(t
     assert "outside the allowed" in payload, (
         f"no hubo rechazo explícito de confinamiento en el turno: {payload[-1500:]}"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2·c/E2·d/E7·f · LAS 18 TOOLS NATIVAS: censo, anuncio, selección por el LLM y
+# no-escape de la costura
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Por qué existe este bloque: el barrido de las 18 tools nativas de la 5ª ventana
+# se firmó con **grep + una tabla de conteos** y la frase «nada que ajustar». Eso
+# es `D-05` al revés (grep como fuente de veredicto) y `L09` (cablear ≠ existir).
+# Aquí el barrido se MECANIZA y CORRE, que es lo único que lo convierte en prueba.
+#
+# El censo se congela a propósito en literal en vez de derivarse del registry: si
+# se derivara del mismo objeto que se está midiendo, el test sería una tautología
+# y una tool nueva entraría sin que nadie la barriera.
+
+#: 18 MÓDULOS nativos → 25 tools registradas. Censo congelado (`create_tools`).
+_NATIVE_CENSUS = frozenset({
+    "Agent", "AskUserQuestion", "Config", "Edit", "EnterPlanMode", "EnterWorktree",
+    "ExitPlanMode", "ExitWorktree", "Sleep", "TaskCreate", "TaskGet", "TaskList",
+    "TaskOutput", "TaskStop", "TaskUpdate", "TodoWrite", "ToolSearch", "WebFetch",
+    "WebSearch", "bash", "clone_repository", "glob", "grep", "read_file", "write_file",
+})
+
+
+def test_e2c_the_native_census_is_exactly_what_the_factory_registers():
+    """Ancla del barrido: 25 tools en 18 módulos, ni una menos.
+
+    Si alguien añade una tool nativa y no la barre, este test se pone ROJO y le
+    obliga a darle una entrada en `_TOOL_INPUTS` (abajo) — es decir, a barrerla.
+    """
+    from agentic_runtime.tools.factory import create_tools
+
+    registered = {t.name for t in create_tools().all_tools()}
+    assert registered == set(_NATIVE_CENSUS), (
+        f"censo desincronizado: sobran {sorted(registered - _NATIVE_CENSUS)}, "
+        f"faltan {sorted(_NATIVE_CENSUS - registered)}"
+    )
+    modules = {type(t).__module__.rsplit(".", 1)[-1] for t in create_tools().all_tools()}
+    assert len(modules) == 18, f"18 módulos nativos, medidos {len(modules)}: {sorted(modules)}"
+
+
+async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
+    """`S16`+pool+`S26`: las nativas llegan al ANUNCIO por el camino de producción.
+
+    No basta con que el factory las registre: entre el registry y el modelo están
+    el filtro por kind, el deny, `_restrict_to_agent_tools` y la estrategia de
+    diferidas. Esto mide el extremo que el modelo ve de verdad.
+
+    **Hallazgo de la primera corrida, convertido en invariante:** la primera
+    versión aseveraba «las 25 siempre» y se puso ROJA por `ToolSearch`. No es un
+    fallo: `deferred_strategy.py:64-66` la omite a propósito cuando no hay ninguna
+    diferida en el pool («sin diferidas, no hay nada que buscar»), igual que el
+    canónico. Así que se aseveran **las dos ramas** — que es más fuerte que lo que
+    yo había escrito: 24 SIEMPRE, y `ToolSearch` **si y sólo si** hay diferidas.
+    """
+    from agentic_runtime.contracts.events import DoneEvent
+
+    always = _NATIVE_CENSUS - {"ToolSearch"}
+
+    class _CensusCaller:
+        def __init__(self) -> None:
+            self.announced: set[str] = set()
+
+        def supports_native_tool_search(self, model_id: str = "") -> bool:
+            return False
+
+        async def complete(self, messages, tools, *, stop=None, **kwargs):
+            self.announced = {t.get("name") for t in tools}
+
+            async def _gen():
+                yield DoneEvent(stop_reason="end_turn")
+
+            return _gen()
+
+    class _DeferredWitness:
+        name = "censo_diferida"
+        description = "Diferida de control."
+        input_schema = {"type": "object", "properties": {}}
+        category = ToolCategory.UTILITY
+        requires_permission = False
+        safe_for_background = True
+        timeout_seconds = 10.0
+        deferred = True
+
+        async def execute(self, input: dict, ctx: ToolUseContext) -> ToolResult:
+            return ToolResult(tool_name=self.name, output="ok")
+
+    async def _announce(extras: tuple, tag: str) -> set[str]:
+        caller = _CensusCaller()
+        runtime = _runtime(tmp_path / tag, caller, extras, Scope(f"scope-e2c-{tag}"))
+        task_id = await runtime.dispatch(RuntimeTask(
+            prompt="hola",
+            description=f"gate-e2c-censo-{tag}",
+            session_id=f"sess-E2c-{tag}-{uuid.uuid4().hex}",
+        ))
+        await runtime._task_registry.get(task_id).asyncio_task
+        assert caller.announced, "el turno no llegó a llamar al modelo"
+        return caller.announced
+
+    # Rama A — sin diferidas en el pool.
+    plain = await _announce((), "plain")
+    assert always <= plain, (
+        f"tools nativas que NO llegan al anuncio: {sorted(always - plain)}"
+    )
+    assert "ToolSearch" not in plain, (
+        "`ToolSearch` se anuncia sin haber ninguna diferida que buscar"
+    )
+
+    # Rama B — con una diferida: aparece ToolSearch, y la diferida NO se anuncia.
+    with_deferred = await _announce((_DeferredWitness(),), "deferred")
+    assert always <= with_deferred, (
+        f"tools nativas que NO llegan al anuncio: {sorted(always - with_deferred)}"
+    )
+    assert "ToolSearch" in with_deferred, (
+        "hay una diferida en el pool y `ToolSearch` no se anunció: es inalcanzable"
+    )
+    assert "censo_diferida" not in with_deferred, "una diferida no descubierta no se anuncia"
+
+
+#: Escapes MEDIDOS corriendo (no inferidos) en el barrido de las 25, con motivo y
+#: destino. 23 de 25 pasan por la costura; estas 2 no.
+#:
+#: `WebFetch`/`WebSearch` llaman `urllib.request.urlopen` **directo**, en el proceso
+#: del runtime y sobre la red del host. Es la MISMA forma que tenía `worktree.py`
+#: con git: un integrador que inyecte `BwrapExecEnvironment` (`--unshare-all`, sin
+#: red) deja `bash` genuinamente aislado y estas dos siguen saliendo a Internet, con
+#: la URL elegida por el MODELO y sin guarda de SSRF (`169.254.169.254`, `127.0.0.1:*`).
+#:
+#: **Por qué NO se paga aquí, y por qué eso no es `declaración-como-pago`:** el
+#: canónico ubica la política de red en las reglas de permiso `WebFetch(domain:*)`,
+#: que el `sandbox-adapter` deriva a `allowedDomains`/`deniedDomains` (`09·F3`). Esas
+#: dos piezas —`09·F3` política de sandbox y `S17 PermissionGate`— están **arriba de
+#: la LÍNEA DE CORTE** del tramo 1, enteras y nombradas, y `C6` las excluye por su
+#: nombre («quedan fuera: … política de sandbox (`09·F3`)»). Estaban diferidas ANTES
+#: de que este barrido las encontrara; pagarlas aquí sería inventarme alcance.
+#:
+#: Lo que sí se paga es dejar de no saberlo: aquí queda MEDIDO y acotado a dos tools.
+_ESCAPES_DECLARADOS: dict[str, list[str]] = {
+    "WebFetch": ["red-directa"],
+    "WebSearch": ["red-directa"],
+}
+
+
+#: Entrada mínima por tool para el barrido. Cubrir el censo ENTERO es parte del
+#: contrato del test: `test_e7f` asevera que las claves == `_NATIVE_CENSUS`.
+def _tool_inputs(ws: Path, seeded: Path) -> dict[str, dict]:
+    return {
+        "Agent": {"description": "x", "prompt": "y"},
+        "AskUserQuestion": {"questions": [{
+            "question": "¿q?", "header": "h", "multiSelect": False,
+            "options": [{"label": "a", "description": "d"}, {"label": "b", "description": "d"}],
+        }]},
+        "Config": {},
+        "Edit": {"file_path": str(seeded), "old_string": "token", "new_string": "otro"},
+        "EnterPlanMode": {},
+        "EnterWorktree": {"name": "barrido"},
+        "ExitPlanMode": {},
+        "ExitWorktree": {"action": "keep"},
+        "Sleep": {"duration": 0},
+        "TaskCreate": {"description": "d", "prompt": "p"},
+        "TaskGet": {"task_id": "no-existe"},
+        "TaskList": {},
+        "TaskOutput": {"task_id": "no-existe"},
+        "TaskStop": {"task_id": "no-existe"},
+        "TaskUpdate": {"task_id": "no-existe", "status": "completed"},
+        "TodoWrite": {"todos": []},
+        "ToolSearch": {"query": "select:bash", "max_results": 3},
+        "WebFetch": {"url": "http://127.0.0.1:9/no-existe"},
+        "WebSearch": {"query": "x"},
+        "bash": {"command": "echo hola"},
+        "clone_repository": {"url": "https://example.invalid/r.git", "destination": "r"},
+        "glob": {"pattern": "*"},
+        "grep": {"pattern": "token"},
+        "read_file": {"file_path": str(seeded)},
+        "write_file": {"file_path": str(ws / "salida.txt"), "content": "c"},
+    }
+
+
+async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, monkeypatch):
+    """Barrido CORRIENDO de las 25 tools: ninguna sale por fuera de la costura.
+
+    Generaliza `E7e` de una tool a todo el censo. La trampa es la misma que cazó
+    a `worktree.py`: se prohíbe el spawn directo y la red directa, y se inyecta un
+    `exec_env` espía; cualquier tool que se salte `S15` explota en el acto.
+
+    Los escapes DECLARADOS son una lista blanca con motivo y destino, no una
+    excusa: si aparece uno nuevo, el test se pone rojo; si alguien PAGA uno de los
+    declarados, también (la igualdad es exacta), y eso obliga a tocar el tracker.
+    """
+    import asyncio as _asyncio
+    import urllib.request as _urlreq
+
+    from agentic_runtime.tools.exec_env import ShellResult
+    from agentic_runtime.tools.factory import create_tools
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    seeded = ws / "expediente.txt"
+    seeded.write_text("token\n", encoding="utf-8")
+
+    inputs = _tool_inputs(ws, seeded)
+    assert set(inputs) == set(_NATIVE_CENSUS), (
+        "el barrido no cubre el censo — sin cubrirlo entero, es una tabla de conteos, "
+        f"no un barrido. Sin entrada: {sorted(_NATIVE_CENSUS - set(inputs))}; "
+        f"sobrantes: {sorted(set(inputs) - _NATIVE_CENSUS)}"
+    )
+
+    current: dict[str, str] = {}
+    escapes: dict[str, set[str]] = {}
+
+    def _record(kind: str) -> None:
+        escapes.setdefault(current.get("tool", "?"), set()).add(kind)
+
+    def _no_spawn(*a: Any, **k: Any):
+        _record("subproceso-directo")
+        raise AssertionError(f"{current.get('tool')}: subproceso FUERA de `S15`")
+
+    def _no_net(*a: Any, **k: Any):
+        _record("red-directa")
+        raise AssertionError(f"{current.get('tool')}: red FUERA de toda costura")
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _no_spawn)
+    monkeypatch.setattr(_asyncio, "create_subprocess_shell", _no_spawn)
+    monkeypatch.setattr(_urlreq, "urlopen", _no_net)
+    # Sin clave, `WebSearch` vuelve antes de tocar la red y el barrido no vería nada.
+    monkeypatch.setenv("SERPER_API_KEY", "clave-de-barrido")
+
+    seen_argv: list[list[str]] = []
+
+    class _SpyExecEnv:
+        """No delega: el barrido mide POR DÓNDE sale, no qué devuelve."""
+
+        async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
+            seen_argv.append(["sh", "-c", command])
+            return ShellResult(output="", returncode=0)
+
+        async def run_argv(self, argv, *, cwd=None, timeout: float) -> ShellResult:
+            seen_argv.append(list(argv))
+            return ShellResult(output="", returncode=0)
+
+    class _MaskingPresentation:
+        def to_llm(self, host_path: Path) -> str:
+            return f"/workspace/{Path(host_path).name}"
+
+        def sanitize_output(self, text: str) -> str:
+            return text
+
+    outputs: dict[str, str] = {}
+    for tool in sorted(create_tools().all_tools(), key=lambda t: t.name):
+        current["tool"] = tool.name
+        ctx = ToolUseContext(
+            session_id="sess-e7f",
+            fs=ConfinedFilesystem(roots=[ws], write_roots=[ws]),
+            presentation=_MaskingPresentation(),
+            exec_env=_SpyExecEnv(),
+        )
+        try:
+            result = await tool.execute(inputs[tool.name], ctx)
+            outputs[tool.name] = result.output or ""
+        except AssertionError:
+            raise
+        # Silenciado a propósito: el barrido mide POR DÓNDE sale la tool, no si tiene éxito.
+        # Una tool puede reventar por falta de cableado (sin `task_registry`, sin runner)
+        # y aun así haber intentado escaparse — el registro del escape ya ocurrió arriba.
+        except Exception as exc:  # noqa: BLE001
+            outputs[tool.name] = f"<excepción {type(exc).__name__}: {exc}>"
+
+    assert {k: sorted(v) for k, v in escapes.items()} == _ESCAPES_DECLARADOS, (
+        "el conjunto de tools que salen por fuera de la costura cambió. Medido: "
+        + json.dumps({k: sorted(v) for k, v in escapes.items()}, ensure_ascii=False)
+        + f" · declarado: {json.dumps(_ESCAPES_DECLARADOS, ensure_ascii=False)}"
+    )
+
+    # `S12` sobre TODO el censo: ninguna EMITE una ruta host que haya resuelto ella
+    # misma. El eco del token que mandó el modelo NO cuenta como fuga —no le revela
+    # nada que no supiera—, y descontarlo es lo que hace que la asersión signifique algo.
+    #
+    # Esto lo afinó una corrida, no una lectura: la primera versión marcó `Edit` y era
+    # un artefacto de MI test (le pasé una ruta host como token). `file_edit.py:64/69/78`
+    # devuelve `input["file_path"]` verbatim, así que bajo fake-path el modelo recibe su
+    # propio `/workspace/...`. Su hermana `write_file.py:38` sí enmascara la RESUELTA.
+    leaks: dict[str, str] = {}
+    for name, out in outputs.items():
+        echoed = {v for v in inputs[name].values() if isinstance(v, str)}
+        if str(ws) in out and not any(str(ws) in e and e in out for e in echoed):
+            leaks[name] = out
+    assert leaks == {}, (
+        "ruta host RESUELTA por la tool y filtrada al modelo: "
+        + json.dumps(leaks, ensure_ascii=False)
+    )
+
+
+@_needs_azure
+async def test_e2d_the_model_selects_native_tools_by_name_from_the_full_census(tmp_path):
+    """El LLM ELIGE tools nativas del censo COMPLETO, y las elegidas producen efecto.
+
+    `E2` acredita `bash`+`write_file` con un pool acotado por `initial_allowed_tools`.
+    Aquí el modelo ve el censo entero (24 tools anunciadas) y tiene que **discriminar**:
+    con 24 opciones, elegir `grep`, `read_file` y `write_file` en el orden pedido ya no
+    es una tool obvia por descarte. Se separa a propósito lo ANUNCIADO (`calls[*].tools`)
+    de lo ELEGIDO (`calls[*].messages`) — si se mezclaran, el anuncio haría pasar por
+    «seleccionada» a una tool que el modelo nunca invocó.
+    """
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    code = f"CENSO-{uuid.uuid4().hex[:8].upper()}"
+    seeded = tmp_path / "expediente.txt"
+    seeded.write_text(f"codigo de verificacion: {code}\n", encoding="utf-8")
+    out = tmp_path / "copia.txt"
+
+    probe = ModelSeamProbe(_build_caller(
+        "Trabajas con herramientas reales sobre un sistema de archivos. Usa EXACTAMENTE "
+        "la herramienta que se te nombre en cada paso, una por paso. Termina respondiendo "
+        "solo con el codigo que hayas leido."
+    ))
+    runtime = _runtime(
+        tmp_path, probe, (), Scope("scope-e2d"),
+        fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+        initial_allowed_tools=sorted(_NATIVE_CENSUS),
+    )
+
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt=(
+            f"1) Con la herramienta grep, busca el patron 'codigo de verificacion' en {tmp_path}\n"
+            f"2) Con la herramienta read_file, lee el archivo {seeded}\n"
+            f"3) Con la herramienta write_file, escribe en {out} exactamente el codigo "
+            "de verificacion que leiste, y nada mas.\n"
+            "4) Dime ese codigo."
+        ),
+        description="gate-e2d-seleccion-desde-el-censo",
+        session_id=f"sess-E2d-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    result = runtime.result(task_id) or ""
+    assert runtime.status(task_id) is TaskStatus.COMPLETED, result
+
+    # 1. El censo llegó al cable REAL del proveedor (no a un caller de mentira).
+    announced = {t.get("name") for call in probe.calls for t in call["tools"]}
+    always = _NATIVE_CENSUS - {"ToolSearch"}
+    assert always <= announced, (
+        f"tools nativas que no llegaron al anuncio real: {sorted(always - announced)}"
+    )
+
+    # 2. SELECCIÓN: sólo lo que viajó en `messages` cuenta como elegido por el modelo.
+    chosen_wire = json.dumps([c["messages"] for c in probe.calls], default=str)
+    selected = {n for n in _NATIVE_CENSUS if f'"{n}"' in chosen_wire}
+    assert {"grep", "read_file", "write_file"} <= selected, (
+        f"el modelo no seleccionó las tools pedidas del censo; vio {len(announced)} "
+        f"y eligió {sorted(selected)}"
+    )
+
+    # 3. EFECTO real en disco — lo que ninguna narración finge.
+    assert out.exists(), f"write_file no escribió: {sorted(p.name for p in tmp_path.iterdir())}"
+    assert code in out.read_text(encoding="utf-8")
+
+    # 4. Re-entrada: el turno volvió al modelo con el resultado de las tools.
+    assert code in result, f"el turno no re-entró con el resultado: {result!r}"
+    assert len(probe.calls) >= 3, f"no hubo cadena de tools: {len(probe.calls)} llamada(s)"

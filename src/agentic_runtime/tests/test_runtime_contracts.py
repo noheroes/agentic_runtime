@@ -6,7 +6,6 @@ from pathlib import Path
 from agentic_runtime import (
     AppState,
     CompactionProvider,
-    NativeToolRegistry,
     PermissionContext,
     ToolPool,
     ToolUseContext,
@@ -44,16 +43,25 @@ def test_tool_pool_assembly_is_stable_and_native_wins_name_collisions():
     assert tools[1] is native[2]
 
 
-def test_native_tool_registry_has_no_capability_filtering_behavior():
-    registry = NativeToolRegistry()
-    registry.register(_FakeTool("alpha"))
-    registry.register(_FakeTool("mcp__tool"))
+def test_there_is_exactly_one_tool_registry():
+    """`NativeToolRegistry` fue RETIRADO: era un tercer registro con cero consumidores.
 
-    assert registry.names() == ["alpha", "mcp__tool"]
-    assert [tool.name for tool in registry.list_tools()] == ["alpha", "mcp__tool"]
-    assert registry.get("alpha").name == "alpha"
-    assert registry.unregister_by_prefix("mcp__") == 1
-    assert registry.names() == ["alpha"]
+    La decisión se cerró leyendo (`09·TiR4` la condicionaba a `11`, y `11-cap-mcp.md:645-655`
+    verificó por el ensamblador que el hot-plug MCP es por **reensamblado del pool por turno**,
+    no por registro dinámico). La condición que lo habría salvado — el swap push-based del
+    auth-tool (`FIND-MCP4`/`McR2`) — no está implementada.
+
+    El test se conserva INVERTIDO a propósito: exportar de nuevo un segundo registro desde la
+    API pública lo pone en rojo. Un huérfano en `__all__` es peor que un huérfano privado —
+    un integrador que lee la superficie pública construye contra un registro que nadie consume.
+    """
+    import agentic_runtime
+    import agentic_runtime.tools as tools_pkg
+
+    assert not hasattr(agentic_runtime, "NativeToolRegistry")
+    assert "NativeToolRegistry" not in agentic_runtime.__all__
+    assert "NativeToolRegistry" not in tools_pkg.__all__
+    assert [n for n in tools_pkg.__all__ if n.endswith("Registry")] == ["ToolRegistry"]
 
 
 def test_tool_pool_respects_deny_rules():

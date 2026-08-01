@@ -224,10 +224,20 @@
   no lo pasaba por `resolve()` **en ningún momento** — sin allow-set y, encima, **fuera** del write-root por construcción
   (hermano del git root). Hoy va por `ctx.fs.resolve(str(ctx.fs.write_root / ".worktrees/<name>"), for_write=True)`, lo que
   obliga a una **divergencia declarada**: el worktree se crea DENTRO del write-root, no como hermano. Con la ubicación
-  anterior el confinamiento era literalmente inexpresable. Acreditado en `E7e`. Ningún otro de los 18 módulos esquiva `S14`:
-  `write_file`/`read_file`/`file_edit`/`glob`/`grep`/`clone_repository` resuelven; los 12 restantes no tocan el FS.
+  anterior el confinamiento era literalmente inexpresable. Acreditado en `E7e`.
   `PathOutsideWorkspace` se devuelve al modelo con `str(exc)` en 6 sitios y su mensaje repite **sólo el token del modelo**,
   no los roots — comprobado, no supuesto: no es un séptimo punto de emisión.
+- **⚠ la frase «ningún otro de los 18 módulos esquiva `S14`» que ocupaba este sitio era grep, no medición** — el usuario la paró.
+  Sustituida por `E7f`, que **ejecuta las 25 tools** con `asyncio.create_subprocess_exec/_shell` y `urllib.request.urlopen`
+  prohibidos y un `exec_env` espía no-delegante. **Medido: 23 de 25 pasan por la costura; se escapan exactamente 2** —
+  `WebFetch` y `WebSearch`, ambas `red-directa` (`urllib.request.urlopen` en el proceso del runtime, sobre la red del host, con
+  la URL elegida por el **modelo** y sin guarda de SSRF: `169.254.169.254`, `127.0.0.1:*`). `clone_repository` **no** se escapa.
+  Es la misma forma que tenía `worktree.py` con git: con un `BwrapExecEnvironment` (`--unshare-all`) `bash` queda aislado y estas
+  dos siguen saliendo a Internet. **No se paga aquí y no es `declaración-como-pago`:** el canónico ubica la política de red en las
+  reglas `WebFetch(domain:*)` que el sandbox-adapter deriva a `allowedDomains` (`09·F3`), y `09·F3` + `S17` están **arriba de la
+  línea** (`TRAMO-1 §3·C`), con `C6` excluyéndolas por su nombre — diferidas ANTES de que el barrido las encontrara. Lo que sí se
+  paga: queda medido, acotado a dos, y la lista blanca es **exacta** (`==`), así que un escape nuevo la pone roja **y pagar uno de
+  los declarados también**, lo que obliga a tocar el tracker.
 
 ### S26 · `DeferredToolStrategy`
 - **estado:** `existe-fiel` (09·E2/E3/E10; Simulada client-side + Nativa `defer_loading` server-side).
@@ -449,9 +459,20 @@
     1→EOF en `AskUserQuestionTool.tsx` 266 L, cuyo `call()` devuelve **sólo** `data`), y esa capa es `GAP-02`/`K1`, **por encima de
     la línea de corte**. Queda atada a ella: cuando `check_permissions` entre, `ends_turn` se re-examina contra ella y no antes.
     Se corrigió además el comentario de `plan_mode.py` que lo vendía como espejo de `requiresUserInteraction()`.
-- **NO pagado, nombrado entero (`L07`):** `NativeToolRegistry` tiene **cero call-sites de producción** (tercer registro junto a
-  `ToolRegistry` y `ToolPool` — la misma forma de doble-camino que `C7` cerró para `S19`); y `ToolRegistry.list_available(permission_ctx=…)`
-  es **parámetro muerto**: sus dos únicos llamadores (`agent_loop.py:128`, `capabilities/resolver.py:46`) pasan sólo `mode`.
+- ✅ **RETIRADO el doble-camino (2026-08-01, TERCERA CORRECCIÓN).** `NativeToolRegistry` (tercer registro junto a `ToolRegistry` y
+  `ToolPool`, cero call-sites de producción) **borrado**, no diferido — decisión cerrada leyendo (`09·TiR4` → `11:645-655`: el
+  hot-plug MCP es reensamblado del pool por turno, no registro dinámico; su única condición de supervivencia, el swap push-based de
+  `FIND-MCP4`/`McR2`, verificada **ausente en el código**). Retirado también del `__all__` **raíz**: en la superficie pública era la
+  forma de `FIND-EXEC1` pre-empaquetada para integradores. Test **invertido**, no borrado ⇒ reintroducirlo se pone rojo. Con él cayó
+  `ToolRegistry.list_available(permission_ctx=…)` (parámetro muerto: insinuaba un segundo sitio donde se filtra por permisos, cuando
+  el gate vive aguas abajo — `assemble_tool_pool` + `resolver.py:40` `denied_names()`).
+- **acreditación del censo (2026-08-01):** `E2c`×2 congela el censo **en literal** —25 tools en **18 módulos**— y lo asevera contra
+  `create_tools()`; el anuncio se prueba en **sus dos ramas** (24 siempre · `ToolSearch` **sii** hay una diferida en el pool, tal como
+  `deferred_strategy.py:64-66` espeja al canónico; esta rama puso el test ROJO en su primera corrida y la aserción equivocada era la
+  mía). `E2d` prueba la **selección por el modelo** con el censo entero anunciado, separando ANUNCIADO (`calls[*].tools`) de ELEGIDO
+  (`calls[*].messages`). Añadir una tool sin barrerla pone `E7f` en rojo.
+- **⚠ `FIND-C6-2`, medido, NO pagado:** el cap de `dispatcher.py:76` (`asyncio.wait_for`) **no acota a una tool que bloquea el loop**
+  — cap 0,30 s → 2,00 s transcurridos y resultado ÉXITO. Falsifica `11-cap-mcp.md:656-658`. Fijado `xfail(strict=True)`.
 
 ### S17 · `PermissionGate` (`check_permissions` por-input + modos)
 - **estado:** `existe-parcial` (el gate del dispatcher es deny-por-nombre `dispatcher.py:62-65`; el **seam input-aware VIVE** en `PRE_TOOL_USE` `agent_loop.py:300-313` honrando `block`/`modified_input`; falta `check_permissions` per-tool + modos).

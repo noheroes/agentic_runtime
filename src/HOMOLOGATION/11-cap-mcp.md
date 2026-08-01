@@ -656,6 +656,15 @@ paquete.)*
 - **FIND-MCP8 refinamiento (no voltea estado)**: el cap de 30s de la tool-call **SÍ se aplica** — el
   dispatcher lee `tool.timeout_seconds` (`dispatcher.py:68`) y envuelve `execute` en `asyncio.wait_for`
   (77-82) → `ToolResult.timeout`. Una tool MCP que tarde >30s FALLA (🔀 se sostiene sobre base correcta).
+  > ⛔ **CORREGIDO 2026-08-01 (FASE B · TRAMO 1, TERCERA CORRECCIÓN) — «una tool que tarde >30s FALLA» es FALSO
+  > para una tool que BLOQUEA el event loop, y esto se MIDIÓ, no se razonó.** `asyncio.wait_for` no puede
+  > preemptar una llamada síncrona: probe con cap 0,30 s → **transcurrido 2,00 s** y el resultado vuelve como
+  > **ÉXITO**, no como `ToolResult.timeout` (el control que sí cede al loop timeouteó bien a 0,30 s). El cap sólo
+  > acota a tools que ceden. Instancias vivas en el propio repo: `web_fetch`/`web_search` (`urllib.request.urlopen`
+  > síncrono, hasta 20 s); durante ese tiempo `ctx.stop` tampoco surte efecto (el abort sólo se **pre**-chequea,
+  > `dispatcher.py:54`) y, con un solo event loop, se congelan stream, subagentes y drenaje de notificaciones.
+  > Nuevo hallazgo `FIND-C6-2`, fijado como `xfail(strict=True)` en `test_tool_dispatcher.py`. El arreglo (offload
+  > a executor o cliente async) queda **arriba de la LÍNEA DE CORTE** del tramo 1.
   `register_tools_from_specs:125` alimenta el MISMO `config.timeout_seconds or 30` como call-timeout (vía
   `McpTool`) y como connect-timeout (client.py:128) — confirma la observación de McR8 de que hoy ambos
   comparten el 30s. *(`McpTool.timeout_seconds` NO es costura latente: se consume en el dispatcher.)*

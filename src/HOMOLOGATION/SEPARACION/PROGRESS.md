@@ -19,15 +19,16 @@ tramo (`TRAMO-1 §4`); **8 de 9 escritas y en verde en una misma corrida** (`E1`
 | C2 model-caller + AbortSignal | G1 | ✅ **implementada y acreditada por `E1`+`E5`** | `S1` enriquecida y poblada, `stop: AbortSignal` en toda la cadena, `AbortController` concreto, `ModelsConfig` retirado; 2 violaciones inyectadas revertidas por `sha256` |
 | C3 EventBus + `stream()` | G1 | ✅ **verificada** (no reconstruida, `L11`) | orden total exacto por las DOS vías de suscripción + handler que revienta sin cortar el canal; hallazgo del orden real escrito, no maquillado |
 | C4 AgentLoop | G1 | ✅ **implementada y acreditada por `E4`** | `S11` pre-turno cableado, `LoopOutcome`/`LoopEndReason`, `max_turns` por tarea, `try:` de `_run_loop` abriendo en `_build_child` |
-| C5 tools + pool + dispatcher | G1 | ✅ **implementada y acreditada por `E2`+`E7`** | `FIND-TOOL4`/`09·A24` pagado: `context_modifier` y `ends_turn` DECLARADOS en `ToolResult`, 9 monkeypatch con `type: ignore` retirados · `to_llm` (`S12`) cableada en los 3 puntos de emisión de ruta host · `E2b` prueba que `deferred` es visibilidad, no disponibilidad (pool único) |
-| C6 exec-env + confinamiento | G2→**G1** | ✅ **corrida y acreditada por `E7`** | `FIND-C6-1` PAGADO (encontrado CORRIENDO, no leyendo: `resolve()` autorizaba el path expandido y devolvía el token crudo ⇒ un token relativo escribía en el `cwd` del proceso con `is_error=False`) · `E7b` prueba que `bash` pasa por el `exec_env` inyectado y no por el host |
+| C5 tools + pool + dispatcher | G1 | ✅ **implementada y acreditada por `E2`+`E7`** | `FIND-TOOL4`/`09·A24` pagado: `context_modifier` y `ends_turn` DECLARADOS en `ToolResult`, 9 monkeypatch con `type: ignore` retirados · `to_llm` (`S12`) cableada en los 3 puntos de emisión de ruta host · `E2b` prueba que `deferred` es visibilidad, no disponibilidad (pool único) · **`NativeToolRegistry` RETIRADO** (3er registro con cero call-sites) y `list_available(permission_ctx=…)` retirado · censo de **25 tools / 18 módulos** congelado y acreditado: `E2c`×2 (censo + anuncio en sus dos ramas), `E2d` (**selección por el LLM** con el censo entero anunciado) |
+| C6 exec-env + confinamiento | G2→**G1** | ✅ **corrida y acreditada por `E7`** | `FIND-C6-1` PAGADO (encontrado CORRIENDO, no leyendo: `resolve()` autorizaba el path expandido y devolvía el token crudo ⇒ un token relativo escribía en el `cwd` del proceso con `is_error=False`) · `E7b` prueba que `bash` pasa por el `exec_env` inyectado y no por el host · **`E7f` barre las 25 CORRIENDO: 23 pasan por la costura, se escapan exactamente 2** (`WebFetch`/`WebSearch`, `red-directa`, diferidas por `09·F3`+`S17` arriba de la línea) · `FIND-C6-2` medido (el timeout no acota a una tool que bloquea el loop) |
 | C7 façade + registry | G1 | ✅ **implementada y acreditada por `E3`** | doble camino cerrado: `set_registry`/`get_registry` retirados, `task_tools.py` lee `ctx.task_registry`; `S4` gana `join(task_id)` (enriquecimiento declarado) |
 | C8 subagentes DI + drenador | G1 | ✅ **implementada y acreditada por `E3`+`E9`** | `FIND-EXEC1` pagado (runner por factory inyectada → `ctx.runner`, global retirado) · `H-5` pagado (`apply_notification` sobre el historial vivo, drenaje como paso propio del loop y sólo en la raíz) |
 | C9 hilo de identidad | G3 (excepción) | ✅ **rip hecho y acreditado por `E6`** (promovida G3→G1) | turno real sin `user_id` + probe en `S1` + negativa + guardia de grafía `AC-39` |
 | C10 ensamblador único | G1 | ⛔ sin empezar | pero `create_runtime` ya puebla `S18`/`S21`; lo que falta es su propia ficha y `E8` |
 
-**Gate `E1..E9`: 8 de 9 escritas (`E1`·`E2`·`E3`·`E4`·`E5`·`E6`·`E7`·`E9`), 17 tests, verdes en una sola corrida,
-0 skipped. Falta `E8` — y con ella `C10`, la única capacidad que sigue ⛔.**
+**Gate `E1..E9`: 8 de 9 escritas (`E1`·`E2`·`E3`·`E4`·`E5`·`E6`·`E7`·`E9`), **23 tests**, verdes en una sola
+corrida, 0 skipped. Falta `E8` — y con ella `C10`, la única capacidad que sigue ⛔.** (Cifra vigente 2026-08-01
+tras la TERCERA CORRECCIÓN; la secuencia real de la 5ª ventana fue 17 → 19 → 23.)
 
 ## Cronología
 
@@ -248,9 +249,14 @@ entero: `write_file`/`read_file`/`file_edit`/`glob`/`grep`/`clone_repository`/`w
 resuelven por `S14`; `bash` y `worktree` ejecutan y **ambos** van por `S15`; emiten ruta host los **seis** puntos
 listados y ninguno más. `file_edit:78` devuelve el `file_path` **que mandó el modelo** (su propio string, no la
 ruta resuelta) ⇒ no es fuga. `PathOutsideWorkspace` viaja al modelo con `str(exc)` en 6 sitios y su mensaje repite
-sólo el token del modelo, no los roots ⇒ tampoco. Los 11 restantes (`agent`, `ask_user`, `config`, `plan_mode`,
+sólo el token del modelo, no los roots ⇒ tampoco. ~~Los 11 restantes (`agent`, `ask_user`, `config`, `plan_mode`,
 `sleep`, `task_tools`, `todo_write`, `tool_search`, `web_fetch`, `web_search`, `__init__`) no tocan FS ni
-ejecutan procesos: **nada que ajustar**, dicho módulo a módulo y no por muestreo.
+ejecutan procesos: **nada que ajustar**, dicho módulo a módulo y no por muestreo.~~
+
+> ⛔ **PÁRRAFO RETIRADO por falso — ver `### 2026-08-01 · TERCERA CORRECCIÓN` al final de este log.** No fue
+> «dicho módulo a módulo»: fue **grep + tabla de conteos**, y sobre **tres ejes** (FS, ejecución, emisión de ruta
+> host) elegidos porque eran donde yo ya había encontrado bugs. Es `D-05` al revés (grep como fuente de veredicto).
+> La lectura 1→EOF real de los 18 módulos SÍ encontró cosas que ajustar.
 
 **Cabo declarado y NO pagado (`L07`):** `run_argv` traduce el `cwd` host→sandbox pero **no** los paths que viajan
 dentro del `argv`. `worktree.py` lo esquiva usando paths **relativos** al `cwd`; una tool futura que necesite un
@@ -268,3 +274,125 @@ ficheros** (sin cambio) · `uvx ruff check` = **503** (desde 502). El delta se m
 cuadraba con la suma de mis ficheros: eran **+2** y sólo uno era irreducible. El `I001` que había metido en el
 bloque de imports del test **está pagado**; queda **+1 `UP037`** en `worktree.py`, idéntico en idioma a los otros
 seis del mismo módulo. `exec_env.py` y `clone_repository.py` quedan **sin añadir un solo lint**.
+
+### 2026-08-01 · TERCERA CORRECCIÓN — el barrido de las 18 tools nativas, esta vez CORRIENDO
+
+**Qué paró el usuario, dos veces seguidas.** (1) «no veo que realizaras trabajo alguno sobre las tools nativas
+restantes además de `worktree` y `exec_env`». (2) «el hecho que postergues `NativeToolRegistry` que es parte de
+la funcionalidad siendo revisada hace que el apartado tools nativas no pueda cerrarse». Después, ya en marcha:
+«debemos probar las 18 tools nativas, incluyendo el registro y la selección de parte del LLM».
+
+Las dos primeras son el mismo reproche que ya me había hecho en `C6`: firmé «nada que ajustar» sobre **grep +
+una tabla de conteos**, y encima sobre **tres ejes** (FS, ejecución, emisión de ruta host) elegidos porque eran
+donde yo ya había encontrado bugs. Es `D-05` al revés y `L09`. El párrafo correspondiente de la SEGUNDA
+CORRECCIÓN queda **tachado arriba**, no borrado.
+
+#### 1 · `NativeToolRegistry` — RETIRADO (no diferido)
+
+La decisión NO se razonó: se cerró leyendo (`D-08`). `09·TiR4` la dejaba **condicionada** a una verificación en
+`11` («el adaptador MCP setea `deferred=True` a mano → necesita el registro dinámico»), y esa verificación **ya
+estaba hecha**: `11-cap-mcp.md:645-655` la resolvió *por el ensamblador* — el hot-plug MCP es por **reensamblado
+del pool por turno** (`agent_loop.py:194-195` → `McpProvider.tools()` re-lee `McpState` cada turno), no por
+registro dinámico ⇒ «veredicto = **retirar `NativeToolRegistry`**. Sólo se mantendría si se implementa el swap
+push-based del auth-tool de `FIND-MCP4`(`McR2`)».
+
+Esa condición se verificó **en el código, no en el doc**: `grep -rn "unregister\|swap" capabilities/mcp/` = **0
+resultados**. El swap no existe ⇒ se retira. Ejecutado: `tools/native_registry.py` borrado (41 L) + export
+retirado de `tools/__init__.py` **y de `agentic_runtime/__init__.py`**.
+
+Que estuviera en el `__all__` del paquete raíz es lo que lo hacía peor que un huérfano privado: un integrador
+que lee la superficie pública construye contra un registro **que nadie consume**. Es la forma de `FIND-EXEC1`
+(una costura que parece cableada y no lo está) pre-empaquetada para terceros.
+
+El test que lo ejercitaba (`test_runtime_contracts.py:47`) **no se borró: se invirtió** —
+`test_there_is_exactly_one_tool_registry` asevera que no vuelve a exportarse un segundo registro. Reintroducirlo
+se pone en rojo.
+
+**De regalo, la misma forma en el mismo módulo:** `ToolRegistry.list_available(permission_ctx=…)` — parámetro
+que **ningún** call-site pasa (los dos de producción pasan sólo `mode=`). Retirado, con el motivo en el
+docstring: el registry es «solo input» (`agent_loop.py:121-133`) y el gate de permisos vive aguas abajo
+(`assemble_tool_pool` + `resolver.py:40` `denied_names()`). Un slot muerto que insinuaba un segundo sitio donde
+se filtra por permisos.
+
+#### 2 · El barrido, mecanizado y corriendo — `E2·c`, `E2·d`, `E7·f`
+
+Censo real medido: **25 tools registradas en 18 módulos** (de ahí «las 18 tools nativas»).
+
+- **`E2·c` (×2, sin modelo) — censo + anuncio.** El censo se congela **en literal**, no se deriva del registry:
+  derivarlo del mismo objeto que se mide sería una tautología y una tool nueva entraría sin que nadie la
+  barriera. **Se puso ROJO en su primera corrida** por `ToolSearch`, y no era un fallo del runtime: 
+  `deferred_strategy.py:64-66` la omite a propósito cuando no hay ninguna diferida («sin diferidas, no hay nada
+  que buscar»), igual que el canónico. Mi aserción («las 25 siempre») era la equivocada. Convertido en algo más
+  fuerte de lo que yo había escrito: **las dos ramas** — 24 SIEMPRE, y `ToolSearch` **si y sólo si** hay una
+  diferida en el pool (y la diferida no descubierta NO se anuncia).
+- **`E7·f` — barrido de no-escape sobre las 25, corriendo.** Generaliza la trampa de `E7e` de una tool a todo el
+  censo: se prohíben `asyncio.create_subprocess_exec/_shell` y `urllib.request.urlopen`, se inyecta un
+  `exec_env` espía, y se ejecutan **las 25** con entrada mínima. La cobertura del censo es parte del contrato
+  (`set(_TOOL_INPUTS) == _NATIVE_CENSUS`): añadir una tool y no barrerla pone el test en rojo.
+  **Medido, no predicho: 23 de 25 pasan por la costura; se escapan exactamente 2** — `WebFetch` y `WebSearch`,
+  ambas `red-directa`. `clone_repository` **no** se escapa. La lista blanca es exacta (`==`, no `⊆`): un escape
+  nuevo lo pone rojo, y **pagar uno de los declarados también**, lo que obliga a tocar el tracker.
+- **`E2·d` — SELECCIÓN por el LLM, turno real.** El modelo ve el censo entero (24 anunciadas) y tiene que
+  discriminar: con 24 opciones, elegir `grep`→`read_file`→`write_file` en el orden pedido ya no sale por
+  descarte. Se separa a propósito lo ANUNCIADO (`calls[*].tools`) de lo ELEGIDO (`calls[*].messages`): mezclarlos
+  haría pasar por «seleccionada» a una tool que el modelo nunca invocó. Verde con Azure real (15 s), con efecto
+  en disco y re-entrada.
+
+#### 3 · Lo que el barrido encontró y NO se paga aquí — con el motivo, no con una excusa
+
+- **`WebFetch`/`WebSearch` salen a la red directamente** (`urllib.request.urlopen` en el proceso del runtime,
+  sobre la red del host, con la URL elegida por el MODELO y sin guarda de SSRF: `169.254.169.254`,
+  `127.0.0.1:*`). Es **la misma forma** que tenía `worktree.py` con git: con un `BwrapExecEnvironment` inyectado
+  (`--unshare-all`, sin red), `bash` queda genuinamente aislado y estas dos siguen saliendo a Internet.
+  **Por qué no se paga y por qué eso no es `declaración-como-pago`:** el canónico ubica la política de red en las
+  reglas de permiso `WebFetch(domain:*)`, que el `sandbox-adapter` deriva a `allowedDomains`/`deniedDomains`
+  (`09·F3`). Las dos piezas —`09·F3` y `S17 PermissionGate`— están **arriba de la LÍNEA DE CORTE**, enteras y
+  nombradas (`TRAMO-1 §3·C`), y `C6` las excluye **por su nombre** («quedan fuera: … política de sandbox
+  (`09·F3`)»). Estaban diferidas ANTES de que este barrido las encontrara; pagarlas aquí sería inventarme
+  alcance. Lo que sí se paga es dejar de no saberlo: queda **medido y acotado a dos tools**, con test que se
+  pone rojo si aparece una tercera.
+- **`FIND-C6-2` (NUEVO, medido) — el timeout del dispatcher no acota a una tool que bloquea el event loop.**
+  `dispatcher.py:76` confía el cap a `asyncio.wait_for`, que **no puede preemptar una llamada síncrona**.
+  Probe: cap 0,30 s → transcurrido **2,00 s**, y el resultado vuelve como **ÉXITO**, no como `ToolResult.timeout`.
+  Esto **falsifica una afirmación firmada**: `11-cap-mcp.md:656-658` dice «una tool que tarde >30s FALLA».
+  Instancias vivas: `web_fetch`/`web_search` (urlopen síncrono, hasta 20 s cada una); durante ese tiempo
+  `ctx.stop` tampoco puede surtir efecto, porque el abort **sólo se pre-chequea** (`dispatcher.py:54`). Y en un
+  runtime de un solo event loop, esos 20 s congelan **todo** (stream, subagentes, notificaciones).
+  Fijado como `xfail(strict=True)` en `test_tool_dispatcher.py` — la forma que este repo ya usa para deuda no
+  pagada, y que se pone ROJA si alguien lo arregla sin actualizar el tracker. El arreglo (offload a executor o
+  cliente async) es `10·tools-native` más allá de las 2 tools de `C6` ⇒ arriba de la línea.
+- **`web_search.py:74` lee `os.getenv("SERPER_API_KEY")` del entorno del proceso** — exactamente el patrón que
+  `clone_repository` fue diseñada para evitar vía `ctx.git_credentials` (helper efímero, token nunca en argv).
+  Mismo árbol de tools, decisión opuesta; en multi-tenant es UNA clave compartida sin inyección por tenant.
+  `ctx` no se usa para nada más en `WebSearchTool.execute`. Destino: `10·H2` + `S17`. Arriba de la línea.
+- **`ForkSnapshot` no transporta el confinamiento.** Lleva `session_id`/`scope`/`subagent_depth`/`messages`/
+  `permissions`/`tool_pool`/`capabilities` y **no** `fs`/`exec_env`/`presentation`/`storage`/`git_credentials`:
+  el hijo los toma de la instancia de runtime (la MISMA para raíz y subagentes, `runtime.py:358`). Hoy es
+  **latente** —nada estrecha esas costuras por-ctx en producción—, pero si un integrador estrechara el `fs` de
+  una tarea, el hijo **no heredaría el estrechamiento**. Ninguna `C` firmó esto. Destino: `05` + `10`.
+- **`file_edit.py` NO es fuga (verificado, y por poco al revés).** `E7·f` lo marcó en su primera corrida y era
+  **artefacto de mi test**: le pasé una ruta host como token. `:64/:69/:78` devuelven `input["file_path"]`
+  verbatim, así que bajo fake-path el modelo recibe su propio `/workspace/...`. Su hermana `write_file.py:38` sí
+  enmascara la RESUELTA. El criterio de `S12` del barrido se afinó a lo que importa —una ruta que la tool
+  **resolvió ella misma**—, descontando el eco del token del modelo. Sigue habiendo **6** puntos de emisión, no 7.
+- **`FIND-NATIVE-NAME` (ya en el tracker, no es hallazgo mío).** El censo lo hace visible de un vistazo:
+  `bash`/`glob`/`grep`/`read_file`/`write_file`/`clone_repository` en snake_case frente a PascalCase en el resto.
+  `10·A1/§I` ya lo documenta con su impacto (una regla `Bash(git *)` o un hook `Read` no matchean). Arriba de la línea.
+
+#### 4 · Mediciones de esta ventana (todas re-medidas, ninguna heredada)
+
+- gate `-m gate_tramo1` = **23 passed, 0 skipped, en UNA corrida** (eran 19): `E1`×2 · `E2`×**5** (los 2 previos
+  + `E2c`×2 + `E2d`) · `E3`×1 · `E4`×4 · `E5`×1 · `E6`×3 · `E7`×**6** (+`E7f`) · `E9`×1. **Sigue siendo 8 de 9:
+  falta sólo `E8`, y el tramo NO está cerrado.**
+- suite = **701 passed / 2 skipped / 112 xfailed / 0 failed** (desde 697/111). Delta cuadrado: +4 passed
+  (`E2c`×2, `E7f`, `E2d`) y +1 xfailed (`FIND-C6-2`); el test invertido del registry sustituye al que lo
+  ejercitaba, sin cambiar el conteo.
+- `ruff` = **505** (desde 503). Delta medido **fichero a fichero contra un árbol limpio de `HEAD`**
+  (`git archive`, sin tocar el working tree): **+4** brutos, de los que **2 se pagaron** con `noqa` razonado
+  (`ASYNC251` — el `time.sleep` síncrono ES el defecto que el test demuestra; `BLE001` — el catch ciego es lo que
+  deja al barrido medir el escape y no el camino feliz). Quedan **+2 `RUF012`**, ambos calcados del idioma de su
+  propio fichero (`input_schema: dict = {}`, idéntico a los 3 pre-existentes de `test_tool_dispatcher.py` y a los
+  2 de `test_tramo1_gate.py`). *(Nota de método: el primer intento de `noqa` no bajó el conteo — mi comentario
+  explicativo empezaba por «`# noqa` a propósito» y ruff lo leyó como directiva desnuda → `RUF100`. Reescrito.)*
+- `mypy --strict` = **138 errores / 54 ficheros** (desde 139/55): **−1 fichero y −1 error**, exactamente el
+  huérfano retirado.

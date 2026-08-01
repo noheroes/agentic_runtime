@@ -12,7 +12,7 @@ from .execution.fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContex
 from .contracts.notifications import NotificationSink, apply_notification
 from .execution.local.notification import BackgroundNotification, drain_notifications, put_notification
 from .contracts.runtime import AgentRuntime, RuntimeTask
-from .tools import NativeToolRegistry, ToolPool, assemble_tool_pool
+from .tools import ToolPool, assemble_tool_pool
 
 __all__ = [
     "AgenticModelsCaller",
@@ -24,7 +24,6 @@ __all__ = [
     "ForkContext",
     "ForkPolicy",
     "ForkSnapshot",
-    "NativeToolRegistry",
     "NoopUserInputProcessor",
     "PermissionContext",
     "ProcessedInput",

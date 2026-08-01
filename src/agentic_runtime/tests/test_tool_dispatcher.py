@@ -191,3 +191,58 @@ async def test_dispatcher_allows_permissioned_tool_when_granted():
 
 def test_fast_tool_satisfies_protocol():
     assert isinstance(FastTool(), ToolProtocol)
+
+
+# ---------------------------------------------------------------------------
+# GAP medido: el timeout del dispatcher NO acota a una tool que bloquea el loop
+# ---------------------------------------------------------------------------
+
+class _BlockingTool:
+    """Tool que hace E/S SINCRONA dentro de `async def` — la forma real de
+    `web_fetch.py:53` y `web_search.py:111` (`urllib.request.urlopen`)."""
+
+    name = "blocking_tool"
+    description = "bloquea el event loop"
+    input_schema: dict = {}
+    category = ToolCategory.NETWORK
+    requires_permission = False
+    safe_for_background = True
+    timeout_seconds = 0.2
+
+    async def execute(self, input: dict, ctx=None) -> ToolResult:
+        import time
+        # Silenciado a propósito: el `time.sleep` síncrono dentro de `async def` ES el
+        # defecto que este test demuestra. Arreglar el lint aquí borraría la prueba.
+        time.sleep(1.0)  # noqa: ASYNC251
+        return ToolResult(tool_name=self.name, output="termine igual")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "GAP MEDIDO (2026-08-01): `dispatcher.py:76` confia el cap a `asyncio.wait_for`, "
+        "que NO puede preemptar una llamada sincrona bloqueante. Medido: cap de 0.30s, "
+        "transcurrido 2.00s, y el resultado vuelve como EXITO, no como `ToolResult.timeout`. "
+        "Falsifica la afirmacion firmada en `11-cap-mcp.md:656-658` ('una tool que tarde "
+        ">30s FALLA'). Instancias vivas: `web_fetch`/`web_search` (urlopen sincrono, hasta "
+        "20s cada una) — durante ese tiempo `ctx.stop` tampoco puede surtir efecto, porque "
+        "el abort solo se pre-chequea (`dispatcher.py:54`). Arreglarlo (offload a executor "
+        "o cliente async) es `10·tools-native` mas alla de las 2 tools de `C6` => ARRIBA de "
+        "la LINEA DE CORTE del tramo 1. `strict=True` a proposito: si alguien lo paga, este "
+        "test se pone ROJO y obliga a actualizar el tracker."
+    ),
+)
+@pytest.mark.asyncio
+async def test_dispatcher_timeout_bounds_a_blocking_tool():
+    import time
+
+    reg = ToolRegistry()
+    reg.register(_BlockingTool())
+    ctx = ToolUseContext(tool_pool=ToolPool(native_tools=reg.all_tools()))
+
+    t0 = time.monotonic()
+    result = await ToolDispatcher().dispatch("blocking_tool", {}, ctx)
+    elapsed = time.monotonic() - t0
+
+    assert result.is_error, "una tool que excede su timeout_seconds debe fallar"
+    assert elapsed < 0.5, f"el cap de 0.2s no acoto: {elapsed:.2f}s"

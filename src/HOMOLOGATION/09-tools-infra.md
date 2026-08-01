@@ -466,7 +466,16 @@ re-desarrollan. Lo propio de 09 (deferral, dos registries, auto-mode) se desarro
 - **Cableado**: deferred strategy + fork (05). **Orden**: tras `B-new_messages` (attachments tipados).
   **Test**: `test_deferred_delta_derived_not_parsed`, `test_fork_rederives_discovered_set`.
 
-### TiR4 · FIND-TOOL10 — dos registries (`ToolRegistry` vs `NativeToolRegistry` hot-plug MCP)
+### TiR4 · FIND-TOOL10 — dos registries (`ToolRegistry` vs `NativeToolRegistry` hot-plug MCP) — ✅ **EJECUTADO 2026-08-01**
+> ✅ **RESUELTO EN CÓDIGO (FASE B · TRAMO 1, TERCERA CORRECCIÓN).** La rama «si no, borrar `NativeToolRegistry`»
+> es la que aplica: la verificación en **11** ya estaba hecha (`11-cap-mcp.md:645-655` — el hot-plug MCP es
+> **reensamblado del pool por turno**, `agent_loop.py:194-195` → `McpProvider.tools()` re-lee `McpState`, no
+> registro dinámico), y su única condición de supervivencia (el swap push-based del auth-tool de
+> `FIND-MCP4`/`McR2`) se verificó **ausente en el código**: cero `unregister`/`swap` en `capabilities/mcp/`.
+> Ejecutado: `tools/native_registry.py` borrado (41 L) y export retirado de `tools/__init__.py` **y del `__all__`
+> raíz** — en la superficie pública era peor que un huérfano privado. `test_single_tool_registry_wired` existe
+> como `test_there_is_exactly_one_tool_registry`, **invertido a propósito**: reintroducir un segundo registro lo
+> pone en rojo. De paso cayó `ToolRegistry.list_available(permission_ctx=…)`, parámetro sin ningún call-site.
 - **Comportamiento**: `ToolRegistry` se usa; `NativeToolRegistry` (hot-plug de MCP) no lo usa la factory →
   hermano de los duplicados de 01/05.
 - **Seam/firma**: decidir uno — si el hot-plug MCP es necesario (11), la factory debe usar

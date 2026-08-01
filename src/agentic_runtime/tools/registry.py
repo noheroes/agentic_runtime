@@ -22,12 +22,15 @@ class ToolRegistry:
     def resolve(self, name: str) -> Optional[ToolProtocol]:
         return self._tools.get(name)
 
-    def list_available(
-        self,
-        *,
-        mode: str = "foreground",
-        permission_ctx=None,
-    ) -> list[ToolProtocol]:
+    def list_available(self, *, mode: str = "foreground") -> list[ToolProtocol]:
+        """Filtra SOLO por kind (`background` ⇒ `safe_for_background`).
+
+        No lleva `permission_ctx`: el registry es "solo input" del turno
+        (`agent_loop.py:121-133`) y el gate de permisos vive aguas abajo, en el
+        ensamblador del pool (`assemble_tool_pool` + `resolver.py:40`
+        `denied_names()`). El parámetro existía sin que ningún call-site lo pasara —
+        un slot muerto que sugería un segundo lugar donde se filtra por permisos.
+        """
         tools = list(self._tools.values())
         if mode == "background":
             tools = [t for t in tools if t.safe_for_background]
