@@ -72,10 +72,10 @@
 | S9 | `CompactionProvider` (+ trigger del loop) | T2-COSTURA | existe-sin-motor | 01·CTR-09 · 02·B6 · 07·H1 · 16·C2 |
 | S10 | `RetryPolicy` / `with_retry` (+ fallback) | T2-COSTURA (+T1-MOTOR) | ausente | 16·B1/B2/B3 · 02·C4/C5/C7/D2 · 07·J3 |
 | S11 | `UserInputProcessor` | T2-COSTURA | **existe-fiel** (`C4` 2026-07-31: cableado pre-turno; firma DIVERGE del borrador, ver §S11) | 01·CTR-12 · 02·G1/F8 |
-| S12 | `PathPresentation` (sanitize choke) | T2-COSTURA (+base default) | **existe-fiel** (`C5` 2026-08-01: `to_llm` CABLEADA en 3 puntos; el defecto per-chunk de `sanitize` sigue abierto → `S31`) | 01·CTR-11 · 09·D9 · 17·§2.7.1 |
+| S12 | `PathPresentation` (sanitize choke) | T2-COSTURA (+base default) | **existe-parcial** (`C5` 2026-08-01 CORREGIDO ×2: `to_llm` cableada en **6** puntos ⇒ deja de estar sin poblar, pero `17·§2.7.1` prohíbe `existe-fiel` mientras el choke per-chunk siga roto y el default sea no-op) | 01·CTR-11 · 09·D9 · 17·§2.7.1 |
 | S13 | `StorageContract` (roots + token→path) | T2-COSTURA | existe-fiel | 01·CTR-10 · 05·E7 · 09·G6 · 15 |
-| S14 | `ConfinedFilesystem` (confinamiento) | T2-BASE + costura S13 | existe-fiel (`C6` 2026-08-01: G2→**G1**, corrida; `FIND-C6-1` PAGADO) | 09·G1-G8 |
-| S15 | `ToolExecEnvironment` (backend shell) | T2-COSTURA (AÑADIDA) | existe-fiel | 09·F1/F2/F3/F4 |
+| S14 | `ConfinedFilesystem` (confinamiento) | T2-BASE + costura S13 | existe-fiel (`C6` 2026-08-01: G2→**G1**, corrida; `FIND-C6-1` PAGADO; `worktree.py` la esquivaba entera ⇒ cableada) | 09·G1-G8 |
+| S15 | `ToolExecEnvironment` (backend shell) | T2-COSTURA (AÑADIDA) | existe-fiel — **ENRIQUECIDA 2026-08-01** con `run_argv(argv, *, cwd, timeout)` para cerrar el bypass de `worktree.py` (git corría en el host con bwrap inyectado) | 09·F1/F2/F3/F4 |
 | S16 | `ToolProtocol` (contrato de tool) | T1-CONTRATO + costura | existe-enriquecer (`C5` 2026-08-01: `09·A24` DECLARADO, `FIND-TOOL4` pagado; siguen fuera los miembros de comportamiento) | 09·A1-A26 |
 | S17 | `PermissionGate` (`check_permissions` per-input) | T2-COSTURA | existe-parcial | 09·A6-A9/D3/G8 · 02·F2 · 06 |
 | S18 | `SubagentRunnerProtocol` | T2-COSTURA | **poblada por DI** (`C8` 2026-07-31: `FIND-EXEC1` PAGADO) | 05·E24 (FIND-EXEC1) |
@@ -219,6 +219,15 @@
   `Path(expand_path(...))`: lo autorizado y lo usado son el MISMO path. Expansión **léxica** a propósito (la forma con symlinks
   resueltos es para el CHEQUEO, no para la E/S — mismo reparto que el canónico). Acreditado por `E7a` (traversal · absoluto-fuera
   · symlink-que-apunta-fuera · roots asimétricos read/write · la regresión relativa) y por la negativa E2E real `E7c`.
+- **corrección (barrido de las 18 tools, misma fecha): el estado `existe-fiel` era de la COSTURA, no del cableado.** Había una
+  tool que no pasaba por ella: `worktree.py` componía el destino a mano (`Path(git_root).parent / ".worktrees/<name>"`) y
+  no lo pasaba por `resolve()` **en ningún momento** — sin allow-set y, encima, **fuera** del write-root por construcción
+  (hermano del git root). Hoy va por `ctx.fs.resolve(str(ctx.fs.write_root / ".worktrees/<name>"), for_write=True)`, lo que
+  obliga a una **divergencia declarada**: el worktree se crea DENTRO del write-root, no como hermano. Con la ubicación
+  anterior el confinamiento era literalmente inexpresable. Acreditado en `E7e`. Ningún otro de los 18 módulos esquiva `S14`:
+  `write_file`/`read_file`/`file_edit`/`glob`/`grep`/`clone_repository` resuelven; los 12 restantes no tocan el FS.
+  `PathOutsideWorkspace` se devuelve al modelo con `str(exc)` en 6 sitios y su mensaje repite **sólo el token del modelo**,
+  no los roots — comprobado, no supuesto: no es un séptimo punto de emisión.
 
 ### S26 · `DeferredToolStrategy`
 - **estado:** `existe-fiel` (09·E2/E3/E10; Simulada client-side + Nativa `defer_loading` server-side).
@@ -342,15 +351,38 @@
   battery de voz, el saneo pasa a método de **S31** (`BATTERIES §4.5`).
 - **productor:** `tools/dispatcher.py:42` (todo `output` pasa antes de `ctx.messages` Y EventBus, 09·D9). **consumidor:** base default `IdentityPresentation` (no-op bajo identidad) / integrador.
 - **firma BORRADOR:** `sanitize_output(text: str) -> str` (+ `to_llm(path)->str` latente, cablear o borrar). 【id-opaco: no filtrar rutas reales del contenedor】.
-- **estado tras `C5` (2026-08-01): `existe-parcial` → `existe-fiel` en el eje `to_llm`.** La disyuntiva «cablear o borrar» se
-  cerró LEYENDO (`D-08`), no razonando: en TODO el árbol había **una sola** invocación `.to_llm(` y era un test, pero
-  `new_core/src/agent_core/prompts/path_presentation.py` (59 L, abierto 1→EOF) **la implementa de verdad** (mapea paths host a
-  `/workspace/...`), luego borrarla dejaba huérfano al integrador containerizado ⇒ **se cablea**. Tres puntos de emisión de ruta
-  HOST, y sólo esos: `tools/native/write_file.py:36`, `tools/native/glob_tool.py:39`, `tools/native/grep_tool.py:68` (una vez por
-  archivo, no por línea). NO se cablea en `read_file` (no emite ruta) ni en `file_edit` (devuelve el string de entrada tal cual).
-  Motivo de fondo: `sanitize_output` es una red de regex **con pérdidas** (`FIND-VOICE1` prueba que se escapa a caballo entre
-  chunks); `to_llm` es la traducción directa y exacta. El defecto per-chunk de `sanitize` sigue abierto y **por encima de la línea**
-  (→ `S31`, `BATTERIES §4.5`): esta entrada NO lo declara pagado.
+- **estado tras `C5` (2026-08-01) — ENTRADA CORREGIDA EN LA MISMA VENTANA, ver §nota al final:** sigue **`existe-parcial`**.
+  `to_llm` deja de estar **sin poblar** (ya tiene productor real), pero eso NO promueve la costura a `existe-fiel`: `17·§2.7.1`
+  dice por escrito que S12 **está sobre-declarada** mientras `runtime.py:244` sanee **per-chunk** (`CG-V4`/`FIND-VOICE1`) y el
+  default `IdentityPresentation` sea **no-op** (invariante vacuo salvo inyección → `OI-VOICE-2`). Eso sigue igual hoy.
+- **la disyuntiva «cablear o borrar» se resuelve CABLEAR, con el motivo correcto.** `01·CTR-11` ya tenía clasificado `to_llm`
+  como **extensión de B sin contraparte canónica**, DEUDA-B **interna**, NO deuda A↔B (`L10`) — verificado ahora leyendo el
+  anclaje, y confirmado por grep exhaustivo en `claude-code/src` (`toLlm`/`PathPresentation`/`fakePath` = **cero**). `09·D9`
+  habla **sólo** de `sanitize_output`; `to_llm` no aparece en él. Los consumidores son los integradores **`agentic_code` y
+  `agentic_assistant`, planificados para después de esta refactorización**: la costura se cablea por el mismo criterio que
+  `subagent_runner_factory=lambda _rt: None` — productor poblado, consumidor **vacío por diseño** hasta que existan.
+- **SEIS puntos de emisión de ruta HOST, no cuatro (y menos tres):** `tools/native/write_file.py:38`, `glob_tool.py:40`,
+  `grep_tool.py:68` (una vez por archivo, no por línea), **`clone_repository.py:149`** y **`worktree.py:138` + `:211`**.
+  Los dos de `worktree` aparecieron en el barrido POSTERIOR, cuando el usuario señaló que sólo se habían ajustado 8 de las
+  18 tools: interpolaban la ruta host cruda (`f"Created worktree at {worktree_path}…"`, `f"…Path: {path}"`) y además la
+  tool esquivaba `S14` (destino compuesto a mano, sin allow-set) y `S15` (git por `create_subprocess_exec` directo).
+  Acreditados por `E7e` con DOS violaciones inyectadas (quitar `to_llm` ⇒ rojo con la ruta host literal; devolver `_run` al
+  subproceso directo ⇒ rojo con la costura vacía, `seen == []`); revert desde copia propia verificado con `sha256 -c`.
+  **Recuento firmado dos veces y equivocado las dos** (3, luego 4): el barrido por ejes —quién resuelve, quién ejecuta,
+  quién emite— sólo se hizo entero a la tercera. El de `clone_repository` es el que peor pinta tiene:
+  el path host absoluto viaja en el `argv` de `git clone`, así que **git lo imprime** (`Cloning into '/ruta/host/…'`) y ese
+  stdout se devuelve al modelo — la ruta no la escribe el runtime, luego `to_llm(Path)` no bastaba. Se traduce por el string
+  **literal** que se le pasó a git (exacto, no heurístico), y NO se deja a `sanitize_output`, que es una red de regex con
+  pérdidas. Acreditado por `E7d` con violación inyectada (quitar el `.replace` ⇒ rojo con la ruta host en el payload; revert
+  desde copia propia verificado con `sha256 -c`). NO se cablea en `read_file` (no emite ruta) ni en `file_edit` (devuelve el
+  string de entrada tal cual).
+- **§nota de honestidad.** La primera versión de esta entrada (commit `724bc90`) decía «`existe-parcial` → `existe-fiel`» y
+  justificaba el cableado en que `new_core/.../path_presentation.py` era «el integrador containerizado» que quedaría huérfano.
+  **Las dos cosas eran falsas**: `new_core`/`agent_core` es un proyecto **muerto** (última actividad 2026-07-10) y no se
+  retoma, y `17·§2.7.1` prohibía `existe-fiel` por escrito. El error de método fue no aplicarle a `to_llm` la misma prueba que
+  sí le apliqué a `ends_turn` (sin homólogo en A ⇒ carga de la prueba invertida): me paré en «un integrador lo implementa» sin
+  comprobar si ese integrador existía. Los tres anclajes (`01·CTR-11`, `09·D9`, `17·§2.7.1`) estaban **sin abrir** cuando
+  firmé aquello; ahora están leídos y son la fuente de esta entrada.
 
 ### S13 · `StorageContract` (roots + traducción token→path)
 - **estado:** `existe-fiel` (consumido por plan_file + `fs_env.py:124` + `_persist` de execution). **Unificar con `StorageProtocol` de 15.**
@@ -374,6 +406,17 @@
   # ShellResult: output(combinado) + returncode — enriquecer con stdout/stderr/interrupted/background_task_id (09·F4 → 10)
   ```
 - **cabo:** shell persistente (09·F2 → 10·R8), política de sandbox (09·F3 → integrador OI-20).
+- **estado tras el barrido de las 18 tools (2026-08-01): ENRIQUECIDA con `run_argv(argv, *, cwd, timeout)`.** La costura
+  sólo cubría `bash`; `worktree.py` lanzaba git con `asyncio.create_subprocess_exec` **directo**, así que con un
+  `BwrapExecEnvironment` inyectado `bash` quedaba aislado y `EnterWorktree` corría git **en el host**. `E7b` no lo cazaba
+  porque sólo acreditaba `bash`. Enriquecimiento declarado, mismo patrón con que `S4` ganó `join(task_id)` y `S18` pasó a
+  `SubagentSpec`. Es `run_argv` y **no** `run_shell` a propósito: el argv lleva un nombre de rama que viene del MODELO, y
+  serializarlo a string de shell cambiaría una fuga de ruta por una **inyección de comandos**. `BwrapExecEnvironment`
+  **traduce** el `cwd` host → `/workspace/…` y **rechaza** un `cwd` fuera del montaje en vez de ignorarlo (ignorarlo es el
+  modo de fallo «autorizar una cosa y ejecutar otra» de `FIND-C6-1`). Segundo productor: `worktree.py:_run`.
+  **Cabo declarado y NO pagado (`L07`):** `run_argv` traduce el `cwd`, **no** los paths que viajan dentro del `argv`.
+  `worktree.py` lo esquiva pasando paths **relativos** al `cwd`; cualquier tool futura que necesite un path absoluto en el
+  argv bajo bwrap necesitará un `to_exec_env(path)` en la costura, que hoy no existe.
 
 ### S16 · `ToolProtocol` (contrato de tool)
 - **estado:** `existe-enriquecer` (8 miembros; faltan miembros de **comportamiento**, no de render).
@@ -633,9 +676,9 @@
 | S9 CompactionProvider | loop (trigger `agent_loop.py:189`) + motor battery | providers concretos | seam existe; **motor ausente** |
 | S10 RetryPolicy | loop (envuelve `complete()`) | battery `resilience` | **ausente** |
 | S11 UserInputProcessor | loop **pre-turno** `agent_loop.py:211` | battery `commands` / integrador | `factory.py:258` (`input_processor=config.input_processor`) → `LocalAgentRuntime` → `AgentLoop` (`C4`) |
-| S12 PathPresentation | `dispatcher.py:42` | `IdentityPresentation` / integrador | cableado |
+| S12 PathPresentation | `dispatcher.py:42` (`sanitize_output`) + **6 puntos de `to_llm`**: `write_file.py:38`, `glob_tool.py:40`, `grep_tool.py:68`, `clone_repository.py:149`, `worktree.py:138`/`:211` | `IdentityPresentation` / integrador | cableado |
 | S13 StorageContract | fs-tools/plan_file/`_persist` | integrador (FS/MinIO) | `fs_env.py:124` |
-| S15 ToolExecEnvironment | `bash.py:27` | `LocalExecEnvironment` / integrador | `factory.py:210→228`→`runtime.py:90/318` |
+| S15 ToolExecEnvironment | `bash.py:27` (`run_shell`) + `worktree.py:_run` (`run_argv`) | `LocalExecEnvironment` / integrador | `factory.py:210→228`→`runtime.py:90/318` |
 | S16 ToolProtocol | `create_tools`/`register` | tools/MCP/skills/integrador | `factory.py:41-67` |
 | S17 PermissionGate | loop `PRE_TOOL_USE` + dispatcher | integrador (política) | `agent_loop.py:300-313` (vivo, parcial) |
 | S18 SubagentRunner | `AgentTool` `agent.py:105` | `LocalAgentRuntime` vía adaptador | **sin poblar** (`set_runner` sólo test) → 18·C1 |

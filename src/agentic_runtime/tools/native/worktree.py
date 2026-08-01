@@ -1,11 +1,35 @@
+"""Native tools: `EnterWorktree` / `ExitWorktree` — aislamiento por git worktree.
+
+Tres reglas de costura que estas tools deben honrar y que en la primera versión NO
+honraban (halladas en el barrido de las 18 tools nativas, ventana de `C6`):
+
+- **`S15`**: git NO se lanza con `asyncio.create_subprocess_exec` directo. Se despacha por
+  `ctx.exec_env.run_argv`, igual que `bash` despacha por `run_shell`. Con un
+  `BwrapExecEnvironment` inyectado, la versión anterior dejaba `bash` aislado pero corría
+  git **en el host**.
+- **`S14`**: el destino del worktree se confina con `ctx.fs.resolve(..., for_write=True)`.
+  Antes se componía a mano (`Path(git_root).parent / ".worktrees/…"`) y no pasaba por
+  ningún allow-set.
+- **`S12`**: los paths que salen al modelo se traducen con `ctx.presentation.to_llm`. Antes
+  se interpolaba la ruta host cruda en `output=` (dos puntos de emisión).
+
+Los paths que viajan en el `argv` de git son **relativos** al `cwd` a propósito: un argv con
+path absoluto del host no significa lo mismo dentro del sandbox, donde el único árbol montado
+es el workspace en `/workspace`. El `cwd` sí es absoluto del host porque `run_argv` lo traduce.
+
+**Divergencia declarada**: el worktree se crea DENTRO del write-root (`.worktrees/<name>`),
+no como hermano del git root. Un hermano cae fuera del allow-set de escritura, así que con la
+ubicación anterior el confinamiento era inexpresable. Git admite worktrees anidados.
+"""
 from __future__ import annotations
 
-import asyncio
 import re
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..exec_env import LocalExecEnvironment
+from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -29,15 +53,17 @@ def _validate_slug(name: str) -> str | None:
     return None
 
 
-async def _run(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-    )
-    stdout, stderr = await proc.communicate()
-    return proc.returncode or 0, stdout.decode(), stderr.decode()
+async def _run(
+    ctx: "ToolUseContext", argv: list[str], *, cwd: str, timeout: float
+) -> tuple[int, str]:
+    """Lanza `argv` por el `ToolExecEnvironment` inyectado. Devuelve (rc, salida combinada).
+
+    `run_argv` combina stdout y stderr (es lo que `ShellResult` modela), así que las tools
+    ya no discriminan una de otra: el mensaje de error usa la salida entera.
+    """
+    exec_env = getattr(ctx, "exec_env", None) or LocalExecEnvironment()
+    result = await exec_env.run_argv(argv, cwd=cwd, timeout=timeout)
+    return result.returncode, result.output
 
 
 class EnterWorktreeTool:
@@ -71,33 +97,45 @@ class EnterWorktreeTool:
             return ToolResult.error(self.name, err)
 
         branch = f"worktree/{name}"
+        # El repo es el write-root de la sesión, no el cwd del proceso: sin `cwd` git
+        # resolvía el toplevel del repo en que corre el RUNTIME, no el del workspace.
+        root = ctx.fs.write_root
+        relative = f".worktrees/{name}"
 
-        # Find git root
-        rc, stdout, stderr = await _run(["git", "rev-parse", "--show-toplevel"])
-        if rc != 0:
-            return ToolResult.error(self.name, f"Not a git repository: {stderr.strip()}")
-        git_root = stdout.strip()
-
-        worktree_path = str(Path(git_root).parent / f".worktrees/{name}")
-
-        rc, _, stderr = await _run(
-            ["git", "worktree", "add", "-b", branch, worktree_path],
-            cwd=git_root,
+        rc, out = await _run(
+            ctx, ["git", "rev-parse", "--is-inside-work-tree"], cwd=str(root), timeout=self.timeout_seconds
         )
         if rc != 0:
-            return ToolResult.error(self.name, f"git worktree add failed: {stderr.strip()}")
+            return ToolResult.error(self.name, f"Not a git repository: {out.strip()}")
+
+        try:
+            worktree_path = ctx.fs.resolve(str(root / relative), for_write=True)
+        except PathOutsideWorkspace as exc:
+            return ToolResult.error(self.name, str(exc))
+
+        rc, out = await _run(
+            ctx,
+            ["git", "worktree", "add", "-b", branch, relative],
+            cwd=str(root),
+            timeout=self.timeout_seconds,
+        )
+        if rc != 0:
+            return ToolResult.error(self.name, f"git worktree add failed: {out.strip()}")
+
+        shown = ctx.presentation.to_llm(worktree_path)
 
         def modifier(c: "ToolUseContext") -> "ToolUseContext":
             c.app_state.native[_WORKTREE_KEY] = {
-                "path": worktree_path,
+                "path": str(worktree_path),
+                "relative": relative,
                 "branch": branch,
-                "original_cwd": git_root,
+                "original_cwd": str(root),
             }
             return c
 
         return ToolResult(
             tool_name=self.name,
-            output=f"Created worktree at {worktree_path} on branch {branch}.",
+            output=f"Created worktree at {shown} on branch {branch}.",
             context_modifier=modifier,
         )
 
@@ -136,23 +174,33 @@ class ExitWorktreeTool:
         action = input.get("action", "keep")
         discard = input.get("discard_changes", False)
         path = session["path"]
+        # `relative`/`original_cwd` pueden faltar en una sesión escrita por la versión
+        # anterior de la tool; se degrada al path guardado en vez de reventar.
+        relative = session.get("relative") or path
+        root = session.get("original_cwd") or str(ctx.fs.write_root)
         branch = session.get("branch", "")
 
         if action == "remove":
-            # Check for uncommitted changes
-            rc, stdout, _ = await _run(["git", "status", "--porcelain"], cwd=path)
-            if rc == 0 and stdout.strip() and not discard:
+            rc, out = await _run(
+                ctx, ["git", "status", "--porcelain"], cwd=path, timeout=self.timeout_seconds
+            )
+            if rc == 0 and out.strip() and not discard:
                 return ToolResult.error(
                     self.name,
                     "Worktree has uncommitted changes. Set discard_changes=true to proceed.",
                 )
-            rc, _, stderr = await _run(
-                ["git", "worktree", "remove", "--force", path]
+            rc, out = await _run(
+                ctx,
+                ["git", "worktree", "remove", "--force", relative],
+                cwd=root,
+                timeout=self.timeout_seconds,
             )
             if rc != 0:
-                return ToolResult.error(self.name, f"git worktree remove failed: {stderr.strip()}")
+                return ToolResult.error(self.name, f"git worktree remove failed: {out.strip()}")
             if branch:
-                await _run(["git", "branch", "-D", branch])
+                await _run(
+                    ctx, ["git", "branch", "-D", branch], cwd=root, timeout=self.timeout_seconds
+                )
 
         def modifier(c: "ToolUseContext") -> "ToolUseContext":
             c.app_state.native.pop(_WORKTREE_KEY, None)
@@ -160,6 +208,6 @@ class ExitWorktreeTool:
 
         return ToolResult(
             tool_name=self.name,
-            output=f"Exited worktree (action={action}). Path: {path}",
+            output=f"Exited worktree (action={action}). Path: {ctx.presentation.to_llm(Path(path))}",
             context_modifier=modifier,
         )

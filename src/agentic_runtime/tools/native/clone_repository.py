@@ -140,7 +140,13 @@ class CloneRepositoryTool:
         except asyncio.TimeoutError:
             return ToolResult.error(self.name, f"git clone excedió {self.timeout_seconds:.0f}s")
 
-        output = stdout.decode(errors="replace")
+        # `S12`: el path host absoluto viaja en el `argv` de git, así que git lo IMPRIME
+        # (`Cloning into '/ruta/host/…'`) y el stdout se devuelve al modelo. Es el 4º punto
+        # de emisión de ruta host del árbol de tools, y el único donde la ruta no la escribe
+        # el runtime. No se deja a `sanitize_output` (red de regex CON PÉRDIDAS, `FIND-VOICE1`):
+        # aquí se conoce el string LITERAL que se le pasó a git, así que la traducción es
+        # exacta y no heurística.
+        output = stdout.decode(errors="replace").replace(str(dest), ctx.presentation.to_llm(dest))
         if proc.returncode != 0:
             return ToolResult(tool_name=self.name, output=output or "git clone falló", is_error=True)
         return ToolResult(

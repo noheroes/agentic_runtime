@@ -1046,6 +1046,126 @@ def test_e7a_negative_confinement_rejects_traversal_symlink_and_outside_allow_se
     assert relativo == workspace / "notas.txt"
 
 
+async def test_e7d_clone_repository_does_not_leak_the_host_path_that_git_prints(tmp_path):
+    """`S12`, 4º punto de emisión: la ruta host la imprime **git**, no el runtime.
+
+    `clone_repository` pasa `str(dest)` en el `argv`, así que el stdout de git trae
+    `Cloning into '/ruta/host/absoluta/…'` y ese stdout se devuelve al modelo. Se
+    encontró abriendo los 18 módulos de `tools/native/`: la ronda anterior sólo había
+    abierto 11 y firmó «los 3 puntos que emiten ruta host, y sólo esos», que era falso.
+
+    No hay red: se clona contra un puerto cerrado. Git imprime el destino ANTES de
+    fallar, que es exactamente el caso que filtra.
+    """
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+    from agentic_runtime.tools.native.clone_repository import CloneRepositoryTool
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    class _MaskingPresentation:
+        """Lo que hará el integrador (`agentic_code`/`agentic_assistant`): host → fake."""
+
+        def to_llm(self, host_path: Path) -> str:
+            return f"/workspace/{Path(host_path).name}"
+
+        def sanitize_output(self, text: str) -> str:
+            return text
+
+    ctx = ToolUseContext(
+        session_id="sess-e7d",
+        fs=ConfinedFilesystem(roots=[workspace], write_roots=[workspace]),
+        presentation=_MaskingPresentation(),
+    )
+
+    r = await CloneRepositoryTool().execute(
+        {"repository": "https://127.0.0.1:1/acme/demo.git"}, ctx
+    )
+
+    # Control positivo: si git no llegó a imprimir el destino, el test no prueba nada.
+    assert "Cloning into" in r.output, f"git no imprimió el destino: {r.output!r}"
+    assert "/workspace/demo" in r.output
+    assert str(workspace) not in r.output, f"ruta host filtrada al modelo: {r.output!r}"
+
+
+async def test_e7e_worktree_goes_through_the_seams_instead_of_around_them(tmp_path):
+    """`S15`+`S14`+`S12` en `EnterWorktree`/`ExitWorktree`, las tres esquivadas a la vez.
+
+    La versión anterior lanzaba git con `asyncio.create_subprocess_exec` **directo** (con
+    un `BwrapExecEnvironment` inyectado, `bash` quedaba aislado y git no), componía el
+    destino a mano sin pasar por ningún allow-set, y interpolaba la ruta host cruda en el
+    `output`. `E7b` no lo cazaba porque sólo acreditaba `bash`.
+
+    El espía **delega** en el backend real: git corre de verdad, así que lo que se acredita
+    es el cableado, no un mock que diga que sí.
+    """
+    from agentic_runtime.tools.exec_env import LocalExecEnvironment, ShellResult
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+    from agentic_runtime.tools.native.worktree import (
+        EnterWorktreeTool,
+        ExitWorktreeTool,
+    )
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    for argv in (
+        ["git", "init", "-q", "-b", "main"],
+        ["git", "config", "user.email", "gate@example.invalid"],
+        ["git", "config", "user.name", "gate"],
+        ["git", "commit", "-q", "--allow-empty", "-m", "root"],
+    ):
+        setup = await LocalExecEnvironment().run_argv(argv, cwd=str(workspace), timeout=30.0)
+        assert setup.returncode == 0, f"{argv}: {setup.output}"
+
+    seen: list[list[str]] = []
+
+    class _SpyExecEnv:
+        """Delega en el backend real y anota lo que pasó por la costura."""
+
+        def __init__(self) -> None:
+            self._inner = LocalExecEnvironment()
+
+        async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
+            raise AssertionError("worktree no debe pasar por `sh -c`: el nombre viene del modelo")
+
+        async def run_argv(self, argv, *, cwd=None, timeout: float) -> ShellResult:
+            seen.append(list(argv))
+            return await self._inner.run_argv(argv, cwd=cwd, timeout=timeout)
+
+    class _MaskingPresentation:
+        def to_llm(self, host_path: Path) -> str:
+            return f"/workspace/{Path(host_path).name}"
+
+        def sanitize_output(self, text: str) -> str:
+            return text
+
+    ctx = ToolUseContext(
+        session_id="sess-e7e",
+        fs=ConfinedFilesystem(roots=[workspace], write_roots=[workspace]),
+        presentation=_MaskingPresentation(),
+        exec_env=_SpyExecEnv(),
+    )
+
+    enter = await EnterWorktreeTool().execute({"name": "demo"}, ctx)
+    assert enter.is_error is False, enter.output
+
+    # `S15`: git fue por la costura, no por un subproceso propio.
+    assert ["git", "worktree", "add", "-b", "worktree/demo", ".worktrees/demo"] in seen, seen
+    # `S14`: el worktree cayó DENTRO del write-root, y existe de verdad.
+    assert (workspace / ".worktrees" / "demo").is_dir()
+    # `S12`: la ruta host no viaja al modelo.
+    assert "/workspace/demo" in enter.output
+    assert str(workspace) not in enter.output, f"ruta host filtrada: {enter.output!r}"
+
+    assert enter.context_modifier is not None
+    ctx = enter.context_modifier(ctx)
+
+    exit_r = await ExitWorktreeTool().execute({"action": "remove"}, ctx)
+    assert exit_r.is_error is False, exit_r.output
+    assert str(workspace) not in exit_r.output, f"ruta host filtrada: {exit_r.output!r}"
+    assert not (workspace / ".worktrees" / "demo").exists()
+
+
 async def test_e7b_bash_goes_through_the_injected_exec_env_not_the_host(tmp_path):
     """`S15` load-bearing: el backend inyectado por `RuntimeConfig` es el que corre."""
     from agentic_runtime.tools.exec_env import ShellResult

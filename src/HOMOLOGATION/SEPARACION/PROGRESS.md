@@ -186,3 +186,85 @@ en idioma a su hermano inmediato en el mismo módulo). Delta de la suite cuadrad
 **NO pagado, nombrado entero (`L07`):** `NativeToolRegistry` tiene **cero call-sites de producción** (tercer registro
 junto a `ToolRegistry` y `ToolPool`, la misma forma de doble-camino que `C7` cerró para `S19`), y
 `ToolRegistry.list_available(permission_ctx=…)` es **parámetro muerto** (sus dos llamadores pasan sólo `mode`).
+
+### 2026-08-01 · CORRECCIÓN de la entrada anterior, en la misma ventana (a instancia del usuario)
+
+La entrada de arriba y el commit `724bc90` afirmaban dos cosas **falsas**, y las retiro nombrándolas:
+
+1. **«`to_llm` se cablea porque `new_core` la implementa y borrarla dejaría huérfano al integrador
+   containerizado».** `new_core`/`agent_core` es un proyecto **muerto** (última actividad 2026-07-10) que no se
+   retoma. La premisa era mía, no del tracker: `01·CTR-11` ya tenía `to_llm` clasificado como extensión de B sin
+   contraparte canónica, DEUDA-B interna, con la prescripción literal «cablear o borrar». El **cableado sigue
+   siendo correcto**, pero por otra razón: los consumidores son `agentic_code` y `agentic_assistant`, integradores
+   **planificados para después de esta refactorización**. Consumidor vacío **por diseño**, como
+   `subagent_runner_factory=lambda _rt: None`.
+2. **«`S12` pasa a `existe-fiel`».** Prohibido por escrito en `17·§2.7.1`: S12 está **sobre-declarada** mientras
+   `runtime.py:244` sanee per-chunk (`CG-V4`/`FIND-VOICE1`) y el default `IdentityPresentation` sea no-op. Vuelve
+   a **`existe-parcial`**.
+3. **«los 3 puntos que emiten ruta HOST, y sólo esos».** Son **cuatro**. Faltaba `clone_repository.py`: el path
+   host absoluto va en el `argv` de `git clone`, git lo **imprime** (`Cloning into '/ruta/host/…'`) y ese stdout se
+   devuelve al modelo. Se encontró porque `tools/native/` tiene **18** módulos y el ledger de la entrada anterior
+   sólo listaba **11** — los 7 sin abrir eran `agent`, `clone_repository`, `sleep`, `task_tools`, `tool_search`,
+   `web_fetch`, `web_search`. Abiertos los 7: **sólo `clone_repository` emite ruta host**; los otros 6, no.
+   Remediado con traducción por el string **literal** (exacta, no la red de regex con pérdidas) y acreditado por
+   **`E7d`** con violación inyectada, revertida por `sha256 -c`.
+
+**Fallo de método, dicho entero:** emití commit de control **y** enunciado de retoma teniendo abierta una deuda de
+**verificación** que yo mismo había declarado (`01·CTR-11`, `09·D9`, `17·§2.7.1` sin abrir). `D-07` lo prohíbe;
+es `declaración-como-pago`. Los tres anclajes están ahora **leídos**, y son la fuente de esta corrección.
+
+**Gate tras la corrección: 18 tests** (`E7` pasa de 3 a 4 piezas).
+
+### 2026-08-01 · SEGUNDA CORRECCIÓN, misma ventana (a instancia del usuario: «faltan las 8 tools nativas que no has terminado de ajustar»)
+
+El recuento de puntos de emisión de ruta host lo firmé **dos veces y me equivoqué las dos**: primero «tres, y sólo
+esos», luego «cuatro». Son **seis**. Los dos que faltaban están en `worktree.py`, y ahí la fuga era lo de menos:
+esa tool esquivaba **tres costuras a la vez**.
+
+1. **`S15` (exec-env) esquivada.** `_run` lanzaba git con `asyncio.create_subprocess_exec` **directo**. Con un
+   `BwrapExecEnvironment` inyectado, `bash` quedaba aislado y `EnterWorktree` corría git **en el host**. `E7b` no
+   lo cazaba porque sólo acreditaba `bash`. Remediado **enriqueciendo la costura** con
+   `run_argv(argv, *, cwd, timeout)` — declarado, mismo patrón con que `S4` ganó `join(task_id)` y `S18` pasó a
+   `SubagentSpec`. Es `run_argv` y no `run_shell` a propósito: el argv lleva un nombre de rama que viene del
+   **modelo**, y serializarlo a string de shell cambiaría una fuga de ruta por una **inyección de comandos**.
+2. **`S14` (confinamiento) esquivada.** `worktree_path` se componía a mano
+   (`Path(git_root).parent / ".worktrees/<name>"`) sin pasar por `resolve()` **nunca**, y encima quedaba **fuera**
+   del write-root por construcción. Hoy va por `ctx.fs.resolve(..., for_write=True)`, lo que obliga a una
+   **divergencia declarada**: el worktree se crea DENTRO del write-root, no como hermano del git root. Con la
+   ubicación anterior el confinamiento era literalmente inexpresable.
+3. **`S12` (presentación) esquivada** en `:100` y `:163`, interpolando la ruta host cruda.
+4. **Bonus, del mismo linaje que `FIND-C6-1`:** `git rev-parse --show-toplevel` y `git branch -D` corrían **sin
+   `cwd`** ⇒ contra el **cwd del proceso**, es decir contra el repo del *runtime*, no contra el workspace de la
+   sesión. Hoy el ancla es `ctx.fs.write_root`.
+
+**`E7e`** acredita las tres costuras en una corrida, con un espía que **delega en el backend real** (git corre de
+verdad: lo que se acredita es el cableado, no un mock que diga que sí). Acreditado por **dos** violaciones
+inyectadas, anunciadas antes de tocar el fuente: quitar `to_llm` ⇒ rojo con la ruta host literal en el payload;
+devolver `_run` al subproceso directo ⇒ rojo con la costura **vacía** (`seen == []`). Revert desde copia propia
+verificado con `sha256 -c` (`814cf542a4ab…`), nunca `git checkout`.
+
+**Barrido de los 18 módulos por ejes** (quién resuelve · quién ejecuta · quién emite), que es lo que faltaba hacer
+entero: `write_file`/`read_file`/`file_edit`/`glob`/`grep`/`clone_repository`/`worktree` tocan el FS y **todos**
+resuelven por `S14`; `bash` y `worktree` ejecutan y **ambos** van por `S15`; emiten ruta host los **seis** puntos
+listados y ninguno más. `file_edit:78` devuelve el `file_path` **que mandó el modelo** (su propio string, no la
+ruta resuelta) ⇒ no es fuga. `PathOutsideWorkspace` viaja al modelo con `str(exc)` en 6 sitios y su mensaje repite
+sólo el token del modelo, no los roots ⇒ tampoco. Los 11 restantes (`agent`, `ask_user`, `config`, `plan_mode`,
+`sleep`, `task_tools`, `todo_write`, `tool_search`, `web_fetch`, `web_search`, `__init__`) no tocan FS ni
+ejecutan procesos: **nada que ajustar**, dicho módulo a módulo y no por muestreo.
+
+**Cabo declarado y NO pagado (`L07`):** `run_argv` traduce el `cwd` host→sandbox pero **no** los paths que viajan
+dentro del `argv`. `worktree.py` lo esquiva usando paths **relativos** al `cwd`; una tool futura que necesite un
+path absoluto en el argv bajo bwrap necesitará un `to_exec_env(path)` en `S15`, que hoy no existe.
+
+**Mediciones tras la segunda corrección** (todas re-medidas, ninguna heredada): gate `-m gate_tramo1` = **19 passed,
+0 skipped en UNA corrida** — `E1`×2 · `E2`×2 · `E3`×1 · `E4`×4 · `E5`×1 · `E6`×3 · `E7`×**5** · `E9`×1 = **8 de 9**,
+sigue faltando sólo `E8`. (Nota medida, no supuesta: correr `-m gate_tramo1` sobre todo `tests/` reporta además
+`1 skipped`; es un `pytest.importorskip("docx")` a **nivel de módulo** en `test_skills_office_loop_e2e_real.py`,
+fichero que **no lleva la marca `gate_tramo1`** — pytest lo salta en COLECCIÓN, antes de filtrar por marca. Con ese
+módulo ignorado: 19 passed, 0 skipped. No es un test del gate omitido.) · suite = **697 passed, 3 skipped, 111
+xfailed, 0 failed** (desde 695: +`E7d` +`E7e`) · `mypy --strict` = **139 errores / 55
+ficheros** (sin cambio) · `uvx ruff check` = **503** (desde 502). El delta se midió **fichero a fichero contra un
+árbol limpio de `HEAD`** (`git archive`, sin tocar el working tree) porque la primera cifra que apunté —505— no
+cuadraba con la suma de mis ficheros: eran **+2** y sólo uno era irreducible. El `I001` que había metido en el
+bloque de imports del test **está pagado**; queda **+1 `UP037`** en `worktree.py`, idéntico en idioma a los otros
+seis del mismo módulo. `exec_env.py` y `clone_repository.py` quedan **sin añadir un solo lint**.
