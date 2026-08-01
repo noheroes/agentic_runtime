@@ -591,3 +591,69 @@ copia, `sha256` idéntico y `git status` limpio (**nunca `git checkout`**).
 - suite completa = **704 passed / 3 skipped / 112 xfailed / 0 failed**. Los 3 skips son de entorno
   (`python-docx` ausente, `/tmp/skills` vacío), ninguno del gate.
 - `mypy --strict` = **138 errores / 54 ficheros** (sin cambio).
+
+---
+
+### 2026-08-01 · SEXTA CORRECCIÓN — «¿cuántas de las 25 eligió el modelo?», y un falso positivo en mis propios tests
+
+Pregunta del usuario: **cuántas pruebas y cuántas de las 25 tools llegó a seleccionar el LLM**. No estaba
+medido: los tests aseveran *por escenario* (que eligió **una** capaz) y **no acumulaban censo**. Se instrumenta
+—visibilidad, no rebaja— y al mirar el primer resultado salió un defecto **de mis tests**, no del runtime.
+
+#### 1 · El falso positivo: contar menciones en vez de invocaciones
+
+`E2d`/`E2f`/`E2g` calculaban lo elegido con un **substring** sobre el historial serializado
+(`f'"{name}"' in json.dumps(messages)`). En `E2g` eso es insostenible: **el resultado de `ToolSearch` viaja en
+los mensajes con los nombres de sus coincidencias**, señuelos incluidos ⇒ una tool que el modelo nunca llamó
+contaba como «elegida». Medido: `E2g` reportó **9 y 11 de 25** por esa vía, con `EnterPlanMode`/`TaskList`
+dentro. Y lo grave no es el conteo: **la aserción `selected & must_use` podía satisfacerse con una MENCIÓN en
+un payload en vez de con una invocación**. Un test que se aprobaba a sí mismo por el lado equivocado.
+
+Sustituido por `_invoked_tool_names(calls)`, que lee la única fuente que no admite confusión:
+`msg["tool_calls"][*]["function"]["name"]` — exactamente lo que `agent_loop.py:401-403` escribe cuando el
+modelo pide una tool. Aplicado a los tres tests.
+
+#### 2 · Lo medido, con el contador honesto (4 corridas estructurales)
+
+| test | tools distintas **invocadas** por corrida | unión |
+|---|---|---|
+| `E2f` (24 anunciadas) | 4 · 5 · 4 · 5 | **5** |
+| `E2g` (con diferidas + `ToolSearch`) | 5 · 7 · 5 · **14** | **14** |
+
+Unión total = **14 de las 25** (censo = **25 tools en 18 módulos**, aseverado por `E2c`:
+`assert len(modules) == 18`): `Agent`, `EnterPlanMode`, `ExitPlanMode`, `Sleep`, `TaskCreate`, `TaskGet`,
+`TaskUpdate`, `ToolSearch`, `WebSearch`, `bash`, `glob`, `grep`, `read_file`, `write_file`.
+
+**Las 11 que NINGUNA corrida medida invocó**, dicho como carencia y no escondido: `AskUserQuestion`, `Config`,
+`Edit`, `EnterWorktree`, `ExitWorktree`, `TaskList`, `TaskOutput`, `TaskStop`, `TodoWrite`, `WebFetch`,
+`clone_repository`. Que estén **anunciadas** y barridas (`E2c`, `E7f`) está probado; que el modelo las
+**conduzca** no. Es cobertura de escenarios, y falta.
+
+#### 3 · Corrección de una etiqueta ambigua
+
+El `print` decía `11/25 del censo` y se leyó —con razón— como si afirmara *11 tools nativas*. **Son 25 tools en
+18 módulos**, y el gate lo asevera. La etiqueta pasa a `tools DISTINTAS INVOCADAS por el modelo: N de las 25
+del censo (censo = 25 tools en 18 módulos)`.
+
+#### 4 · Mediciones
+
+gate = **26 passed / 0 skipped en UNA corrida** · `ruff` **505** (cero deuda neta) · el contador estructural
+**no aflojó ninguna aserción**: `E2f`/`E2g`/`E2d` siguen verdes con el criterio más estricto.
+
+#### 5 · `FIND-E2G-1` SE MATERIALIZÓ: primera corrida ROJA de verdad
+
+Al re-medir tras los cambios de instrumentación, la **suite completa** dio
+**`1 failed, 703 passed`** con `E2g`: *«SOLVENCIA CON ToolSearch: 1 incumplimientos en 4 casos»*, acompañado de
+`RuntimeError: Event loop is closed` en el teardown — misma firma que `FIND-E2G-2`.
+
+Esto es exactamente lo que se escribió al retirar el colchón: **«no está arreglado, es intermitente, y si vuelve
+pone el gate rojo»**. Volvió. **No se tocó el test.**
+
+Re-corridas inmediatas: `E2g` solo → verde; gate file entero → **26 passed** (`E2g` 0 incumplimientos, 5 tools
+invocadas); suite completa otra vez → **704 passed / 3 skipped / 112 xfailed / 0 failed**. Es decir **1 roja de
+2 corridas de suite completa**, y el caso concreto **no está identificado**: la primera corrida se lanzó con
+`| tail -6` y el mensaje con el escenario y la rama **se perdió**. Error de método propio, anotado: las corridas
+de acreditación se capturan **enteras a fichero**, no por `tail`.
+
+**Estado real del gate, dicho sin adorno:** no es «26 verdes y ya». Es 26 verdes **cuando `E2g` no cae**, con
+`FIND-E2G-1` **abierto, vigilado y ya cobrado una vez**.

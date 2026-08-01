@@ -1629,9 +1629,9 @@ async def test_e2d_the_model_selects_native_tools_by_name_from_the_full_census(t
         f"tools nativas que no llegaron al anuncio real: {sorted(always - announced)}"
     )
 
-    # 2. SELECCIÓN: sólo lo que viajó en `messages` cuenta como elegido por el modelo.
-    chosen_wire = json.dumps([c["messages"] for c in probe.calls], default=str)
-    selected = {n for n in _NATIVE_CENSUS if f'"{n}"' in chosen_wire}
+    # 2. SELECCIÓN: sólo una `tool_call` REAL del modelo cuenta como elegida — ver
+    #    `_invoked_tool_names`, que sustituye al substring que contaba menciones.
+    selected = _invoked_tool_names(probe.calls)
     assert {"grep", "read_file", "write_file"} <= selected, (
         f"el modelo no seleccionó las tools pedidas del censo; vio {len(announced)} "
         f"y eligió {sorted(selected)}"
@@ -1784,6 +1784,28 @@ async def test_e2e_tool_search_discovers_a_deferred_tool_and_it_becomes_announce
     assert payload["total_deferred_tools"] == 2, (
         f"el censo de diferidas del pool no cuadra: {payload['total_deferred_tools']}"
     )
+
+
+def _invoked_tool_names(calls: list[dict]) -> set[str]:
+    """Tools que el modelo **invocó de verdad**, leídas de la estructura del historial.
+
+    Antes esto se hacía con un substring (`f'"{name}"' in json.dumps(messages)`) y era
+    un **falso positivo esperando**: el resultado de `ToolSearch` viaja en los mensajes
+    con los nombres de sus coincidencias —señuelos incluidos— así que una tool que el
+    modelo nunca llamó contaba como «elegida», y una aserción del tipo «usó alguna
+    capaz» podía satisfacerse con una MENCIÓN en un payload. Medido: `E2g` reportaba
+    hasta 11 de 25 elegidas por esa vía. Aquí se lee la única fuente que no admite
+    confusión — `msg["tool_calls"][*]["function"]["name"]`, que es exactamente lo que
+    `agent_loop.py:401-403` escribe cuando el modelo pide una tool.
+    """
+    names: set[str] = set()
+    for call in calls:
+        for msg in call["messages"]:
+            for tc in msg.get("tool_calls") or ():
+                name = (tc.get("function") or {}).get("name")
+                if name:
+                    names.add(name)
+    return names
 
 
 def _tool_result_payloads(messages: list[dict]) -> list[Any]:
@@ -1962,6 +1984,7 @@ async def test_e2f_the_model_is_solvent_choosing_tools_from_goal_statements(
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
 
     fallos: list[str] = []
+    elegidas_total: set[str] = set()
     for n, sc in enumerate(scenarios):
         current["serp"] = sc["serp"]
         probe = ModelSeamProbe(_build_caller(_E2F_SYSTEM))
@@ -1980,8 +2003,8 @@ async def test_e2f_the_model_is_solvent_choosing_tools_from_goal_statements(
         answer = runtime.result(task_id) or ""
         status = runtime.status(task_id)
         announced = {t.get("name") for call in probe.calls for t in call["tools"]}
-        chosen_wire = json.dumps([c["messages"] for c in probe.calls], default=str)
-        selected = {t for t in _NATIVE_CENSUS if f'"{t}"' in chosen_wire}
+        selected = _invoked_tool_names(probe.calls)
+        elegidas_total |= selected
 
         # Los datos del escenario se pasan explícitos y no se capturan del bucle:
         # una clausura sobre `sc`/`answer` funcionaría hoy (se llama en la misma
@@ -2010,6 +2033,14 @@ async def test_e2f_the_model_is_solvent_choosing_tools_from_goal_statements(
             elif want not in path.read_text(encoding="utf-8"):
                 _fail(f"{path.name} no contiene {want}")
 
+    # Censo de lo que el modelo LLEGÓ A ELEGIR, acumulado. Sin esto, «eligió de las
+    # 25» es una frase: lo que el test asevera es que eligió UNA capaz por escenario,
+    # y cuántas tools distintas toca de verdad la batería sólo se sabe contándolas.
+    print(
+        f"\n[E2f] GATE_E2F_SEED={seed} · tools DISTINTAS INVOCADAS por el modelo: "
+        f"{len(elegidas_total)} de las {len(_NATIVE_CENSUS)} del censo "
+        f"(censo = {len(_NATIVE_CENSUS)} tools en 18 módulos): {sorted(elegidas_total)}",
+    )
     assert not fallos, (
         f"SOLVENCIA: {len(fallos)}/{len(scenarios)} escenarios fallaron "
         f"(GATE_E2F_SEED={seed} para reproducir)\n" + "\n".join(fallos)
@@ -2202,6 +2233,7 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
 
     fallos: list[str] = []
+    elegidas_total: set[str] = set()
     n = 0
     for sc in scenarios:
         # Señuelos fijos por escenario: las dos ramas ven exactamente el mismo
@@ -2255,8 +2287,8 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
             first = probe.calls[0]["tools"] if probe.calls else []
             first_names = {t.get("name") for t in first}
             deferred_flagged = {t.get("name") for t in first if t.get("defer_loading")}
-            chosen_wire = json.dumps([c["messages"] for c in probe.calls], default=str)
-            selected = {t for t in _NATIVE_CENSUS if f'"{t}"' in chosen_wire}
+            selected = _invoked_tool_names(probe.calls)
+            elegidas_total |= selected
 
             def _diag(msg: str, *, caso=caso, hidden=hidden, first_names=first_names,
                       selected=selected, answer=answer) -> str:
@@ -2305,7 +2337,12 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
             if sc["expect_in_answer"] not in answer:
                 _fail(f"el centinela {sc['expect_in_answer']} no llegó a la respuesta")
 
-    print(f"\n[E2g] GATE_E2G_SEED={seed} · {n} casos corridos, {len(fallos)} incumplimientos")
+    print(
+        f"\n[E2g] GATE_E2G_SEED={seed} · {n} casos corridos, {len(fallos)} incumplimientos"
+        f" · tools DISTINTAS INVOCADAS por el modelo: {len(elegidas_total)} de las "
+        f"{len(_NATIVE_CENSUS)} del censo (censo = {len(_NATIVE_CENSUS)} tools en "
+        f"18 módulos): {sorted(elegidas_total)}",
+    )
     assert not fallos, (
         f"SOLVENCIA CON ToolSearch: {len(fallos)} incumplimientos en {n} casos "
         f"(GATE_E2G_SEED={seed} para reproducir)\n" + "\n".join(fallos)

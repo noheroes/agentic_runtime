@@ -497,6 +497,13 @@
   ahora es load-bearing — si vuelve, el gate se pone rojo. Además se exige lo que el runtime posee sin discusión:
   `defer_loading=True` en el cable y `ToolSearch` client-side retirado, con `openai_responses_shared.py:225,231-232` **leído**
   (emite el flag y añade `{"type":"tool_search","execution":"server"}`).
+- **⚠ falso positivo en la instrumentación de los tests, PAGADO (2026-08-01):** `E2d`/`E2f`/`E2g` contaban lo elegido con un
+  substring sobre el historial serializado. El **resultado de `ToolSearch` transporta los nombres de sus coincidencias** —los
+  señuelos incluidos— así que menciones contaban como invocaciones y `selected & must_use` podía cumplirse **sin que el modelo
+  llamara a nada**. Sustituido por `_invoked_tool_names`, que lee `msg["tool_calls"][*]["function"]["name"]` (`agent_loop.py:401-403`).
+  Medido con el contador honesto: unión de **14 de las 25** tools del censo invocadas por el modelo; las 11 restantes
+  (`AskUserQuestion`, `Config`, `Edit`, `EnterWorktree`, `ExitWorktree`, `TaskList`, `TaskOutput`, `TaskStop`, `TodoWrite`,
+  `WebFetch`, `clone_repository`) están **anunciadas y barridas**, pero **ninguna corrida medida las condujo**.
 - **⚠ `FIND-E2G-2`, medido, NO atribuido y nombrado (`L07`):** 1 de 6 corridas murió con `CancelledError` **esperando el stream del
   modelo** (`event_stream.py:55` ← `caller.py:286` ← `agent_loop.py:348`). **Nada del runtime cancela**: `arm_watchdog` es un
   **no-op** (`registry.py:89-92`) y el default es 300 s, pero murió a ~100 s. `E2g` ya no revienta con un error opaco de asyncio:
