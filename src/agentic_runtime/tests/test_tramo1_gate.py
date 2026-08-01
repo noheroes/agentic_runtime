@@ -40,6 +40,7 @@ trabajo.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import random
@@ -1695,7 +1696,8 @@ async def test_e2e_tool_search_discovers_a_deferred_tool_and_it_becomes_announce
 
         Sin modelo real a propósito: lo que se mide es el mecanismo de
         descubrimiento y el re-anuncio del turno siguiente. Que un modelo de verdad
-        sepa llegar hasta aquí es `E2f`.
+        sepa llegar hasta aquí **sin que nadie se lo diga** es `E2g` — no `E2f`, que
+        corre con las 24 anunciadas y por tanto nunca necesita buscar nada.
         """
 
         def __init__(self) -> None:
@@ -2011,4 +2013,300 @@ async def test_e2f_the_model_is_solvent_choosing_tools_from_goal_statements(
     assert not fallos, (
         f"SOLVENCIA: {len(fallos)}/{len(scenarios)} escenarios fallaron "
         f"(GATE_E2F_SEED={seed} para reproducir)\n" + "\n".join(fallos)
+    )
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2·g — SOLVENCIA CON `ToolSearch`: el modelo descubre él solo lo que no ve
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# La pieza que faltaba, y su ausencia era un agujero de verdad:
+#
+#   · `E2e` prueba el MECANISMO de descubrimiento, pero la llamada a `ToolSearch`
+#     la guionó un caller de mentira: el modelo no decide nada ahí.
+#   · `E2f` prueba la SOLVENCIA, pero con las 24 anunciadas: no hay nada que
+#     descubrir, así que `ToolSearch` nunca hace falta.
+#
+# Aquí se cierran las dos a la vez: **las tools capaces de resolver el objetivo se
+# difieren**, y el modelo recibe un enunciado cuyo dato sólo se obtiene con una de
+# ellas. Ningún paso está guionado: tiene que darse cuenta, buscar, leer el schema
+# devuelto e invocar la descubierta.
+#
+# **Dos ramas, porque `S26` tiene dos y sólo una es la que el Azure real toma.**
+# `agent_loop.py:168-186` elige por capability del provider:
+#
+#   · `simulada` (`supports_native_tool_search() → False`, default seguro de todo
+#     provider sin search server-side): las diferidas **no se anuncian**, aparece
+#     `ToolSearch`, y el descubrimiento es client-side. Es la rama que este test
+#     persigue: la solvencia es del modelo.
+#   · `nativa` (gpt-5/Responses, lo que devuelve el caller real): se anuncian TODAS
+#     con `defer_loading=True` y **`ToolSearch` se retira** porque lo pone el
+#     provider. Aquí la solvencia es de la API; lo que le toca al runtime es emitir
+#     bien el flag, y eso es lo que se asevera.
+#
+# La rama simulada se selecciona **por su entrada documentada** — un caller que
+# declara `False`, que es literalmente el caso de producción de cualquier provider
+# de terceros — no parcheando la estrategia. Correr sólo la nativa habría dejado
+# `ToolSearch` sin probar con modelo real para siempre, que es el agujero.
+#
+# Lo que impide aprobar por accidente:
+#
+#   · **se difiere el conjunto ENTERO de tools capaces**, no una: si difiriera sólo
+#     `grep` dejando `bash` a la vista, el modelo resolvería sin tocar `ToolSearch`.
+#   · **señuelos aleatorios**: cada corrida difiere además 2–3 tools del censo al
+#     azar, así que `ToolSearch` tiene que DISCRIMINAR y no le vale devolver «la
+#     única diferida».
+#   · centinelas `uuid4` por corrida y escenarios barajados, como en `E2f`.
+#   · se asevera que lo necesario **no estaba anunciado en el primer turno**: sin
+#     eso, «la usó» no distinguiría descubrimiento de disponibilidad.
+#
+# ⚠ **LAS DOS RAMAS SE ASEVERAN IGUAL, y eso es deliberado.**
+# Hubo una versión de este test que exigía la solvencia sólo en la simulada y en la
+# nativa se limitaba a imprimir lo observado, con el argumento de que allí el
+# mecanismo es de la API y no del runtime. Era un colchón: `FIND-E2G-1` —el
+# tool-search server-side falló 2 de 6 corridas del caso `archivos`, con el modelo
+# tirando de `AskUserQuestion` y devolviendo vacío, mientras la simulada resolvía 6
+# de 6— es un problema **de ahora**, y un `print` dentro de un test verde no lo
+# atiende: lo entierra. La rama nativa NO es ajena al runtime: es la que el runtime
+# **elige** cuando el catálogo declara `native_tool_search=True`
+# (`agent_loop.py:168-186`, `caller.py:151`), así que su solvencia es consecuencia
+# de una decisión del sujeto. Se asevera. Si sale roja, el gate está rojo y el tramo
+# no cierra — que es la verdad, no un accidente del test.
+# Además se exige lo que el runtime posee sin discusión: que las diferidas viajen
+# con `defer_loading=True` y que `ToolSearch` client-side se retire —
+# `agentic_models` convierte ese flag y añade `{"type":"tool_search","execution":
+# "server"}` (`openai_responses_shared.py:225,231-232`), leído, no supuesto.
+
+_E2G_SYSTEM = (
+    "Eres un agente con herramientas reales. Puede que la herramienta que necesitas "
+    "no aparezca en la lista que ves: en ese caso usa ToolSearch para buscarla y, "
+    "cuando te devuelva su schema, invocala. Elige tu las herramientas; nadie te va "
+    "a decir cuales. No inventes datos: obtenlos con una herramienta. Responde al "
+    "final con el dato pedido, sin adornos."
+)
+
+
+class _NoNativeToolSearch:
+    """Caller que declara **no** tener search server-side.
+
+    No es un doble del modelo: delega `complete` intacto en el caller real de Azure.
+    Lo único que cambia es la capability que el loop consulta en
+    `agent_loop.py:180`, y `False` es lo que devuelve de verdad cualquier provider
+    sin `native_tool_search` (`caller.py:151`). Es decir: se elige la rama simulada
+    por la puerta por la que se elige en producción.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def supports_native_tool_search(self, model_id: str = "") -> bool:
+        return False
+
+    async def complete(self, messages, tools, *, stop=None, **kwargs):
+        return await self._inner.complete(messages, tools, stop=stop, **kwargs)
+
+
+def _e2g_scenarios(tmp_path: Path, rnd: random.Random) -> list[dict]:
+    """Como `E2f`, pero cada escenario declara el conjunto ENTERO de tools capaces
+    de resolverlo — ese conjunto es el que se difiere, para que la única salida sea
+    descubrirlo."""
+    def tag(prefix: str) -> str:
+        return f"{prefix}-{uuid.uuid4().hex[:10].upper()}"
+
+    web_code = tag("PADRON")
+    web_topic = rnd.choice(["zarpuel", "quivandro", "melbrisa", "tandroque"])
+
+    grep_code = tag("SUMARIO")
+    haystack = tmp_path / "gaveta"
+    haystack.mkdir(exist_ok=True)
+    for i in range(6):
+        (haystack / f"pieza_{i}.txt").write_text(f"relleno {i}\n", encoding="utf-8")
+    (haystack / f"pieza_{rnd.randrange(6)}.txt").write_text(
+        f"clave de sumario: {grep_code}\n", encoding="utf-8",
+    )
+
+    return [
+        {
+            "id": "web",
+            # `WebFetch` entra en el conjunto a diferir aunque el enunciado excluya
+            # las URL: si quedara a la vista, el modelo podría inventarse una y el
+            # SERP sustituido se la respondería igual — pasaría sin descubrir nada.
+            "hide": {"WebSearch", "WebFetch"},
+            "must_use": {"WebSearch"},
+            "prompt": (
+                f"Necesito el numero de padron del proyecto '{web_topic}'. No lo conoces "
+                "y no tienes ninguna URL: hay que buscarlo en la web por palabras clave. "
+                "Dime el numero de padron."
+            ),
+            "expect_in_answer": web_code,
+            "serp": web_code,
+        },
+        {
+            "id": "archivos",
+            "hide": {"grep", "bash", "glob", "read_file"},
+            "must_use": {"grep", "bash", "glob", "read_file"},
+            "prompt": (
+                f"En el directorio {haystack} hay varios archivos. Uno contiene una "
+                "'clave de sumario'. Dime su valor exacto."
+            ),
+            "expect_in_answer": grep_code,
+            "serp": None,
+        },
+    ]
+
+
+@_needs_azure
+async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidden(
+    tmp_path, monkeypatch,
+):
+    """El modelo llega solo hasta `ToolSearch` cuando lo que necesita no se anuncia."""
+    import urllib.request
+
+    from agentic_runtime.tools import factory as tool_factory
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    seed = int(os.getenv("GATE_E2G_SEED") or uuid.uuid4().int % (2**32))
+    rnd = random.Random(seed)
+
+    scenarios = _e2g_scenarios(tmp_path, rnd)
+    rnd.shuffle(scenarios)
+
+    monkeypatch.setenv("SERPER_API_KEY", "gate-e2g-stub")
+    current: dict[str, Any] = {"serp": None}
+
+    class _StubResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    def _fake_urlopen(req: Any, *a: Any, **k: Any):
+        code = current["serp"]
+        assert code is not None, (
+            f"una tool salio a la red donde no se esperaba: {getattr(req, 'full_url', req)}"
+        )
+        return _StubResponse(json.dumps({"organic": [{
+            "title": "Padron oficial de proyectos",
+            "link": "https://example.invalid/padron",
+            "snippet": f"El numero de padron asignado es {code}.",
+        }]}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    fallos: list[str] = []
+    n = 0
+    for sc in scenarios:
+        # Señuelos fijos por escenario: las dos ramas ven exactamente el mismo
+        # conjunto oculto, para que la comparación entre ellas signifique algo.
+        decoys = set(rnd.sample(
+            sorted(_NATIVE_CENSUS - sc["hide"] - {"ToolSearch"}), rnd.randint(2, 3),
+        ))
+        hidden = sc["hide"] | decoys
+
+        for rama in ("simulada", "nativa"):
+            n += 1
+            current["serp"] = sc["serp"]
+            caso = f"{sc['id']}/{rama}"
+
+            with monkeypatch.context() as mp:
+                # Se difiere sobre las CLASES que instancia el factory de producción,
+                # no sobre un pool fabricado en el test. El `context()` lo revierte
+                # al salir, para que la rama siguiente parta limpia.
+                for tool in tool_factory.create_tools().all_tools():
+                    if tool.name in hidden:
+                        mp.setattr(type(tool), "deferred", True, raising=False)
+
+                inner = _build_caller(_E2G_SYSTEM)
+                probe = ModelSeamProbe(
+                    _NoNativeToolSearch(inner) if rama == "simulada" else inner,
+                )
+                runtime = _runtime(
+                    tmp_path / f"rt_{n}", probe, (), Scope(f"scope-e2g-{n}"),
+                    fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+                    initial_allowed_tools=sorted(_NATIVE_CENSUS),
+                )
+                task_id = await runtime.dispatch(RuntimeTask(
+                    prompt=sc["prompt"],
+                    description=f"gate-e2g-{caso}",
+                    session_id=f"sess-E2g-{sc['id']}-{rama}-{uuid.uuid4().hex}",
+                ))
+                # El await se protege a propósito: `await` sobre una tarea AJENA que
+                # fue cancelada relanza `CancelledError` en el que espera sin que él
+                # esté cancelado, y sin esto el caso reventaría como error opaco de
+                # asyncio en vez de decir QUÉ eligió el modelo antes de morir. Ver
+                # `FIND-E2G-2` en `SEAMS.md`: nada del runtime cancela
+                # (`registry.py:89-92`, `arm_watchdog` es un no-op).
+                cancelado = False
+                try:
+                    await runtime._task_registry.get(task_id).asyncio_task
+                except asyncio.CancelledError:
+                    cancelado = True
+
+            answer = runtime.result(task_id) or ""
+            status = runtime.status(task_id)
+            first = probe.calls[0]["tools"] if probe.calls else []
+            first_names = {t.get("name") for t in first}
+            deferred_flagged = {t.get("name") for t in first if t.get("defer_loading")}
+            chosen_wire = json.dumps([c["messages"] for c in probe.calls], default=str)
+            selected = {t for t in _NATIVE_CENSUS if f'"{t}"' in chosen_wire}
+
+            def _diag(msg: str, *, caso=caso, hidden=hidden, first_names=first_names,
+                      selected=selected, answer=answer) -> str:
+                return (
+                    f"[{caso}] {msg}\n"
+                    f"    ocultas={sorted(hidden)}\n"
+                    f"    anunciadas_1er_turno={len(first_names)} elegidas={sorted(selected)}\n"
+                    f"    respuesta={answer[:200]!r}"
+                )
+
+            def _fail(msg: str, *, _d=_diag) -> None:
+                fallos.append(_d(msg))
+
+            if rama == "simulada":
+                # Premisa: lo que hace falta NO estaba a la vista. Sin esto, el resto
+                # del test no mediría descubrimiento y habría que saberlo.
+                visibles = hidden & first_names
+                assert not visibles, (
+                    f"[{caso}] el montaje no ocultó lo que debía ({sorted(visibles)}): "
+                    "no se estaría midiendo descubrimiento"
+                )
+                assert "ToolSearch" in first_names, (
+                    f"[{caso}] `ToolSearch` no se anunció: las diferidas son inalcanzables"
+                )
+            else:
+                # Rama nativa: nada se oculta — se marca. Y `ToolSearch` se retira
+                # porque el search lo pone el provider (`deferred_strategy.py:87-88`).
+                assert hidden <= deferred_flagged, (
+                    f"[{caso}] diferidas sin `defer_loading` en el cable: "
+                    f"{sorted(hidden - deferred_flagged)}"
+                )
+                assert "ToolSearch" not in first_names, (
+                    f"[{caso}] la rama nativa no debe anunciar `ToolSearch` client-side"
+                )
+
+            if cancelado:
+                _fail("la tarea fue CANCELADA esperando el stream del modelo")
+                continue
+            if status is not TaskStatus.COMPLETED:
+                _fail(f"la tarea no completó ({status})")
+                continue
+            if rama == "simulada" and "ToolSearch" not in selected:
+                _fail("no recurrió a `ToolSearch` teniendo oculto lo que necesitaba")
+            if not (selected & sc["must_use"]):
+                _fail(f"no llegó a usar ninguna capaz ({sorted(sc['must_use'])})")
+            if sc["expect_in_answer"] not in answer:
+                _fail(f"el centinela {sc['expect_in_answer']} no llegó a la respuesta")
+
+    print(f"\n[E2g] GATE_E2G_SEED={seed} · {n} casos corridos, {len(fallos)} incumplimientos")
+    assert not fallos, (
+        f"SOLVENCIA CON ToolSearch: {len(fallos)} incumplimientos en {n} casos "
+        f"(GATE_E2G_SEED={seed} para reproducir)\n" + "\n".join(fallos)
     )

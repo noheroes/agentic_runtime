@@ -474,3 +474,120 @@ byte a byte desde la copia (`sha256` idéntico, **nunca `git checkout`**).
   un olor real (`B023`: una clausura que capturaba la variable del bucle; funciona hoy porque se llama en la
   misma iteración y mentiría en cuanto alguien acumulara los fallos para después) ⇒ arregladas, no silenciadas.
 - `mypy --strict` = **138 errores / 54 ficheros** (sin cambio).
+
+---
+
+### 2026-08-01 · QUINTA CORRECCIÓN — `E2g`: la solvencia con `ToolSearch`, que es lo que se había pedido
+
+El usuario paró el veredicto por cuarta vez, y con razón. Lo pedido era «**la solvencia del LLM para usar
+`ToolSearch` en pruebas aleatorias guiadas por enunciado sobre las 25 tools**». Lo entregado no lo era:
+
+- `E2e` prueba el mecanismo de descubrimiento, pero **la llamada a `ToolSearch` la guionó un caller de
+  mentira** (`ToolCallEvent(tool_name="ToolSearch", …)` a mano). El modelo no decide nada ahí.
+- `E2f` prueba solvencia con modelo real, pero **con las 24 anunciadas**: no hay nada oculto, luego
+  `ToolSearch` nunca hace falta y no aparece en ningún `acceptable`.
+
+Es el mismo patrón que la vez anterior: sustituir lo pedido por lo adyacente y más fácil. El propio docstring
+de `E2e` prometía «que un modelo de verdad sepa llegar hasta aquí es `E2f`» — y `E2f` no lo hacía. Puntero
+falso, ahora corregido para apuntar a `E2g`.
+
+#### 1 · `E2g` — el modelo llega solo hasta `ToolSearch`
+
+`test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidden`. Se **difiere el conjunto ENTERO de
+tools capaces** de resolver cada objetivo y se le da al modelo un enunciado cuyo dato sólo se obtiene con una
+de ellas. Nada guionado: tiene que darse cuenta, buscar, leer el schema devuelto e invocar la descubierta.
+
+Lo que impide aprobarlo por accidente:
+
+- **el conjunto entero, no una**: diferir sólo `grep` dejando `bash` a la vista haría que el modelo resolviera
+  sin tocar `ToolSearch` — ese es exactamente el modo de fallo de `E2f` trasladado aquí;
+- **señuelos aleatorios**: cada corrida difiere además 2–3 tools del censo al azar, así que `ToolSearch` tiene
+  que **discriminar** y no le vale devolver «la única diferida»;
+- centinelas `uuid4` por corrida, escenarios barajados, semilla impresa y fijable con `GATE_E2G_SEED`;
+- se asevera que lo necesario **no estaba anunciado en el primer turno**: sin eso, «la usó» no distinguiría
+  descubrimiento de disponibilidad.
+
+#### 2 · Hallazgo que cambió el diseño: con el Azure real, `S26` toma la OTRA rama
+
+La primera corrida salió roja con `el montaje no ocultó lo que debía (['Edit','WebFetch','WebSearch','grep'])`.
+Leyendo (`D-08`, no razonando): `agent_loop.py:168-186` elige la estrategia diferida **por capability del
+provider**, y el `gpt-5` de Azure declara `native_tool_search=True` (`caller.py:151`, catálogo de
+`agentic_models`) ⇒ `NativeDeferredStrategy`, que **anuncia todas** con `defer_loading=True` y **retira
+`ToolSearch`** porque el search lo pone el provider (`deferred_strategy.py:87-88`). Es decir: **la rama que el
+runtime toma en producción con este modelo no es la que se estaba probando**, y correr sólo ésa habría dejado
+`ToolSearch` sin probar con modelo real para siempre.
+
+Por eso `E2g` corre **las dos ramas** por escenario (4 casos):
+
+- **simulada** — se selecciona por su **entrada documentada**, un caller que declara
+  `supports_native_tool_search() → False`, que es literalmente el caso de producción de cualquier provider de
+  terceros; `complete` se delega **intacto** en el Azure real. No se parchea la estrategia.
+- **nativa** — la del caller real, sin tocar.
+
+#### 3 · Las dos ramas se aseveran igual — y hubo que quitar un colchón para llegar ahí
+
+**Primera versión, y era un rebaje:** la solvencia end-to-end se exigía sólo en la simulada, y en la nativa el
+test se limitaba a **imprimir** lo observado, con el argumento de que allí el mecanismo es de la API. El usuario
+lo cortó en el acto —«espero que no estemos en un caso en el cual cada error te lleva a debilitar la prueba
+hasta conseguir que pase […] no hay un después»— y tenía razón. `FIND-E2G-1` es un problema **de ahora**, y un
+`print` dentro de un test verde no lo atiende: lo entierra. Y el argumento era además flojo: **la rama nativa no
+es ajena al runtime, es la que el runtime ELIGE** cuando el catálogo declara `native_tool_search=True`
+(`agent_loop.py:168-186`, `caller.py:151`) ⇒ su solvencia es consecuencia de una decisión del sujeto.
+
+**Versión vigente:** se asevera en las dos. Si la nativa sale roja, el gate está rojo y el tramo no cierra — que
+es la verdad, no un accidente del test.
+
+**Lo medido, entero, sin redondear a mi favor:** el caso `archivos/nativa` falló **2 de las 6 primeras**
+corridas (con `grep`/`bash`/`read_file` diferidas server-side el modelo tiró de `AskUserQuestion` y devolvió
+respuesta vacía, mientras la simulada las descubrió con `ToolSearch` y resolvió las 6). Con el listón puesto en
+las dos ramas van **12 de 12 en verde** (3 + 6 + las de la corrida completa). **No está arreglado y no se
+declara arreglado**: es intermitente, no se ha reproducido desde entonces, y ahora es **load-bearing** — si
+vuelve, pone el gate rojo. `FIND-E2G-1` queda **abierto y vigilado por el propio gate**, no diferido a un
+después.
+
+Lo que además se exige en la nativa es lo que el runtime posee sin discusión: que las diferidas viajen con
+`defer_loading=True` y que `ToolSearch` client-side se retire. Verificado en el paquete, no supuesto:
+`openai_responses_shared.py:225` emite el flag y `:231-232` añade `{"type":"tool_search","execution":"server"}`.
+
+#### 4 · `FIND-E2G-2` — una cancelación que no es del runtime
+
+1 de 6 corridas murió con `CancelledError` **esperando el stream del modelo** (`event_stream.py:55`, vía
+`caller.py:286` ← `agent_loop.py:348`). No lo cancela nada del runtime: `arm_watchdog` es un **no-op**
+(`registry.py:89-92`) y el default es 300 s, pero murió a ~100 s. Sin atribuir. El test ya no revienta con un
+error opaco de asyncio: captura el `CancelledError` —legítimo, porque `await` sobre una tarea **ajena**
+cancelada lo relanza en quien espera sin cancelarlo a él— y lo reporta como fallo del caso **con las tools que
+el modelo había elegido antes de morir**. Diferido y nombrado.
+
+#### 5 · Acreditación por violación inyectada — pasó a la primera, luego había que comprobarlo
+
+Anuncio previo, copia por `sha256` (`3b6baf6c7351f328…67729`), mutación en
+`src/agentic_runtime/tools/deferred.py`: `mark_tools_discovered` deja de marcar. `ToolSearch` sigue devolviendo
+el schema, pero la descubierta **nunca pasa a estar disponible**. Rojo exactamente donde debía, en los dos
+casos simulados:
+
+```
+SOLVENCIA CON ToolSearch (rama simulada): 4 incumplimientos en 2 casos (GATE_E2G_SEED=1745923785)
+  [web/simulada] no llegó a usar ninguna capaz (['WebSearch'])
+      anunciadas_1er_turno=20 elegidas=['Agent', 'ToolSearch']
+      respuesta='No lo encontré en la web con una búsqueda verificable.'
+```
+
+El diagnóstico acredita el eslabón exacto: el modelo **sí llamó a `ToolSearch` por su cuenta** —la elección no
+era el punto débil— y, rota la disponibilidad, **se negó a fabricar el dato**. Revert byte a byte desde la
+copia, `sha256` idéntico y `git status` limpio (**nunca `git checkout`**).
+
+#### 6 · Mediciones (re-corridas enteras, ninguna heredada)
+
+- gate `test_tramo1_gate.py` = **26 passed, 0 skipped, en UNA corrida** (eran 25): `E2` pasa de 7 a **8** piezas.
+  **Sigue siendo 8 de 9: falta sólo `E8`.**
+- `E2g` en verde **12 de 12** corridas con **las dos ramas aseveradas** (antes del rediseño: 3 de 6, por
+  `FIND-E2G-1` y `FIND-E2G-2`).
+- ⚠ **`E1` falló UNA vez en corrida completa** con `Object of type Summary is not JSON serializable`
+  (`agent_loop.py:390`, error del modelo), y **no se tocó nada**: pasa 2 de 2 aislado y las 3 corridas completas
+  posteriores dieron 26/26. Mismo olor que `FIND-E2G-2` — el borde con el provider es intermitente. Queda dicho
+  aquí en vez de esperar a que muerda a otro.
+- `ruff` = **505** — cero deuda neta. Las 2 brutas nuevas se pagaron enteras (`I001` por el `import asyncio`
+  fuera de orden y un `RUF100`: mi `# noqa: T201` sobraba porque `T201` no está habilitada).
+- suite completa = **704 passed / 3 skipped / 112 xfailed / 0 failed**. Los 3 skips son de entorno
+  (`python-docx` ausente, `/tmp/skills` vacío), ninguno del gate.
+- `mypy --strict` = **138 errores / 54 ficheros** (sin cambio).

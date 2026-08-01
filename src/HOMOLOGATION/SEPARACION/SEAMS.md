@@ -86,7 +86,7 @@
 | S23 | `on_agent_teardown(agent_id)` (reaping) | T2-COSTURA | ausente | 05·E35 |
 | S24 | `arm_watchdog` (timeout/watchdog) | T2-COSTURA | existe-noop | 01·CTR-15 · 05 · 16·B4 |
 | S25 | `AgentDefinition` (contrato ampliado) | T1-CONTRATO + costura | existe-parcial | 05·E28/E22 |
-| S26 | `DeferredToolStrategy` | T2-BASE-MECANISMO (+T1-MOTOR) | existe-fiel (`C5` 2026-08-01: verificada CORRIENDO — `E2b`, deferred = visibilidad) | 09·E1-E10 |
+| S26 | `DeferredToolStrategy` | T2-BASE-MECANISMO (+T1-MOTOR) | existe-fiel (`C5` 2026-08-01: verificada CORRIENDO — `E2b` visibilidad, `E2e` descubrimiento, `E2g` **las dos ramas** con modelo real; `FIND-E2G-1`/`-2` abiertos) | 09·E1-E10 |
 | S27 | deps-DI seam (constructor) | T2-COSTURA (test) | existe-fiel | 02·E6 |
 | S30 | `PromptSourceProtocol` (entrada no-textual, pre-loop) | T2-COSTURA (AÑADIDA A3.CAT) | existe-horneada | 17·C1/§2.7 · `BATTERIES §4.5` |
 | S31 | `SpeechSink` (salida hablada sobre S5) | T2-COSTURA (AÑADIDA A3.CAT) | existe-horneada | 17·§2.7 · `BATTERIES §4.5` · K4 |
@@ -474,6 +474,34 @@
   centinelas `uuid4` por corrida y escenarios barajados, así que un acierto no puede venir del conocimiento paramétrico
   ni de una corrida anterior. Acreditado con **violación inyectada** (SERP con un código distinto ⇒ rojo), que además
   midió que con 24 tools delante el modelo **sí elige `WebSearch`** y **se niega a fabricar** el dato que no cuadra.
+- **acreditación de la SOLVENCIA CON `ToolSearch` (2026-08-01, `E2g`) — y la rama que de verdad se toma:** `E2e` guionaba la
+  llamada a `ToolSearch` con un caller de mentira y `E2f` corre con las 24 anunciadas, así que **ningún test tenía al modelo
+  decidiendo buscar**. `E2g` lo cierra: se difiere el **conjunto entero** de tools capaces de resolver el objetivo (diferir una
+  sola dejaría resolver por la alternativa sin tocar `ToolSearch`) más **2–3 señuelos aleatorios** del censo, para que el search
+  tenga que **discriminar**. Al escribirlo salió un hallazgo que cambió el diseño: **`agent_loop.py:168-186` elige la estrategia
+  por capability del provider**, y el `gpt-5` de Azure declara `native_tool_search=True` (`caller.py:151`) ⇒ toma
+  `NativeDeferredStrategy`, que anuncia **todas** con `defer_loading=True` y **retira `ToolSearch`**
+  (`deferred_strategy.py:87-88`) — es decir, la rama que el runtime usa en producción con este modelo **no era la que se estaba
+  probando**. `E2g` corre **las dos, aseverando las dos**: la simulada se selecciona por su **entrada documentada** (un caller que declara
+  `supports_native_tool_search() → False`, caso real de todo provider de terceros) con `complete` delegado **intacto** en el
+  Azure real, sin parchear la estrategia. Acreditado con **violación inyectada** (`mark_tools_discovered` deja de marcar ⇒ rojo),
+  que midió el eslabón exacto: el modelo **sí llama a `ToolSearch` por su cuenta** y, rota la disponibilidad de la descubierta,
+  **se niega a fabricar** el dato.
+- **⚠ `FIND-E2G-1`, medido, ABIERTO y vigilado por el gate (no diferido):** el tool-search **server-side** de esta deployment se
+  mostró **menos solvente** que el `ToolSearch` client-side del runtime: en las 6 primeras corridas el caso `archivos/nativa`
+  falló **2** (con `grep`/`bash`/`read_file` diferidas server-side el modelo tiró de `AskUserQuestion` y devolvió respuesta
+  vacía) mientras la simulada resolvía **6 de 6**. La primera versión de `E2g` sólo lo **imprimía** — un colchón, retirado: la
+  rama nativa **no es ajena al runtime**, es la que el runtime **elige** cuando el catálogo declara `native_tool_search=True`
+  (`agent_loop.py:168-186`, `caller.py:151`), así que su solvencia es consecuencia de una decisión del sujeto y **se asevera**.
+  Con el listón en las dos ramas van **12 de 12** en verde: **no está arreglado**, es intermitente y no se ha reproducido, pero
+  ahora es load-bearing — si vuelve, el gate se pone rojo. Además se exige lo que el runtime posee sin discusión:
+  `defer_loading=True` en el cable y `ToolSearch` client-side retirado, con `openai_responses_shared.py:225,231-232` **leído**
+  (emite el flag y añade `{"type":"tool_search","execution":"server"}`).
+- **⚠ `FIND-E2G-2`, medido, NO atribuido y nombrado (`L07`):** 1 de 6 corridas murió con `CancelledError` **esperando el stream del
+  modelo** (`event_stream.py:55` ← `caller.py:286` ← `agent_loop.py:348`). **Nada del runtime cancela**: `arm_watchdog` es un
+  **no-op** (`registry.py:89-92`) y el default es 300 s, pero murió a ~100 s. `E2g` ya no revienta con un error opaco de asyncio:
+  captura el `CancelledError` —legítimo, porque `await` sobre una tarea **ajena** cancelada lo relanza en quien espera sin
+  cancelarlo a él— y lo reporta como fallo del caso **con las tools que el modelo había elegido antes de morir**.
 - **⚠ `S26` no tiene sujeto nativo en producción:** **ninguna** tool nativa marca `deferred` (`grep -c "deferred = True"
   tools/native/*.py` = **cero**). El único sujeto real es MCP (`capabilities/mcp/tool_adapter.py:30`, a mano), tal como
   `09·E1` anticipaba. Lo que difiere `WebFetch`/`WebSearch` en el canónico es `shouldDefer` dentro de la precedencia de
