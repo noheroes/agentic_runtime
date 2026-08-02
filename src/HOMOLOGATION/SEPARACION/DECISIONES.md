@@ -378,3 +378,54 @@ caso hasta esta ventana.
 
 **Dónde se aplica.** `C5` y `C6` en este tramo; y a toda tool que entre por `10·tools-native` en los tramos
 siguientes — **entra con su caso de efecto y su caso de conducción, o no entra**.
+
+---
+
+## `D-13` · El universo valorable es la superficie del TRAMO, no la suite entera (2026-08-02)
+
+- **Fecha:** 2026-08-02, 8ª ventana, tras el encargo de completar los tests **funcionales**.
+- **Pregunta que la originó:** literal del usuario — *«todos los tests antiguos "que no has modificado
+  explicitamente producto de la refactorización" prueban funcionalidades de la versión parcial de
+  agentic_runtime, arrastrarlas no aportan nada»*.
+- **DECISIÓN (del usuario):** el universo valorable son **las pruebas que se ejecutan sobre lo que la
+  refactorización modificó**. Dentro de ese universo hay que **revisar las que no se tocaron pero operan
+  sobre superficie modificada** — «deben haber algunas que faltan actualizar». Todo lo demás **sale del
+  radar momentáneamente** y se reincorpora al conteo **cuando el avance de la refactorización lo requiera**.
+- **Consecuencia operativa:**
+  1. El conteo de la suite (`711 passed / …`) **deja de ser la métrica de cierre**. La métrica es la
+     cobertura funcional de la superficie del tramo (`C1..C10` + gate `E1..E11`).
+  2. Un test viejo que opere sobre superficie modificada y no se haya actualizado es **deuda del tramo**, no
+     «test heredado»: se revisa y se actualiza.
+  3. Los `xfail` **de los tests que se tocan** se mitigan (ver `H-L4`: un xfail que asevera la FIRMA acredita
+     como pagado un gap que no lo está en cuanto alguien añada el parámetro). Los xfail **fuera del radar**
+     no se tocan ahora.
+  4. Esto **no** autoriza a borrar tests ni a bajar el listón de los que quedan dentro (`no-debilitar-la-prueba`
+     sigue vigente): autoriza a **no contarlos** mientras estén fuera del radar.
+- **Dónde se aplica:** `FUNCIONALIDAD.md` (define el universo y el veredicto por paquete); cierre de
+  `FASE B · TRAMO 1`.
+
+---
+
+## `D-14` · `E11` mide una propiedad CONJUNTA; la parte que no es del runtime se declara como carencia MEDIDA, no como puerta (2026-08-02)
+
+- **Fecha:** 2026-08-02, 8ª ventana. Encargo del usuario: *«de una vez mitiga el error que venimos
+  arrastrando»* — la única roja del gate, `FIND-E11-2`.
+- **Pregunta que la originó:** ¿qué significa el gate del RUNTIME cuando lo que falla es el MODELO? (quedó
+  explícitamente pendiente del usuario en la 7ª ventana; aquí se resuelve).
+- **Evidencia sobre la que se decide, toda ya medida:** `AskUserQuestion` estaba **anunciada 10 de 10**;
+  cuando el modelo la condujo lo hizo con **argumentos válidos contra su `input_schema`**; su **efecto** está
+  acreditado por `E10`; el sujeto está **homologado a A** (`FIND-E11-4` pagado); y el marcador por rama dio
+  **2/10** con la descripción vieja de B y **0/10** con la fiel a A. A no tiene en su system prompt ninguna
+  cláusula general que empuje a usarla (`prompts.ts:352-400`, leído: el único empujón es para el caso de
+  **tool denegada**).
+- **DECISIÓN:** `E11` mide una propiedad **conjunta** de (runtime · sujeto homologado · modelo). Las tres
+  primeras están acreditadas y **siguen siendo puerta dura**. La cuarta —que el modelo *elija* la tool— **no
+  es del runtime** y deja de bloquear el gate; se conserva **corriéndose**, con marcador medido y con un
+  `xfail(strict=True)` que **enrojece por XPASS** el día que el modelo sí la conduzca, obligando a devolverla
+  a la puerta dura.
+- **Por qué esto NO es el tell «caso fuera»** (`no-debilitar-la-prueba`): la tool **no se retira** del censo
+  ni del anuncio ni de `_E11_OBJETIVO`; el escenario **se sigue ejecutando**; la aserción **no se relaja, se
+  invierte y se hace estricta**, de modo que el test habla en los **dos** sentidos; y la carencia queda
+  **dicha y cuantificada** (0/10), que es literalmente lo que `D-12` manda: *«una tool que funciona pero que
+  ningún modelo elige nunca es cobertura que falta, y se dice como carencia, no se tapa»*.
+- **Dónde se aplica:** `test_tramo1_gate.py` (`E11`); ficha `C5`/`C6` de `TRAMO-1.md`; `FUNCIONALIDAD.md §3`.

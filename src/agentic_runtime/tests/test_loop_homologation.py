@@ -17,7 +17,6 @@ Primera pasada: solo documentar — no se ajusta el runtime para hacerlos pasar.
 from __future__ import annotations
 
 import asyncio
-import inspect
 
 import pytest
 
@@ -25,7 +24,7 @@ from agentic_runtime.contracts.abort import AbortController
 
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.user_input import ProcessedInput
-from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
+from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.loop.outcome import LoopEndReason
 from agentic_runtime.hooks import HookEvent
 from agentic_runtime.hooks.protocol import HookDecision
@@ -378,10 +377,14 @@ async def test_loop_abort_between_turns_stops_reprompt():
         tool_dispatcher=ToolDispatcher(),
     )
     ctx = _ctx(stop=AbortController())
-    await loop.run("trabaja", ctx)
+    outcome = await loop.run("trabaja", ctx)
 
     assert len(caller.seen_messages) == 1  # solo el 1er turno llegó al modelo
     assert tool.calls == [{"text": "x"}]
+    # `H-L3`: el corte tiene NOMBRE, y es el de la frontera de vuelta — no el del
+    # corte a mitad de stream ni el pre-run. El integrador decide por este código.
+    assert outcome.reason is LoopEndReason.ABORTED_TOOLS
+    assert outcome.aborted is True
 
 
 async def test_loop_max_turns_ceiling_bounds_runaway():
@@ -399,9 +402,15 @@ async def test_loop_max_turns_ceiling_bounds_runaway():
         tool_dispatcher=ToolDispatcher(),
     )
     ctx = _ctx()
-    await loop.run("loop", ctx)
+    outcome = await loop.run("loop", ctx)
 
     assert ctx.turn_count == _MAX_TURNS  # cortó en el techo, no siguió
+    # `H-L3`: agotar el techo no es «completado». El canónico lo distingue con su
+    # propio reason-code y adjunta el tope (`query.ts:1705-1711`); B también, y hasta
+    # ahora nadie lo aseveraba — un loop que cerrara por COMPLETED pasaba igual.
+    assert outcome.reason is LoopEndReason.MAX_TURNS
+    assert outcome.detail == str(_MAX_TURNS)
+    assert outcome.aborted is False  # agotar vueltas no es un abort
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -558,10 +567,39 @@ async def test_loop_outcome_distinguishes_missing_model_caller():
     "FallbackTriggeredError → reintento con otro modelo). Un ErrorEvent corta sin "
     "recuperación. Ver 02-loop.md.",
 )
-def test_loop_accepts_fallback_model():
-    """Homologado: el loop resuelve un fallback cuando el modelo primario falla."""
-    params = inspect.signature(AgentLoop.__init__).parameters
-    assert "fallback_model" in params
+async def test_loop_recupera_con_modelo_de_fallback():
+    """Homologado: el loop resuelve un fallback cuando el modelo primario falla.
+
+    ⚠ `H-L4` — reescrito 2026-08-02 de FIRMA a COMPORTAMIENTO. Antes decía
+    `assert "fallback_model" in inspect.signature(AgentLoop.__init__).parameters`, y ese
+    xfail acredita el gap como pagado en cuanto **alguien añada el parámetro sin
+    implementar nada**: pasa a XPASS ⇒ rojo ⇒ «gap cerrado» sin que el loop recupere de
+    nada. Un gap se fija por el comportamiento ausente, no por el parámetro ausente
+    (mismo criterio que `test_loop_accepts_configurable_max_turns`, abajo).
+    """
+    intentos: list[str] = []
+
+    class _CallerQueFallaUnaVez:
+        async def complete(self, messages, tools, *, stop=None, model_id="", **kw):
+            intentos.append(model_id)
+
+            async def _gen():
+                if len(intentos) == 1:
+                    yield ErrorEvent(message="primario caído")
+                else:
+                    yield TokenEvent(content="respondido por el fallback")
+                    yield DoneEvent(stop_reason="stop")
+
+            return _gen()
+
+    loop = AgentLoop(model_caller=_CallerQueFallaUnaVez(), model_id="primario")
+    ctx = _ctx()
+    outcome = await loop.run("x", ctx)
+
+    # Lo que un loop homologado haría: reintentar con el otro modelo y COMPLETAR.
+    assert len(intentos) == 2, f"no reintentó con el fallback (intentos={intentos})"
+    assert outcome.reason is LoopEndReason.COMPLETED
+    assert "fallback" in ctx.messages[-1]["content"]
 
 
 @pytest.mark.xfail(
@@ -570,10 +608,31 @@ def test_loop_accepts_fallback_model():
     "autocompact/snip + presupuesto). CompactionProvider (contracts) existe pero el "
     "loop no lo consulta. Ver 02-loop.md.",
 )
-def test_loop_wires_compaction_engine():
-    """Homologado: el loop dispara compactación por umbral/presupuesto de tokens."""
-    params = inspect.signature(AgentLoop.__init__).parameters
-    assert "compaction_provider" in params or "compaction" in params
+async def test_loop_compacta_el_historial_al_exceder_el_presupuesto():
+    """Homologado: el loop compacta cuando el historial excede el presupuesto.
+
+    ⚠ `H-L4` — reescrito 2026-08-02 de FIRMA a COMPORTAMIENTO, por el mismo motivo que
+    el de arriba: `assert "compaction_provider" in params` se satisface añadiendo un
+    parámetro que nadie consulta. Lo que se asevera es el EFECTO: que el historial deje
+    de crecer sin límite a lo largo de los turnos.
+    """
+    tool = RecordingTool()
+    caller = ScriptedCaller([_tool_call_turn("echo", "x" * 4000, f"c{i}") for i in range(30)])
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_registry(tool),
+        tool_dispatcher=ToolDispatcher(),
+        max_turns=30,
+    )
+    ctx = _ctx()
+    await loop.run("trabaja largo", ctx)
+
+    # Con 30 vueltas de mensajes de 4 kB, un loop con motor de compactación no arrastra
+    # el historial entero hasta el final. Hoy `ctx.messages` crece monótonamente.
+    assert len(ctx.messages) < 30, (
+        f"el historial creció sin compactar ({len(ctx.messages)} mensajes): "
+        "no hay motor de compactación"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

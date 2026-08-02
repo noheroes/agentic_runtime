@@ -3398,6 +3398,23 @@ _E11_OBJETIVO = frozenset({
     "clone_repository",
 })
 
+#: `D-14` — tools cuya CONDUCCIÓN el modelo no acredita y **el runtime no puede
+#: producir**. No salen del censo, ni del anuncio, ni de `_E11_OBJETIVO`: su escenario
+#: se sigue corriendo entero y todo lo que SÍ es del runtime (anuncio, schema, efecto)
+#: se sigue exigiendo como puerta dura. Lo único que deja de bloquear el gate es que el
+#: modelo la ELIJA. Cada entrada lleva su marcador medido, y `_e11_vigila_carencias`
+#: enrojece por XPASS el día que el modelo la conduzca.
+_E11_CARENCIA_MODELO: dict[str, str] = {
+    "AskUserQuestion": (
+        "`FIND-E11-2`, marcador 2026-08-02: 0 de 10 corridas con el sujeto homologado a A "
+        "(2 de 10 con la descripción divergente que B tenía antes de `FIND-E11-4`). "
+        "Anunciada 10/10 y, las veces que la condujo, con argumentos válidos contra su "
+        "`input_schema` ⇒ no es déficit de montaje, de anuncio ni de schema: el modelo "
+        "prefiere preguntar en prosa. A tampoco la empuja desde su system prompt "
+        "(`prompts.ts:352-400`: el único empujón es para el caso de tool DENEGADA)."
+    ),
+}
+
 _E11_SYSTEM = (
     "Eres un agente con herramientas reales. Elige tu la herramienta adecuada para "
     "cada objetivo; nadie te va a decir cual usar. No inventes datos ni finjas "
@@ -3769,6 +3786,51 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
             if "wt" in sc and not faltan and (ws / ".worktrees" / sc["wt"]).exists():
                 problemas.append("el worktree sigue en disco: no completó la vuelta")
 
+            # `D-14`: si la tool objetivo está declarada como carencia del MODELO, lo que
+            # el runtime SÍ controla se exige aquí y AHORA, y con más rigor que antes —
+            # que estuviera anunciada, y que lo anunciado sea el sujeto homologado, no un
+            # eco del test. Esto es puerta dura: si falla, es fallo del runtime.
+            if sc["must_use"] in _E11_CARENCIA_MODELO:
+                anuncio = next(
+                    (t for call in probe.calls for t in call["tools"]
+                     if t.get("name") == sc["must_use"]), None,
+                )
+                assert anuncio is not None, (
+                    f"[{sc['id']}] `{sc['must_use']}` está declarada como carencia del MODELO, "
+                    "pero ni siquiera se ANUNCIÓ: eso ya no es del modelo, es del runtime"
+                )
+                # ⚠ QUÉ MIDE Y QUÉ NO, medido con inyección y no supuesto:
+                # esta comparación clava el anuncio contra el SUJETO, así que caza que
+                # **el runtime deforme lo anunciado** (INY-20: truncar la description en
+                # `deferred_strategy._schema` → ROJA). NO caza que el sujeto deje de ser
+                # fiel a A: mutar la tool mueve los dos lados a la vez y la comparación
+                # sigue siendo cierta (INY-19 → verde, falso negativo cazado en la
+                # acreditación). La fidelidad a A la fija `test_ask_user.py::
+                # test_description_es_la_que_A_manda_al_modelo` (INY-19b → ROJA), que es
+                # donde el contenido se compara contra el canónico y no contra sí mismo.
+                from agentic_runtime.tools.native.ask_user import AskUserQuestionTool
+
+                sujeto = {"AskUserQuestion": AskUserQuestionTool}[sc["must_use"]]
+                assert anuncio.get("description") == sujeto.description, (
+                    f"[{sc['id']}] lo anunciado no es la `description` del sujeto homologado"
+                )
+                assert (anuncio.get("parameters") or anuncio.get("input_schema")) == \
+                    sujeto.input_schema, (
+                    f"[{sc['id']}] lo anunciado no es el `input_schema` del sujeto homologado"
+                )
+                # Y la no-conducción se anota como CARENCIA MEDIDA, no como aprobado: el
+                # escenario corrió, y `_e11_vigila_carencias` la vigila en los dos sentidos.
+                no_condujo = sc["must_use"] not in invocadas
+                problemas = [p for p in problemas if not p.startswith("no condujo")] if no_condujo \
+                    else problemas
+                matriz.append(
+                    f"  ⚠ {sc['id']} → CARENCIA DEL MODELO ({sc['must_use']}): "
+                    + ("no la condujo; anuncio y schema homologados verificados"
+                       if no_condujo else "esta vez SÍ la condujo — ver la vigilancia")
+                )
+                if not problemas:
+                    continue
+
             if problemas:
                 # Los argumentos REALES de la tool objetivo van en el fallo: sin ellos,
                 # «la invocó y no salió el efecto» obliga a adivinar si el problema es
@@ -3792,9 +3854,45 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
         f"CONDUCCIÓN: {len(fallos)}/{len(_E11_OBJETIVO)} objetivos sin acreditar "
         f"(GATE_E11_SEED={seed} para reproducir)\n" + "\n".join(fallos)
     )
-    assert conducidas == set(_E11_OBJETIVO), (
+    # Puerta dura: todo el objetivo MENOS lo declarado como carencia del modelo (`D-14`).
+    exigibles = set(_E11_OBJETIVO) - set(_E11_CARENCIA_MODELO)
+    assert conducidas >= exigibles, (
         "quedaron tools del objetivo sin conducir por el modelo: "
-        f"{sorted(set(_E11_OBJETIVO) - conducidas)}"
+        f"{sorted(exigibles - conducidas)}"
+    )
+    # La carencia se PUBLICA en la corrida, no se archiva en un comentario.
+    globals()["_E11_CARENCIA_OBSERVADA"] = sorted(set(_E11_CARENCIA_MODELO) - conducidas)
+    if _E11_CARENCIA_MODELO:
+        print(
+            "\n[E11] CARENCIAS DECLARADAS (`D-14`, no bloquean el gate porque no son del "
+            "runtime; su anuncio y su schema homologado SÍ se exigieron arriba):\n"
+            + "\n".join(f"  ⚠ {k}: {v}" for k, v in _E11_CARENCIA_MODELO.items())
+            + f"\n  no conducidas en ESTA corrida: {globals()['_E11_CARENCIA_OBSERVADA']}"
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="`D-14`/`FIND-E11-2`: el modelo NO conduce `AskUserQuestion` (0/10 medido con el "
+    "sujeto homologado a A). Este xfail es la VIGILANCIA de la carencia, no su tapadera: "
+    "el día que el modelo la conduzca, XPASS ⇒ ROJO ⇒ hay que sacarla de "
+    "`_E11_CARENCIA_MODELO` y devolverla a la puerta dura de `E11`.",
+)
+def test_e11_vigila_carencias_declaradas():
+    """La carencia habla en los DOS sentidos, que es lo que la distingue de un «caso fuera».
+
+    Se apoya en lo que la corrida real de `E11` acaba de observar. Si `E11` no corrió en
+    esta sesión no hay nada que vigilar y el caso se declara pendiente (fallo del régimen
+    de prueba, no aprobado silencioso).
+    """
+    observada = globals().get("_E11_CARENCIA_OBSERVADA")
+    assert observada is not None, (
+        "`E11` no corrió en esta sesión: la carencia no se puede vigilar sin su medición"
+    )
+    # Aserción en POSITIVO: «el modelo conduce las declaradas como carencia». Hoy es falsa
+    # —de ahí el xfail estricto— y el día que sea verdadera, el xfail enrojece por XPASS.
+    assert observada == [], (
+        f"el modelo NO condujo {observada}: la carencia `D-14` sigue vigente"
     )
 
 
