@@ -27,6 +27,20 @@ logger = logging.getLogger(__name__)
 _MAX_TURNS = 50  # techo de seguridad por DEFECTO — `max_turns` del constructor lo sustituye
 
 
+def _vacio(valor: Any) -> bool:
+    """¿El campo viene sin poblar? (`FIND-LOOP-1`, ver `_adoptar_ctx_modificado`).
+
+    Un fork ingenuo del ctx no deja los campos en `None`: los deja en su
+    `default_factory` —lista vacía, dict vacío—, que es justo lo que hace que la
+    pérdida sea invisible. Por eso «vacío» incluye el contenedor sin elementos.
+    """
+    if valor is None:
+        return True
+    if isinstance(valor, (list, dict, tuple, set, str)):
+        return len(valor) == 0
+    return False
+
+
 def _aborted(ctx: ToolUseContext) -> bool:
     """`S2`: la señal se CONSULTA (`.aborted`), no se espera.
 
@@ -144,6 +158,50 @@ class AgentLoop:
             native_tools=[t for t in pool.native_tools if t.name in names],
             capability_tools=[t for t in pool.capability_tools if t.name in names],
         )
+
+    def _adoptar_ctx_modificado(
+        self, devuelto: ToolUseContext, vivo: ToolUseContext, tool_name: str
+    ) -> ToolUseContext:
+        """Adopta el ctx de un `context_modifier` sin perder el estado del turno.
+
+        `FIND-LOOP-1`. El canónico no tiene este agujero **por construcción**: su único
+        modifier real deriva por spread (`modifiedContext = {...modifiedContext, …}`,
+        `SkillTool.ts:773-800`), así que un fork no puede dejar campos atrás. En B el ctx
+        es un modelo con `default_factory` en casi todo, luego `ToolUseContext(session_id=…)`
+        construido desde cero es válido **y mudo**: el pool sale vacío y las tool calls que
+        quedaban del turno mueren con «no encontrado en el tool pool», indistinguibles de
+        una tool que el modelo se inventó.
+
+        Dos garantías, y ninguna es heurística:
+
+        - `tool_pool` se **repone**. Es estado del turno cuyo dueño es el loop (lo puebla
+          en `_build_tool_pool`) y ningún modifier lo fija: restringir el toolset se hace
+          por `app_state`, y el pool se re-deriva al turno siguiente — igual que en A,
+          donde la restricción de un modifier tampoco alcanza a las calls ya en vuelo.
+        - lo demás sólo se **avisa**. `stop`/`event_queue`/`storage`/`fs`/`exec_env` los
+          cablea el integrador y el loop no es su dueño, así que no los repone; pero
+          perderlos deja de ser silencioso, que era el adjetivo del hallazgo.
+
+        `tool_pool` no necesita excluirse del barrido de perdidos: cuando se llega a él ya
+        está repuesto, y un `ToolPool` no es contenedor, luego `_vacio` nunca lo marca. Una
+        guarda explícita habría sido una línea que ninguna prueba podría enrojecer.
+        """
+        if devuelto is vivo:
+            return devuelto
+        devuelto.tool_pool = vivo.tool_pool
+        perdidos = sorted(
+            nombre
+            for nombre in type(vivo).model_fields
+            if _vacio(getattr(devuelto, nombre, None))
+            and not _vacio(getattr(vivo, nombre, None))
+        )
+        if perdidos:
+            logger.warning(
+                "AgentLoop: el context_modifier de %s devolvió un ctx forkeado que "
+                "no arrastra %s; el turno continúa con esos cables vacíos.",
+                tool_name, ", ".join(perdidos),
+            )
+        return devuelto
 
     def _inject_recall(self, ctx: ToolUseContext) -> None:
         """Inyecta el recall del manager como `<system-reminder>` (role:"user").
@@ -452,7 +510,8 @@ class AgentLoop:
                 ))
                 # Aplica el context_modifier que la tool haya producido (skills →
                 # allowed-tools/skill activa; worktree/plan_mode → estado nativo).
-                # Convención: el modifier muta ctx in-place y lo retorna (no forka).
+                # La convención es mutar in-place y retornar, pero forkar está soportado
+                # y ya NO cuesta el turno: `_adoptar_ctx_modificado` (`FIND-LOOP-1`).
                 # Lectura del miembro DECLARADO en `ToolResult` (`FIND-TOOL4/A24` pagado):
                 # antes se sondeaba por `getattr` porque el contrato no lo tenía y las tools
                 # lo inyectaban por monkeypatch. El `getattr` sobre `result` se conserva sólo
@@ -460,9 +519,11 @@ class AgentLoop:
                 modifier = result.context_modifier
                 if modifier is not None:
                     try:
-                        ctx = modifier(ctx) or ctx
+                        devuelto = modifier(ctx) or ctx
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("AgentLoop: context_modifier de %s falló: %s", tc.tool_name, exc)
+                    else:
+                        ctx = self._adoptar_ctx_modificado(devuelto, ctx, tc.tool_name)
                 if result.ends_turn:
                     _ends_turn = True
                 logger.debug(

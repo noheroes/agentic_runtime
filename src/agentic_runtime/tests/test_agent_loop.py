@@ -1,5 +1,7 @@
 """Tests para runtime/loop/AgentLoop — ciclo real LLM → tools → acumula."""
 import asyncio
+import logging
+
 import pytest
 
 from agentic_runtime.contracts.abort import AbortController
@@ -661,28 +663,28 @@ async def test_si_el_modifier_devuelve_OTRO_ctx_el_loop_se_queda_con_ese():
 
 
 @pytest.mark.asyncio
-async def test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_mata_las_tool_calls_restantes():
-    """`FIND-LOOP-1` (**medido, no supuesto** — este test nació rojo al escribirlo).
+async def test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_no_mata_las_tool_calls_restantes():
+    """`FIND-LOOP-1` **PAGADO** (el test nació rojo midiendo la conducta contraria).
 
     El loop soporta que el modifier devuelva OTRO ctx (`ctx = modifier(ctx) or ctx`),
-    pero `ctx.tool_pool` es estado **del turno** que el loop pobló antes de despachar. Un
-    modifier que forka sin arrastrarlo deja al dispatcher resolviendo contra un pool
-    vacío: las tool calls que quedaban del mismo turno fallan con «no encontrado en el
-    tool pool» — y fallan **en silencio**, como un resultado de tool más, no como un
-    error de cableado.
+    pero `ctx.tool_pool` es estado **del turno** cuyo dueño es el loop (lo puebla en
+    `_build_tool_pool`). Un modifier que forkaba sin arrastrarlo dejaba al dispatcher
+    resolviendo contra un pool VACÍO: las tool calls que quedaban del mismo turno morían
+    con «no encontrado en el tool pool» — y morían **en silencio**, como un resultado de
+    tool más, no como un error de cableado.
 
-    Se documenta la conducta REAL en vez de aseverar la deseable: el runtime no promete
-    hoy portar el pool, y la convención declarada es no forkar. Queda abierto en
-    `FUNCIONALIDAD.md §3`; el día que se pague, este test cambia de aserción y su rojo
-    dirá exactamente qué se arregló.
+    El canónico no tiene el agujero por construcción: su único modifier real deriva por
+    spread (`SkillTool.ts:773-800`), así que un fork no puede dejar campos atrás. En B el
+    ctx es un modelo con `default_factory` en casi todo, luego el fork parcial es válido
+    y mudo. El loop repone ahora lo que él posee.
     """
     visto: list = []
-    huerfano = ToolUseContext(session_id="s1")  # sin tool_pool del turno
+    huerfano = ToolUseContext(session_id="s1")  # fork ingenuo: sin tool_pool del turno
 
     espia = _tool_con_modifier("espia", None)
 
     async def _execute_espia(input, ctx):
-        visto.append("ejecutada")
+        visto.append(ctx is huerfano)
         return ToolResult(tool_name="espia", output="visto")
 
     espia.execute = _execute_espia
@@ -700,11 +702,48 @@ async def test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_mata_las_tool_calls_restantes
     )
     await loop.run("forka y espía", ctx)
 
-    assert visto == [], "conducta REAL: la tool siguiente no llega a ejecutarse"
-    # …y el rastro queda en el historial del ctx HUÉRFANO, no en el que el llamante tiene.
+    # 1) la tool que quedaba del turno se ejecuta, y lo hace sobre el ctx que el
+    #    modifier impuso — el arreglo repone el pool, no revierte el fork.
+    assert visto == [True], "la tool siguiente al fork tiene que ejecutarse"
+    # 2) y no queda ningún resultado-de-tool fallido haciéndose pasar por respuesta.
     fallidos = [m for m in huerfano.messages
                 if m.get("role") == "tool" and "no encontrado en el tool pool" in m["content"]]
-    assert len(fallidos) == 1
+    assert fallidos == [], "el fallo silencioso era exactamente esto"
+    # 3) control de que el pool repuesto es el del turno, no uno vacío recién nacido.
+    assert huerfano.tool_pool is ctx.tool_pool
+
+
+@pytest.mark.asyncio
+async def test_FIND_LOOP_1_un_fork_que_pierde_otros_cables_deja_de_ser_silencioso(caplog):
+    """Lo que el loop NO posee no se repone —`stop`/`event_queue`/`storage`/`fs` los
+    cablea el integrador— pero perderlos deja de ser mudo, que era el adjetivo del
+    hallazgo. Sin este aviso, un fork ingenuo seguiría dejando el turno sin señal de
+    abort y sin cola de eventos sin que nada lo dijera."""
+    huerfano = ToolUseContext(session_id="s1")
+
+    caller = _make_caller(
+        ToolCallEvent(tool_name="forka", tool_input={}, call_id="c1"),
+        DoneEvent(stop_reason="stop"),
+    )
+    ctx = _make_ctx()
+    ctx.storage = object()  # cable del integrador, poblado en el ctx vivo
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_make_registry(_tool_con_modifier("forka", lambda c: huerfano)),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    with caplog.at_level(logging.WARNING, logger="agentic_runtime.loop.agent_loop"):
+        await loop.run("forka", ctx)
+
+    avisos = [r.getMessage() for r in caplog.records if "no arrastra" in r.getMessage()]
+    assert len(avisos) == 1, f"un aviso y sólo uno; hubo {len(avisos)}"
+    assert "storage" in avisos[0], "cable en `None`: el caso obvio"
+    # …y el caso que hace invisible la pérdida: el fork no deja el campo en `None`, lo deja
+    # en su `default_factory`. Un historial vacío frente a uno poblado también es pérdida.
+    assert "messages" in avisos[0], "contenedor en su default: la mitad que no se ve"
+    assert "forka" in avisos[0], "el aviso tiene que nombrar la tool culpable"
+    # control negativo: el campo que SÍ se repone no puede aparecer como perdido.
+    assert "tool_pool" not in avisos[0]
 
 
 @pytest.mark.asyncio
