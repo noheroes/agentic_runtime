@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from agentic_runtime.contracts.runtime import RuntimeTask
-from agentic_runtime.events import DoneEvent
+from agentic_runtime.events import DoneEvent, ToolCallEvent
 from agentic_runtime.execution.agents import AgentDefinition
 from agentic_runtime.factory import (
     RuntimeConfig,
@@ -49,7 +49,7 @@ class _RecordingCaller:
         return gen()
 
 
-def _tool(name: str):
+def _tool(name: str, *, safe_for_background: bool = True):
     class _T:
         pass
 
@@ -59,10 +59,14 @@ def _tool(name: str):
     t.input_schema = {"type": "object", "properties": {}}
     t.category = ToolCategory.UTILITY
     t.requires_permission = False
-    t.safe_for_background = True
+    t.safe_for_background = safe_for_background
     t.timeout_seconds = 5.0
+    # Testigo de EJECUCIÓN: el filtro del pool afirma cortar el anuncio **y** la
+    # ejecución; sin este registro sólo se puede aseverar lo primero.
+    t.executed = []
 
     async def _execute(input, ctx):
+        t.executed.append(input)
         return ToolResult(tool_name=name, output="")
 
     t.execute = _execute
@@ -107,6 +111,106 @@ async def test_loop_wildcard_announces_all():
     )
     await loop.run("hi", ToolUseContext(session_id="s1"))
     assert {"alpha", "bravo"} <= set(caller.tool_names)
+
+
+class _CallingCaller:
+    """Pide una tool por nombre y termina. Registra lo anunciado en cada turno."""
+
+    def __init__(self, tool_name: str) -> None:
+        self._tool_name = tool_name
+        self.tool_names: list[str] = []
+
+    async def complete(
+        self, messages, tools, *, stop=None, model_id="", system_sections=None,
+        system_override=None,
+    ):
+        self.tool_names = [t["name"] for t in tools]
+
+        async def gen():
+            yield ToolCallEvent(tool_name=self._tool_name, tool_input={}, call_id="c1")
+            yield DoneEvent(stop_reason="stop")
+
+        return gen()
+
+
+async def test_la_restriccion_corta_tambien_la_EJECUCION_no_solo_el_anuncio():
+    """`_restrict_to_agent_tools` afirma que «el filtro aplica tanto al anuncio como a la
+    ejecución, porque el dispatcher resuelve del mismo pool». Lo primero ya estaba
+    aseverado; **lo segundo no lo estaba por nadie**, y es la mitad que importa: un
+    subagente que igualmente pudiera EJECUTAR la tool prohibida tendría el anuncio como
+    único candado, es decir ninguno — basta con que el modelo la nombre igual.
+
+    Aquí el modelo nombra `bravo` estando restringido a `alpha`.
+    """
+    alpha, bravo = _tool("alpha"), _tool("bravo")
+    reg = ToolRegistry()
+    reg.register(alpha)
+    reg.register(bravo)
+
+    caller = _CallingCaller("bravo")
+    loop = AgentLoop(
+        model_caller=caller, tool_registry=reg,
+        tool_dispatcher=ToolDispatcher(), agent_allowed_tools=("alpha",),
+    )
+    ctx = ToolUseContext(session_id="s1")
+    await loop.run("usa bravo", ctx)
+
+    assert "bravo" not in caller.tool_names, "ni siquiera se anuncia"
+    assert bravo.executed == [], "la tool prohibida NO debe ejecutarse aunque el modelo la nombre"
+    tool_msgs = [m for m in ctx.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert "no encontrado en el tool pool" in tool_msgs[0]["content"]
+
+
+async def test_control_positivo_sin_restriccion_la_misma_llamada_SI_ejecuta():
+    """Control positivo del anterior: si el corte no fuese del filtro sino de otra cosa
+    (nombre mal resuelto, dispatcher inerte), esta misma llamada tampoco ejecutaría."""
+    alpha, bravo = _tool("alpha"), _tool("bravo")
+    reg = ToolRegistry()
+    reg.register(alpha)
+    reg.register(bravo)
+
+    caller = _CallingCaller("bravo")
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=ToolDispatcher())
+    ctx = ToolUseContext(session_id="s1")
+    await loop.run("usa bravo", ctx)
+
+    assert bravo.executed == [{}], "sin restricción la misma tool SÍ se ejecuta"
+
+
+async def test_subagente_unattended_solo_recibe_tools_safe_for_background():
+    """`_build_tool_pool`: `ctx.is_subagent` ⇒ el registry se consulta en modo
+    `background`, que deja fuera las tools no marcadas `safe_for_background` (B3).
+    Se asevera por EFECTO en los dos extremos: no se anuncia y no se ejecuta."""
+    seguro, peligrosa = _tool("seguro"), _tool("peligrosa", safe_for_background=False)
+    reg = ToolRegistry()
+    reg.register(seguro)
+    reg.register(peligrosa)
+
+    caller = _CallingCaller("peligrosa")
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=ToolDispatcher())
+    ctx = ToolUseContext(session_id="s1", is_subagent=True)
+    await loop.run("usa peligrosa", ctx)
+
+    assert caller.tool_names == ["seguro"]
+    assert peligrosa.executed == []
+
+
+async def test_control_positivo_la_raiz_SI_recibe_la_tool_no_background():
+    """El mismo montaje con `is_subagent=False`: la tool entra al pool y se ejecuta ⇒
+    lo que la excluye arriba es el modo `background`, no que la tool esté rota."""
+    seguro, peligrosa = _tool("seguro"), _tool("peligrosa", safe_for_background=False)
+    reg = ToolRegistry()
+    reg.register(seguro)
+    reg.register(peligrosa)
+
+    caller = _CallingCaller("peligrosa")
+    loop = AgentLoop(model_caller=caller, tool_registry=reg, tool_dispatcher=ToolDispatcher())
+    ctx = ToolUseContext(session_id="s1")
+    await loop.run("usa peligrosa", ctx)
+
+    assert set(caller.tool_names) == {"seguro", "peligrosa"}
+    assert peligrosa.executed == [{}]
 
 
 # --- Loop: system prompt override (espejo getAgentSystemPrompt → [agentPrompt]) ---------

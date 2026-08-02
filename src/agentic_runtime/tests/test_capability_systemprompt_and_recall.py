@@ -127,14 +127,12 @@ async def test_recall_injected_as_user_system_reminder():
     assert reminders[0]["role"] == "user"
 
 
-async def test_recall_deduped_across_turns():
+async def test_recall_no_se_reinyecta_si_ya_esta_en_la_historia():
+    """Dedup contra un contenido YA presente (el caso de la historia recuperada)."""
     recall = [{"role": "system", "content": "Memoria relevante X"}]
     manager = CapabilityManager([_FakeProvider(recall=recall)])
-    # Dos turnos: el modelo pide una tool-call inexistente (sin dispatcher → sigue) y luego termina.
     caller = _CapturingCaller(DoneEvent(stop_reason="stop"))
     ctx = _ctx()
-    # Forzamos un segundo turno reusando el loop con el mismo ctx no aplica; en su lugar
-    # pre-sembramos el reminder ya presente y comprobamos que no se duplica.
     rendered = "<system-reminder>\nMemoria relevante X\n</system-reminder>"
     ctx.messages.append({"role": "user", "content": rendered})
 
@@ -142,6 +140,47 @@ async def test_recall_deduped_across_turns():
 
     reminders = [m for m in ctx.messages if m["content"] == rendered]
     assert len(reminders) == 1  # no se reinyecta el ya presente
+
+
+class _TwoTurnCaller(_CapturingCaller):
+    """Primer turno `stop_reason="tool_calls"` (sin tool calls reales) ⇒ el loop reentra."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._n = 0
+
+    async def complete(self, messages, tools, *, stop=None, model_id="", system_sections=None):
+        self.system_sections_seen.append(system_sections)
+        self.messages_seen.append([dict(m) for m in messages])
+        self._n += 1
+        primero = self._n == 1
+
+        async def _gen():
+            yield DoneEvent(stop_reason="tool_calls" if primero else "stop")
+
+        return _gen()
+
+
+async def test_recall_deduped_across_turns():
+    """`_inject_recall` corre **por turno**, no por `run()`. Sin dedup real, un `run()` de
+    N turnos mete el mismo recordatorio N veces y el contexto se llena de copias.
+
+    **Reescrito**: la versión anterior se llamaba «across_turns» pero corría UN solo turno
+    y pre-sembraba el mensaje a mano — media prueba con nombre de prueba entera. Aquí el
+    loop da dos vueltas de verdad y el recall se emite en las dos, así que el dedup es lo
+    único que puede evitar el duplicado."""
+    recall = [{"role": "system", "content": "Memoria relevante X"}]
+    manager = CapabilityManager([_FakeProvider(recall=recall)])
+    caller = _TwoTurnCaller()
+    ctx = _ctx()
+
+    await _loop(manager, caller).run("hola", ctx)
+
+    assert len(caller.messages_seen) == 2, "hicieron falta dos turnos para que la prueba mida algo"
+    rendered = "<system-reminder>\nMemoria relevante X\n</system-reminder>"
+    assert [m["content"] for m in ctx.messages].count(rendered) == 1
+    # …y el segundo turno tampoco lo vio duplicado al llamar al modelo.
+    assert [m["content"] for m in caller.messages_seen[1]].count(rendered) == 1
 
 
 async def test_empty_recall_leaves_history_untouched():

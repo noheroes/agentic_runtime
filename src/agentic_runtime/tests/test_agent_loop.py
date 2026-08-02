@@ -449,6 +449,291 @@ async def test_tool_sin_la_senal_el_loop_reentra():
 
 
 # ---------------------------------------------------------------------------
+# `S1` enriquecida: `model_options` viaja al caller
+# ---------------------------------------------------------------------------
+
+class _KwargsCaller:
+    """Registra los kwargs EXACTOS con que el loop llama al modelo."""
+
+    def __init__(self) -> None:
+        self.kwargs: dict = {}
+
+    async def complete(self, messages, tools, **kw):
+        self.kwargs = dict(kw)
+
+        async def _gen():
+            yield DoneEvent(stop_reason="stop")
+
+        return _gen()
+
+
+@pytest.mark.asyncio
+async def test_model_options_llegan_al_caller_como_kwargs():
+    """`S1` (`C2`): el integrador pide razonamiento/muestreo/techo y el runtime lo
+    TRANSPORTA. La `metadata` es opaca (`ID-7`): el runtime no la lee, la pasa entera."""
+    from agentic_runtime.models.protocol import ModelOptions
+
+    caller = _KwargsCaller()
+    loop = AgentLoop(model_caller=caller, model_options=ModelOptions(
+        temperature=0.2, max_tokens=1024, metadata={"tenant": "acme"},
+    ))
+    await loop.run("hola", _make_ctx())
+
+    assert caller.kwargs["temperature"] == 0.2
+    assert caller.kwargs["max_tokens"] == 1024
+    assert caller.kwargs["metadata"] == {"tenant": "acme"}
+
+
+@pytest.mark.asyncio
+async def test_lo_no_pedido_NO_viaja_como_None_explicito():
+    """Control negativo, y es la mitad que importa: `as_kwargs()` promete pasar «sólo lo
+    poblado» para que un caller de terceros que aún no adopte un kwarg no se rompa. Si el
+    loop mandara `temperature=None`, ese caller reventaría con `TypeError` — y el test de
+    arriba seguiría verde, porque sólo mira lo que sí se pidió."""
+    from agentic_runtime.models.protocol import ModelOptions
+
+    caller = _KwargsCaller()
+    loop = AgentLoop(model_caller=caller, model_options=ModelOptions(temperature=0.2))
+    await loop.run("hola", _make_ctx())
+
+    assert "temperature" in caller.kwargs
+    for ausente in ("max_tokens", "thinking", "effort", "output_format", "tool_choice", "metadata"):
+        assert ausente not in caller.kwargs, f"{ausente} no se pidió: no debe viajar"
+    # Y sin opciones ningunas, ninguna de las siete aparece.
+    caller_pelado = _KwargsCaller()
+    await AgentLoop(model_caller=caller_pelado).run("hola", _make_ctx())
+    assert set(caller_pelado.kwargs) == {"stop", "model_id"}
+
+
+# ---------------------------------------------------------------------------
+# Rama «[no dispatcher]»: el loop sin dispatcher no se cuelga ni miente
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sin_dispatcher_la_tool_call_se_contesta_y_el_turno_sigue():
+    """Un loop mal cableado (sin `tool_dispatcher`) recibe una tool call y **no puede**
+    ejecutarla. Lo que no puede hacer es dejar el `tool_call_id` sin contestar: el
+    siguiente turno iría al modelo con una llamada colgando, que muchos proveedores
+    rechazan con 400. Se contesta con un marcador explícito y el loop continúa."""
+    caller = _make_caller(
+        ToolCallEvent(tool_name="echo", tool_input={"text": "x"}, call_id="c1"),
+        DoneEvent(stop_reason="stop"),
+    )
+    loop = AgentLoop(model_caller=caller, tool_registry=_make_registry(EchoTool()))
+    ctx = _make_ctx()
+    outcome = await loop.run("usa echo", ctx)
+
+    tool_msgs = [m for m in ctx.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["tool_call_id"] == "c1"
+    assert tool_msgs[0]["content"] == "[no dispatcher]"
+    assert outcome.reason is LoopEndReason.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# `context_modifier` del ToolResult: aplicación, reemplazo y excepción TRAGADA
+# ---------------------------------------------------------------------------
+
+def _tool_con_modifier(name: str, modifier):
+    class _T:
+        pass
+
+    t = _T()
+    t.name = name
+    t.description = name
+    t.input_schema = {"type": "object", "properties": {}}
+    t.category = ToolCategory.UTILITY
+    t.requires_permission = False
+    t.safe_for_background = True
+    t.timeout_seconds = 5.0
+
+    async def _execute(input, ctx):
+        return ToolResult(tool_name=name, output="ok", context_modifier=modifier)
+
+    t.execute = _execute
+    return t
+
+
+@pytest.mark.asyncio
+async def test_un_modifier_que_revienta_no_tumba_el_turno():
+    """`agent_loop.py:462-465` traga la excepción del modifier a propósito. Que sea a
+    propósito no lo hacía nadie evidente: sin este test, cambiar el `except` por una
+    propagación (o al revés) no rompía nada.
+
+    Lo aseverado es el EFECTO de tragarla: el resultado de la tool YA está en el
+    historial cuando el modifier corre, así que dejar subir la excepción perdería un
+    turno de trabajo ya hecho y dejaría el `tool_call_id` contestado a medias.
+    """
+    def _explota(ctx):
+        raise RuntimeError("el modifier está roto")
+
+    caller = _make_caller(
+        ToolCallEvent(tool_name="rota", tool_input={}, call_id="c1"),
+        DoneEvent(stop_reason="stop"),
+    )
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_make_registry(_tool_con_modifier("rota", _explota)),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    ctx = _make_ctx()
+    outcome = await loop.run("usa rota", ctx)
+
+    assert outcome.reason is LoopEndReason.COMPLETED, "la excepción del modifier no aborta el turno"
+    tool_msgs = [m for m in ctx.messages if m["role"] == "tool"]
+    assert tool_msgs and tool_msgs[0]["content"] == "ok", "el trabajo ya hecho se conserva"
+
+
+@pytest.mark.asyncio
+async def test_el_ctx_que_el_modifier_devuelve_es_el_que_ve_la_tool_siguiente():
+    """Convención declarada: «el modifier muta ctx in-place y lo retorna (no forka)», y el
+    loop hace `ctx = modifier(ctx) or ctx`. El efecto observable es que lo que el modifier
+    siembra lo ve la tool que se ejecuta DESPUÉS, en el mismo turno — si el loop
+    descartara el retorno, la segunda tool vería el ctx viejo."""
+    visto: list = []
+
+    def _siembra(ctx):
+        ctx.app_state.native["marca"] = "sembrada"
+        return ctx
+
+    espia = _tool_con_modifier("espia", None)
+
+    async def _execute_espia(input, ctx):
+        visto.append(ctx.app_state.native.get("marca"))
+        return ToolResult(tool_name="espia", output="visto")
+
+    espia.execute = _execute_espia
+
+    caller = _make_caller(
+        ToolCallEvent(tool_name="siembra", tool_input={}, call_id="c1"),
+        ToolCallEvent(tool_name="espia", tool_input={}, call_id="c2"),
+        DoneEvent(stop_reason="stop"),
+    )
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_make_registry(_tool_con_modifier("siembra", _siembra), espia),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    await loop.run("siembra y espía", _make_ctx())
+
+    assert visto == ["sembrada"]
+
+
+@pytest.mark.asyncio
+async def test_si_el_modifier_devuelve_OTRO_ctx_el_loop_se_queda_con_ese():
+    """El test anterior no distingue `ctx = modifier(ctx) or ctx` de un `modifier(ctx)` a
+    secas: con la convención in-place la marca aparece igual. Lo que sí discrimina es un
+    modifier que **devuelve otro objeto** — si el loop tirara el retorno, la tool
+    siguiente seguiría hablando con el ctx viejo. El loop declara soportarlo, y el `or
+    ctx` de la misma línea declara tolerar un modifier que no devuelva nada."""
+    visto: list = []
+    nuevo_ctx = ToolUseContext(session_id="s1")
+    nuevo_ctx.app_state.native["marca"] = "del-ctx-nuevo"
+
+    def _forka(ctx):
+        # Un fork bien portado arrastra el estado DEL TURNO; ver `FIND-LOOP-1` abajo
+        # para lo que pasa cuando no lo hace.
+        nuevo_ctx.tool_pool = ctx.tool_pool
+        nuevo_ctx.messages = ctx.messages
+        return nuevo_ctx
+
+    espia = _tool_con_modifier("espia", None)
+
+    async def _execute_espia(input, ctx):
+        visto.append((ctx is nuevo_ctx, ctx.app_state.native.get("marca")))
+        return ToolResult(tool_name="espia", output="visto")
+
+    espia.execute = _execute_espia
+
+    caller = _make_caller(
+        ToolCallEvent(tool_name="forka", tool_input={}, call_id="c1"),
+        ToolCallEvent(tool_name="espia", tool_input={}, call_id="c2"),
+        DoneEvent(stop_reason="stop"),
+    )
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_make_registry(_tool_con_modifier("forka", _forka), espia),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    await loop.run("forka y espía", _make_ctx())
+
+    assert visto == [(True, "del-ctx-nuevo")]
+
+
+@pytest.mark.asyncio
+async def test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_mata_las_tool_calls_restantes():
+    """`FIND-LOOP-1` (**medido, no supuesto** — este test nació rojo al escribirlo).
+
+    El loop soporta que el modifier devuelva OTRO ctx (`ctx = modifier(ctx) or ctx`),
+    pero `ctx.tool_pool` es estado **del turno** que el loop pobló antes de despachar. Un
+    modifier que forka sin arrastrarlo deja al dispatcher resolviendo contra un pool
+    vacío: las tool calls que quedaban del mismo turno fallan con «no encontrado en el
+    tool pool» — y fallan **en silencio**, como un resultado de tool más, no como un
+    error de cableado.
+
+    Se documenta la conducta REAL en vez de aseverar la deseable: el runtime no promete
+    hoy portar el pool, y la convención declarada es no forkar. Queda abierto en
+    `FUNCIONALIDAD.md §3`; el día que se pague, este test cambia de aserción y su rojo
+    dirá exactamente qué se arregló.
+    """
+    visto: list = []
+    huerfano = ToolUseContext(session_id="s1")  # sin tool_pool del turno
+
+    espia = _tool_con_modifier("espia", None)
+
+    async def _execute_espia(input, ctx):
+        visto.append("ejecutada")
+        return ToolResult(tool_name="espia", output="visto")
+
+    espia.execute = _execute_espia
+
+    caller = _make_caller(
+        ToolCallEvent(tool_name="forka", tool_input={}, call_id="c1"),
+        ToolCallEvent(tool_name="espia", tool_input={}, call_id="c2"),
+        DoneEvent(stop_reason="stop"),
+    )
+    ctx = _make_ctx()
+    loop = AgentLoop(
+        model_caller=caller,
+        tool_registry=_make_registry(_tool_con_modifier("forka", lambda c: huerfano), espia),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    await loop.run("forka y espía", ctx)
+
+    assert visto == [], "conducta REAL: la tool siguiente no llega a ejecutarse"
+    # …y el rastro queda en el historial del ctx HUÉRFANO, no en el que el llamante tiene.
+    fallidos = [m for m in huerfano.messages
+                if m.get("role") == "tool" and "no encontrado en el tool pool" in m["content"]]
+    assert len(fallidos) == 1
+
+
+@pytest.mark.asyncio
+async def test_control_negativo_sin_modifier_la_marca_no_aparece():
+    """Si la marca apareciese igual sin modifier, el test de arriba no discriminaría."""
+    visto: list = []
+
+    espia = _tool_con_modifier("espia", None)
+
+    async def _execute_espia(input, ctx):
+        visto.append(ctx.app_state.native.get("marca"))
+        return ToolResult(tool_name="espia", output="visto")
+
+    espia.execute = _execute_espia
+
+    caller = _make_caller(
+        ToolCallEvent(tool_name="espia", tool_input={}, call_id="c1"),
+        DoneEvent(stop_reason="stop"),
+    )
+    loop = AgentLoop(
+        model_caller=caller, tool_registry=_make_registry(espia),
+        tool_dispatcher=ToolDispatcher(),
+    )
+    await loop.run("espía", _make_ctx())
+
+    assert visto == [None]
+
+
+# ---------------------------------------------------------------------------
 # Shim BasicLoop
 # ---------------------------------------------------------------------------
 

@@ -51,7 +51,7 @@ Veredicto por paquete; ✅ = todo comportamiento con prueba de efecto + control;
 
 | # | Paquete | Módulos | Líneas | Veredicto | Huecos nombrados |
 |---|---|---|---|---|---|
-| 1 | `loop/` | 6 | 622 | 🟡 | pagados `ends_turn`, `H-L1`, `H-L2`, `H-L3` (§4). Sin auditar aún: `_drain_notifications`, `input_processor`, anuncios de la estrategia diferida, dedup de recall, filtro de pool por subagente, `model_options`, `system_override`, `context_modifier` (y su excepción), rama «[no dispatcher]». Abierto: `H-L4` |
+| 1 | `loop/` | 6 | 622 | 🟢 | **cable por cable, todos con efecto observable y control** (§4). Ya lo estaban por tests previos verificados como funcionales: `input_processor` (corte + reescritura + default identidad), anuncios de la estrategia diferida (+dedup entre iteraciones), `system_override`, `context_modifier` vía skills. Pagados en esta vuelta: `_drain_notifications` (5), filtro de pool por subagente **en ejecución**, filtro `background`, `model_options` (+control negativo), `[no dispatcher]`, excepción del modifier, ctx devuelto, dedup de recall **real**. Abiertos y nombrados: `H-L4` (fuera del radar), `FIND-LOOP-1` (§3) |
 | 2 | `tools/native/` | 19 | 1891 | ⛔ | — |
 | 3 | `tools/` | 11 | 916 | ⛔ | — |
 | 4 | `execution/local/` | 4 | 681 | ⛔ | — |
@@ -92,6 +92,7 @@ sujeto; marcador medido si es no-determinista), de modo que el día que cambie, 
 | `FIND-E2G-1` | cayó 1 de 4 inyecciones | falta la prueba que discrimine las otras 3 | ⛔ |
 | `FIND-E2G-2` | diferido nombrado | — | ⛔ |
 | `FIND-C6-2` | diferido nombrado | — | ⛔ |
+| `FIND-LOOP-1` | **NUEVO, cazado escribiendo la prueba (nació roja).** El loop acepta que un `context_modifier` devuelva OTRO ctx (`ctx = modifier(ctx) or ctx`), pero `ctx.tool_pool` es estado DEL TURNO: un modifier que forka sin arrastrarlo deja al dispatcher con el pool vacío y **las tool calls restantes del mismo turno fallan en silencio** («no encontrado en el tool pool»), indistinguibles de un resultado de tool normal | `test_agent_loop.py::test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_mata_las_tool_calls_restantes` — asevera la conducta REAL, no la deseable | ⛔ abierto |
 
 ## 4. Registro de capacidades funcionales pagadas en esta obra
 
@@ -111,6 +112,40 @@ cero neta). Corridas capturadas enteras en `/tmp/iny_endsturn_OJQp/iny1{2..8}.lo
 
 **Estado del gate tras `D-14`: `33 passed / 1 xfailed / 0 failed` en UNA corrida** (2026-08-02,
 `GATE_E11_SEED=14329873`), con `E11` conduciendo 10 de 11 y la 11ª declarada, medida y vigilada.
+
+| 2026-08-02 | **`S21`/`H-5` · el CABLE del drenaje**: el loop drena, el XML llega **al modelo**, va **antes** del prompt del usuario, **sólo la raíz** drena (y la notificación del hermano sobrevive al turno del hijo), la clave es el par `(scope, session_id)`, se drena **una vez por `run()`** y sin canal inyectado no se toca el canal global | `test_background_notification_channel.py::test_el_loop_drena_el_canal_y_el_XML_llega_al_MODELO`, `::test_el_drenaje_va_ANTES_del_mensaje_del_usuario`, `::test_un_SUBAGENTE_no_drena_…`, `::test_el_loop_drena_con_la_clave_del_ctx_no_con_otra` (+control positivo), `::test_se_drena_una_vez_por_run_no_una_por_turno`, `::test_sin_canal_inyectado_…` | INY-24 (no drena) → 5 rojas; INY-25 (drenar DESPUÉS del prompt) → 1 roja, justo la del orden; INY-26 (quitar `or ctx.is_subagent`) → 1 roja; INY-27 (clave con scope `""`) → 5 rojas; INY-33 (`apply_notification` sobre una copia) → 11 rojas |
+| 2026-08-02 | **filtro de pool por subagente en la EJECUCIÓN**, no sólo en el anuncio; y filtro `background` (`safe_for_background`) en ambos extremos | `test_subagent_application.py::test_la_restriccion_corta_tambien_la_EJECUCION_no_solo_el_anuncio` (+control positivo), `::test_subagente_unattended_solo_recibe_tools_safe_for_background` (+control positivo) | INY-22 (`_restrict_to_agent_tools` no filtra) → 3 rojas; INY-23 (`mode` siempre `foreground`) → 1 roja |
+| 2026-08-02 | `S1` · `model_options` viajan al caller **y lo no pedido NO viaja como `None` explícito** (la promesa de robustez ante callers de terceros) | `test_agent_loop.py::test_model_options_llegan_al_caller_como_kwargs`, `::test_lo_no_pedido_NO_viaja_como_None_explicito` | INY-28 (no transportar opciones) → 2 rojas; INY-29 (`as_kwargs` devuelve los `None`) → 17 rojas — el reventón masivo **es** la medida de para qué existe el contrato |
+| 2026-08-02 | rama `[no dispatcher]`: la tool call se contesta igual, con `tool_call_id`, para no dejar una llamada colgando en el turno siguiente | `test_agent_loop.py::test_sin_dispatcher_la_tool_call_se_contesta_y_el_turno_sigue` | INY-30 (`continue` sin `append`) → 1 roja |
+| 2026-08-02 | `context_modifier` del `ToolResult`: la excepción se traga **a propósito** (el trabajo ya hecho se conserva) y el ctx devuelto es el que ve la tool siguiente | `test_agent_loop.py::test_un_modifier_que_revienta_no_tumba_el_turno`, `::test_el_ctx_que_el_modifier_devuelve_es_el_que_ve_la_tool_siguiente`, `::test_si_el_modifier_devuelve_OTRO_ctx_…` (+control negativo) | INY-31 (propagar la excepción) → 1 roja; INY-32 (`modifier(ctx)` tirando el retorno) → 2 rojas |
+| 2026-08-02 | dedup de recall **entre turnos reales** | `test_capability_systemprompt_and_recall.py::test_recall_deduped_across_turns` (reescrito: antes corría UN turno y pre-sembraba el mensaje a mano) | INY-34 (quitar el `if rendered in existing: continue`) → 2 rojas |
+
+**Acreditación de esta vuelta: INY-22..34 (13 inyecciones) → 13 rojas, 0 falsos positivos.** Cada
+una anunciada antes de tocar el fuente y revertida desde copia propia con `sha256sum -c` en verde
+(`loop/agent_loop.py`, `models/protocol.py`, `contracts/notifications.py`). Corridas capturadas
+enteras en `$SCRATCH/iny-2{2..9}.log`, `iny-3{0..4}.log`. Deuda **cero neta**: `ruff` 505 ·
+`mypy --strict` 138/54 · suite sin gate **701 passed / 0 failed / 3 skipped / 112 xfailed**.
+
+### Tests no tocados que operaban sobre superficie modificada (encargo 3)
+
+Revisados uno a uno; el veredicto **no** fue «casi todos valían»:
+
+- `test_background_notification_channel.py` — `test_apply_operates_on_the_live_history_not_on_a_session`
+  aseveraba `params[0] == "messages"`: **patrón `H-L4`**, forma disfrazada de conducta. Reescrito a
+  identidad de objeto + mutación in-place. Los dos `test_run_loop_does_not_…` son estructurales
+  (`inspect.signature` / `inspect.getsource` con `in`): se conservan como guarda barata, pero
+  quedan rotulados como **necesarios-no-suficientes**, y su contraparte funcional es el bloque de
+  drenaje nuevo. Que este fichero pasara entero mientras el cable del loop no lo probaba nadie es
+  el ejemplo vivo de `L09`.
+- `test_subagent_application.py` — funcional, con controles, pero medía **sólo el anuncio** de una
+  restricción cuyo docstring promete anuncio **y** ejecución. La mitad que faltaba es justo la que
+  sostiene el candado.
+- `test_capability_systemprompt_and_recall.py` — funcional; su `test_recall_deduped_across_turns`
+  se llamaba «across turns» y corría un turno. Reescrito.
+- `test_deferred_delta.py`, `test_deferred_strategy.py`, `test_deferred_loading.py`,
+  `test_skill_invocation.py`, `test_loop_homologation.py` (`S11`), `test_root_context_modifier.py`,
+  `test_caller_system_override.py` — verificados **funcionales y suficientes** para su cable; no se
+  tocan.
 
 ### `H-L4` — pagado en el radar, abierto fuera de él
 
