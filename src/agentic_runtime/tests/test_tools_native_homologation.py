@@ -330,6 +330,97 @@ def test_bash_grep_no_match_not_error(tmp_path):
     assert not r.is_error  # rc=1 semántico: "sin coincidencias", no fallo
 
 
+@pytest.mark.xfail(strict=True, reason="FIND-READ-1: `read_file` no tiene NINGÚN cap; A corta por bytes (256 KB) y por tokens (25 000) y LANZA")
+def test_read_file_refuses_a_file_over_the_canonical_size_cap(tmp_path):
+    """`FIND-READ-1` — un `Read` sin cap vuelca el fichero entero al contexto.
+
+    Contraste (`D-08`, leído 1→EOF en `FileReadTool/limits.ts`): A aplica **dos** topes
+    —`maxSizeBytes` 256 KB sobre el tamaño TOTAL del fichero y `maxTokens` 25 000 sobre la
+    salida— y en desbordamiento **lanza** en vez de truncar. La cabecera del fichero documenta
+    que probaron truncar (#21841) y lo **revirtieron**: el throw devuelve ~100 bytes de error,
+    truncar devolvía 25 K tokens de contenido en el tope. O sea: el corte es deliberado y
+    medido, no un detalle.
+
+    B (`read_file.py:38`) hace `limit = input.get("limit", len(lines))` — sin `limit`
+    explícito se lee el fichero ENTERO. Un log de 50 MB entra al contexto tal cual y rompe
+    al proveedor, que es el mismo modo de fallo que `grep_tool.py:12-15` sí documenta y
+    previene con `DEFAULT_HEAD_LIMIT`. Es CORE-GAP: la protección existe en el hermano.
+
+    Control positivo incluido: un fichero pequeño debe seguir leyéndose entero.
+    """
+    ctx = _ctx(tmp_path)
+    pequeno = tmp_path / "ok.txt"
+    pequeno.write_text("hola\n")
+    assert "hola" in await_(ReadFileTool().execute({"path": str(pequeno)}, ctx)).output
+
+    grande = tmp_path / "enorme.txt"
+    grande.write_text("x" * 300_000)  # > 256 KB
+    r = await_(ReadFileTool().execute({"path": str(grande)}, ctx))
+    assert r.is_error, (
+        f"el fichero de {grande.stat().st_size} B salió entero al contexto "
+        f"({len(r.output)} chars de output)"
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="FIND-READ-2: `offset` es 0-indexado y la salida no lleva números de línea; A usa offset=1 y addLineNumbers")
+def test_read_file_offset_is_one_indexed_and_output_is_numbered(tmp_path):
+    """`FIND-READ-2` — dos divergencias que se pagan juntas porque son el mismo contrato.
+
+    Contraste (`D-08`): `FileReadTool.ts:497` desestructura `{ offset = 1 }` —**1-indexado**—
+    y `:726` devuelve `addLineNumbers(file)`. B (`read_file.py:37-39`) usa `offset` como
+    índice de lista Python (**0-indexado**) y emite las líneas desnudas.
+
+    No es cosmético en ninguna de las dos mitades: `offset=1` pide la línea 1 en A y devuelve
+    la línea 2 en B —**un off-by-one silencioso** en la herramienta que el modelo usa para
+    citar código—, y sin numeración el modelo no puede referirse a `fichero:línea` sin
+    contarlas a mano, que es justo lo que la numeración existe para evitar.
+    """
+    ctx = _ctx(tmp_path)
+    f = tmp_path / "tres.txt"
+    f.write_text("uno\ndos\ntres\n")
+
+    r = await_(ReadFileTool().execute({"path": str(f), "offset": 1, "limit": 1}, ctx))
+    assert "uno" in r.output, f"offset=1 debe dar la PRIMERA línea (1-indexado), dio {r.output!r}"
+
+    entero = await_(ReadFileTool().execute({"path": str(f)}, ctx))
+    assert "1" in entero.output.split("\n")[0], (
+        f"la salida no lleva número de línea: {entero.output.splitlines()[:1]}"
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="FIND-GLOB-1: orden alfabético; A ordena por mtime (--sort=modified), y con el cap de 100 el orden decide QUÉ se ve")
+def test_glob_orders_by_mtime_not_alphabetically(tmp_path):
+    """`FIND-GLOB-1` — el orden no es presentación cuando hay un cap: es SELECCIÓN.
+
+    Contraste (`D-08`, leído en `utils/glob.ts:94-104`): A pasa `--sort=modified` con el
+    comentario explícito «sort by modification time (oldest first)», y recorta DESPUÉS
+    (`:127 slice(offset, offset + limit)`). B (`glob_tool.py:40-41`) hace `sorted(...)`
+    alfabético y recorta igual.
+
+    Con el mismo cap de 100 que ambos comparten, el orden decide **cuáles 100 de 130 ve el
+    modelo**. Alfabéticamente eso es arbitrario; por mtime es «lo que se tocó», que es lo que
+    hace útil un glob durante una sesión de trabajo. Por eso se levanta como hallazgo y no
+    como divergencia cosmética.
+
+    Se siembra con mtimes explícitos para que la medición no dependa de la velocidad del disco.
+    """
+    import os
+
+    ctx = _ctx(tmp_path)
+    # `zzz` es el MÁS ANTIGUO, `aaa` el más reciente: alfabético y mtime dan órdenes opuestos.
+    for nombre, mtime in (("zzz.txt", 1_000_000), ("mmm.txt", 2_000_000), ("aaa.txt", 3_000_000)):
+        p = tmp_path / nombre
+        p.write_text("x")
+        os.utime(p, (mtime, mtime))
+
+    r = await_(GlobTool().execute({"pattern": "*.txt", "path": str(tmp_path)}, ctx))
+    lineas = [line for line in r.output.splitlines() if line.strip()]
+    assert len(lineas) == 3  # control positivo: los tres salen
+    assert lineas[0].endswith("zzz.txt"), (
+        f"A ordena por mtime (oldest first) ⇒ primero `zzz.txt`; B dio {lineas}"
+    )
+
+
 def await_(coro):
     """`asyncio.run` con nombre corto: estos tests son síncronos a propósito."""
     return asyncio.run(coro)

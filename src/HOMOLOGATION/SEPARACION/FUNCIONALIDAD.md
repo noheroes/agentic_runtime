@@ -52,8 +52,8 @@ Veredicto por paquete; ✅ = todo comportamiento con prueba de efecto + control;
 | # | Paquete | Módulos | Líneas | Veredicto | Huecos nombrados |
 |---|---|---|---|---|---|
 | 1 | `loop/` | 6 | 622 | 🟢 | **cable por cable, todos con efecto observable y control** (§4). Ya lo estaban por tests previos verificados como funcionales: `input_processor` (corte + reescritura + default identidad), anuncios de la estrategia diferida (+dedup entre iteraciones), `system_override`, `context_modifier` vía skills. Pagados en esta vuelta: `_drain_notifications` (5), filtro de pool por subagente **en ejecución**, filtro `background`, `model_options` (+control negativo), `[no dispatcher]`, excepción del modifier, ctx devuelto, dedup de recall **real**. Abiertos y nombrados: `H-L4` (fuera del radar), `FIND-LOOP-1` (§3) |
-| 2 | `tools/native/` | 19 | 1891 | 🟡 | **Efecto observable de las 25 tools: YA pagado por `E10`** (cableado real, negativas, acreditado 7/7 — no se duplica). Pagado en la 9ª ventana: auditoría `H-L4` de sus dos ficheros de test y **8 xfail de FIRMA reescritos a CONDUCTA** (§5), 3 FORMA→CONDUCTA, `FIND-CFG-1` nuevo y
-`FIND-TOOL5/SIG10` **pagado** con la causa localizada por contraste (§5.1). **Pendiente y nombrado**: los 19 módulos fuente NO se han recorrido 1→EOF en esta ventana — el veredicto cubre la superficie de test, no la lectura íntegra del paquete |
+| 2 | `tools/native/` | 19 | 1891 | 🟢 | **Efecto observable de las 25 tools: YA pagado por `E10`** (cableado real, negativas, acreditado 7/7 — no se duplica). Pagado en la 9ª ventana: auditoría `H-L4` de sus dos ficheros de test y **8 xfail de FIRMA reescritos a CONDUCTA** (§5), 3 FORMA→CONDUCTA, `FIND-CFG-1` nuevo y
+`FIND-TOOL5/SIG10` **pagado** con la causa localizada por contraste (§5.1). **Deuda de lectura PAGADA** (§5.2): los 19 módulos recorridos 1→EOF, y la lectura destapó **3 hallazgos nuevos** que la superficie de test no veía (`FIND-READ-1`, `FIND-READ-2`, `FIND-GLOB-1`) |
 | 3 | `tools/` | 11 | 916 | ⛔ | — |
 | 4 | `execution/local/` | 4 | 681 | ⛔ | — |
 | 5 | `execution/` (+fork, tasks, session, observer, context) | 14 | 604 | ⛔ | — |
@@ -95,6 +95,9 @@ sujeto; marcador medido si es no-determinista), de modo que el día que cambie, 
 | `FIND-C6-2` | diferido nombrado | — | ⛔ |
 | `FIND-CFG-1` | **NUEVO (9ª ventana), resuelto contra el canónico por `D-08` antes de tocar nada.** La rama GET de `Config` **escribe**: `ctx.app_state.native.setdefault("config", {})` corre antes de bifurcar (`config.py:44`), así que una simple lectura deja la clave creada en el estado de la sesión. A tiene el GET como lectura pura —`call()` sólo llama a `getValue()`, que lee de `getGlobalConfig()`/`getInitialSettings()` (`ConfigTool.ts:136-144`)— **y lo DECLARA**: `isReadOnly(input) { return input.value === undefined }` (`:90-92`). Medido: el GET deja `{'config': {}}` | `test_tools_native_homologation.py::test_config_get_does_not_write_state` (xfail estricto; incluye control positivo de que el SET sólo actúa por su `context_modifier`) | ⛔ abierto — **fuente NO tocado a propósito**: contrastar contra el canónico y dejar el rojo como evidencia, no «arreglar» por impulso |
 | `FIND-LOOP-1` | **NUEVO, cazado escribiendo la prueba (nació roja).** El loop acepta que un `context_modifier` devuelva OTRO ctx (`ctx = modifier(ctx) or ctx`), pero `ctx.tool_pool` es estado DEL TURNO: un modifier que forka sin arrastrarlo deja al dispatcher con el pool vacío y **las tool calls restantes del mismo turno fallan en silencio** («no encontrado en el tool pool»), indistinguibles de un resultado de tool normal | `test_agent_loop.py::test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_mata_las_tool_calls_restantes` — asevera la conducta REAL, no la deseable | ⛔ abierto |
+| `FIND-READ-1` | **NUEVO (9ª ventana), destapado por la LECTURA, no por el test.** `read_file` no tiene **ningún** cap: `read_file.py:38` hace `limit = input.get("limit", len(lines))`, así que sin `limit` explícito el fichero entero entra al contexto. A aplica **dos** topes y **lanza** en desbordamiento: `maxSizeBytes` 256 KB sobre el tamaño total y `maxTokens` 25 000 sobre la salida (`FileReadTool/limits.ts:1-18`), y la cabecera documenta que probaron truncar (#21841, mar-2026) y lo **revirtieron** porque el throw cuesta ~100 B de error y truncar costaba 25 K tokens. CORE-GAP: la protección existe en el hermano (`grep_tool.py:12-15` sí la documenta y la aplica). Medido: 300 000 B salieron enteros | `test_tools_native_homologation.py::test_read_file_refuses_a_file_over_the_canonical_size_cap` (xfail estricto, con control positivo de que un fichero pequeño sigue leyéndose entero) | ⛔ abierto — **fuente no tocado**: contraste primero |
+| `FIND-READ-2` | **NUEVO (9ª ventana).** Dos mitades del mismo contrato: (a) `offset` es **0-indexado** en B (`read_file.py:37-39`, índice de lista Python) y **1-indexado** en A (`FileReadTool.ts:497`, `{ offset = 1 }`) ⇒ **off-by-one silencioso** en la tool con la que el modelo cita código; (b) B emite las líneas desnudas, A devuelve `addLineNumbers(file)` (`:726`) ⇒ sin numeración no se puede referenciar `fichero:línea` sin contar a mano. Medido: `offset=1` devolvió `'dos'` donde A da `'uno'` | `test_tools_native_homologation.py::test_read_file_offset_is_one_indexed_and_output_is_numbered` (xfail estricto) | ⛔ abierto |
+| `FIND-GLOB-1` | **NUEVO (9ª ventana).** B ordena **alfabéticamente** (`glob_tool.py:40`, `sorted(...)`); A ordena por **mtime** con `--sort=modified` y el comentario explícito «oldest first» (`utils/glob.ts:94-104`), y recorta DESPUÉS (`:127`). **El orden no es presentación cuando hay cap: es selección** — con el cap de 100 que ambos comparten, el orden decide *cuáles* 100 de 130 ve el modelo. Medido con mtimes sembrados (no dependiente del disco): B dio `aaa·mmm·zzz`, A daría `zzz` primero | `test_tools_native_homologation.py::test_glob_orders_by_mtime_not_alphabetically` (xfail estricto, con control positivo de que los 3 salen) | ⛔ abierto |
 | `FIND-TOOL5/SIG10` | **PAGADO (9ª ventana).** Mi diagnóstico previo («la señal de abort es binaria») era **falso**: `AbortController` deriva `aborted` de `AbortReason` para cerrar `SIG2`. La causa real era de una línea — `dispatcher.py:54-55` devolvía `ToolResult.aborted(tool_name)` tirando el `ctx.stop.reason()` disponible en la línea anterior, dejando dos cortes de causa distinta indistinguibles. A trata `signal.reason` como dato de primera clase (`StreamingToolExecutor.ts:213-229`) ⇒ CORE-GAP | `test_tools_infra_homologation.py::test_abort_reason_reaches_the_result` (ya no xfail) | ✅ pagado — `reason` viaja al resultado **y al `output`**. `interrupt_behavior` **sigue abierto y aparte**: `contracts/tools.py:3-6` lo declara fuera del tramo 1 |
 
 ## 4. Registro de capacidades funcionales pagadas en esta obra
@@ -259,6 +262,29 @@ cuadra exacto) con `mypy --strict` **138/54** sin cambio.
 ⚠ **No reproduje la cifra base de `ruff` 505**: `pyproject.toml` de `agentic_runtime` no tiene
 sección `[tool.ruff]` y el binario disponible corre con defaults (11 hallazgos, ninguno en lo
 tocado). Se dice en vez de fingir el número; queda como pendiente de método, no de código.
+
+### 5.2 Deuda de LECTURA pagada — los 19 módulos 1→EOF, y lo que sólo se ve leyendo
+
+`D-07`: una deuda de lectura se paga o el ciclo no cierra. Recorridos 1→EOF los 19 módulos
+(1891 L): `__init__` · `bash` · `sleep` · `write_file` · `read_file` · `glob_tool` · `grep_tool` ·
+`todo_write` · `tool_search` · `web_fetch` · `plan_mode` · `agent` · `web_search` ·
+`clone_repository` · `ask_user` · `worktree` (+ `config` · `file_edit` · `task_tools`, leídos antes
+en esta misma ventana). Con esto el paquete pasa 🟡→**🟢**.
+
+**`L08` confirmado en la práctica, no citado**: la superficie de test estaba en verde y aun así la
+lectura destapó **tres hallazgos** que ningún test miraba, y ninguno está en los ficheros grandes —
+salen de `read_file.py` (42 L) y `glob_tool.py` (47 L), dos de los **más pequeños** del censo. Es
+exactamente el modo de fallo que `L02` tipifica: la superficialidad migra a los satélites.
+
+Confirmados en fuente (ya tenían test, ahora tienen la línea): `bash.py:13` `name = "bash"` en
+minúscula frente al `Bash` canónico · `tool_search.py:53-55` el `select:` toma **un** nombre, sin
+coma-separado (`FIND-TOOL6/E6`) · `web_search.py:74` la credencial sale de `os.getenv("SERPER_API_KEY")`
+y no del `ctx`, a diferencia de `ctx.git_credentials` en `clone_repository.py:116` — el diferido ya
+nombrado, ahora con la asimetría localizada entre dos módulos hermanos.
+
+Los tres hallazgos nuevos se dejan **rojos y con el fuente sin tocar**, misma regla que `FIND-CFG-1`:
+contraste contra el canónico primero, el rojo es la evidencia. Verificados con `--runxfail` para leer
+el fallo real, y los tres llevan control positivo que pasa antes de la aserción que falla.
 
 ### Corrección de inventario (2026-08-02)
 
