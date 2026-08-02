@@ -657,3 +657,58 @@ de acreditación se capturan **enteras a fichero**, no por `tail`.
 
 **Estado real del gate, dicho sin adorno:** no es «26 verdes y ya». Es 26 verdes **cuando `E2g` no cae**, con
 `FIND-E2G-1` **abierto, vigilado y ya cobrado una vez**.
+
+---
+
+### 2026-08-01 · SÉPTIMA CORRECCIÓN — «te preocupa si el test corre, no si la funcionalidad opera»
+
+Reproche del usuario, literal: *«me parece gracioso que yo esté preocupado por cerrar cada funcionalidad del
+tramo 1 con evidencia de que opera según expectativa y tú sólo te preocupes si el test corre o no»*, y a
+continuación: *«¿qué pasa con todo lo anterior donde ya hiciste commit?»*. Es correcto y tiene dos pruebas
+medidas el mismo día. No es un despiste: es un **hueco de método** — aseverar MECANISMO (que la costura existe
+y por dónde sale) en vez de EFECTO (que la tool hace su trabajo).
+
+#### 1 · `FIND-E7F-1` — el «barrido corriendo de las 25» no corrió 4 de ellas
+
+`_tool_inputs` (`test_tramo1_gate.py:1432-1462`) le pasa a varias tools claves que **no son las de su schema**:
+
+| tool | lo que se le pasó | lo que declara | resultado real |
+|---|---|---|---|
+| `read_file` | `file_path` | `path` | `KeyError: 'path'`, tragado por el `except Exception` |
+| `write_file` | `file_path` | `path` | `KeyError: 'path'`, tragado |
+| `clone_repository` | `url` / `destination` | `repository` / `directory` | error temprano «repository es obligatorio» |
+| `Config` | `{}` | `setting` | error «setting is required» (sólo rama de error) |
+
+Comprobado **corriendo**, no leyendo: `read_file`/`write_file` levantan `KeyError` y `salida.txt` no se crea.
+Consecuencias: (a) el barrido estaba **verde con 4 de 25 sin cruzar la puerta**; (b) el número firmado
+**«23 de 25 pasan por la costura» NO VALE** — se midió con 4 tools que no llegaron a intentar nada, así que
+`_ESCAPES_DECLARADOS` hay que **re-medir**, no heredar.
+
+#### 2 · Auditoría de lo YA COMMITEADO, por capas (leída pieza a pieza, no grep)
+
+**Capa de capacidades (`E1`..`E9`): aguanta.** Ahí sí se asevera efecto — `E2` exige el fichero EN DISCO;
+`E5` corta el stream en vivo y compara contra un control sin abort; `E6` verifica la clave de persistencia y
+que nada se escribió fuera del scope; `E7c` planta un secreto fuera del allow-set y exige que no cruce ningún
+cable; `E7e` crea un worktree con **git real** y comprueba el directorio; `E3` usa un uuid inadivinable.
+
+**Capa por tool (las 25): ahí está el hueco.**
+
+| con prueba de que **hace su trabajo** | sin ninguna |
+|---|---|
+| `bash`, `write_file`, `read_file`, `EnterWorktree`, `ExitWorktree`, `ToolSearch`, `WebSearch`, `Agent`, `grep`, `glob`, `TaskList`, `TodoWrite` | `clone_repository`, `Edit`, `WebFetch`, `Sleep`, `TaskCreate`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `AskUserQuestion`, `Config`(set) |
+
+`EnterPlanMode`/`ExitPlanMode` quedan **SIN VEREDICTO**: no se abrieron `test_plan_mode_binding.py` ni
+`test_cap_plan_homologation.py`, y clasificarlos por el título sería exactamente el vicio que se está pagando.
+
+Casos concretos: **nadie ha aseverado nunca que `Edit` edite** (sólo `xfail`s de sus gaps);
+`clone_repository` sólo se ha probado **fallando** (clon contra puerto cerrado); `WebFetch` idem; `Sleep`
+corrió con `duration: 0`. `test_tools_native_homologation.py` —188 L— asevera **forma**: nombres, caps,
+schema, y `xfail`s. Casi nada de función.
+
+#### 3 · Lo que queda comprado (NO hecho — es el trabajo de la ventana siguiente)
+
+`E10` matriz funcional de las 25 · re-medición de `E7f` con entradas correctas · `E11` conducción por el
+modelo de las 11 nunca invocadas · caza del caso rojo de `E2g`.
+
+**Aviso dado por adelantado:** `E10` va a salir **roja en varias tools**. Eso es lo que se está comprando, y
+ninguna de esas rojas se atiende bajando el listón.
