@@ -214,17 +214,89 @@ def test_write_roots_narrower_than_read_roots(tmp_path):
 # GAPS — xfail(strict): fallan HOY, su fallo ES la evidencia
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL3=FIND-SIG4: interruptBehavior 'cancel'|'block' ausente del ToolProtocol")
-def test_tool_protocol_declares_interrupt_behavior():
-    t = _FakeTool("Bash")
-    # Homologado: el protocolo expondría interrupt_behavior() → 'cancel'|'block' (default 'block').
-    assert t.interrupt_behavior() in ("cancel", "block")
+@pytest.mark.xfail(strict=True, reason="FIND-TOOL3=FIND-SIG4: interruptBehavior 'cancel'|'block' ausente — el dispatcher aborta binariamente, sin consultar la política de la tool")
+def test_dispatcher_honours_block_interrupt_behavior():
+    """CONDUCTA (`H-L4`): una tool `block` NO debe morir por un abort; una `cancel` sí.
+
+    La versión anterior aseveraba `t.interrupt_behavior() in ("cancel","block")` **sobre
+    `_FakeTool`, que es el DOBLE de este fichero**: añadirle el método al doble la habría
+    puesto XPASS sin que el runtime cambiara ni una línea — acreditación en falso de libro.
+    Lo que hay que medir es si el **dispatcher** consulta la política: hoy el pre-check de
+    `ctx.stop` (`dispatcher`) aborta todo por igual, así que la tool `block` muere también.
+    """
+    class _Block(_FakeTool):
+        def __init__(self):
+            super().__init__("Blocker", output="terminé")
+
+        def interrupt_behavior(self):
+            return "block"
+
+    ctx = _ctx(tool_pool=ToolPool(native_tools=[_Block()]))
+    ctx.stop.abort()
+    r = asyncio.run(ToolDispatcher().dispatch(tool_name="Blocker", tool_input={}, ctx=ctx))
+    assert not r.is_aborted and r.output == "terminé", (
+        "el dispatcher canceló una tool declarada `block` (interrupción no diferenciada)"
+    )
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL1/A3: sin isConcurrencySafe en el protocolo (ejecución concurrente no modelada)")
-def test_tool_protocol_declares_concurrency_safe():
-    t = _FakeTool("Grep")
-    assert isinstance(t.is_concurrency_safe, (bool, type(lambda: None)))
+@pytest.mark.xfail(strict=True, reason="FIND-TOOL1/A3: sin isConcurrencySafe — el fan-out del turno corre en SERIE (declarado en contracts/tools.py:6-9)")
+async def test_concurrency_safe_tools_run_in_parallel_within_a_turn():
+    """CONDUCTA (`H-L4`): dos tools concurrency-safe del mismo turno deben SOLAPARSE.
+
+    La versión anterior era `isinstance(t.is_concurrency_safe, (bool, type(lambda: None)))`
+    sobre el doble: aserción tan laxa que casi cualquier atributo la satisface, y encima
+    medía `_FakeTool`. El canónico particiona el fan-out por `isConcurrencySafe` (default
+    diez en paralelo, `CG-TOOL-CONC`); B corre en serie **declarado y no fingido**. Se mide
+    el efecto: con dos llamadas de 0,20 s, en paralelo el turno cuesta ~0,2 s y en serie ~0,4 s.
+    """
+    import time
+
+    from agentic_runtime.events import DoneEvent, ToolCallEvent
+    from agentic_runtime.context.tool_use import AppState
+
+    class _Lento(_FakeTool):
+        def __init__(self):
+            super().__init__("Lento")
+            self.is_concurrency_safe = True
+
+        async def execute(self, input, ctx):
+            await asyncio.sleep(0.20)
+            return ToolResult(tool_name=self.name, output="ok")
+
+    from agentic_runtime.loop.agent_loop import AgentLoop
+    from agentic_runtime.tools import ToolRegistry
+
+    reg = ToolRegistry()
+    reg.register(_Lento())
+
+    class _DosLlamadas:
+        def __init__(self):
+            self.n = 0
+
+        async def complete(self, messages, tools, *, stop=None, model_id="", system_sections=None):
+            self.n += 1
+            n = self.n
+
+            async def _gen():
+                if n == 1:
+                    yield ToolCallEvent(call_id="c1", tool_name="Lento", tool_input={})
+                    yield ToolCallEvent(call_id="c2", tool_name="Lento", tool_input={})
+                    yield DoneEvent(stop_reason="tool_use")
+                else:
+                    yield DoneEvent(stop_reason="stop")
+
+            return _gen()
+
+    loop = AgentLoop(
+        model_caller=_DosLlamadas(), tool_registry=reg, tool_dispatcher=ToolDispatcher(),
+    )
+    ctx = ToolUseContext(session_id="s1", app_state=AppState(permissions=PermissionContext()))
+    t0 = time.monotonic()
+    await loop.run("hola", ctx)
+    transcurrido = time.monotonic() - t0
+    assert transcurrido < 0.35, (
+        f"las dos tools concurrency-safe corrieron en serie ({transcurrido:.2f}s ≈ 0,40s)"
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-TOOL2=GAP-02: el gate de permisos no ve el input ni aplica check_permissions por-tool")
@@ -245,10 +317,59 @@ def test_dispatcher_calls_per_tool_check_permissions():
     assert not r.is_error  # homologado: check_permissions permite → ejecuta
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL4/A23: ToolResult no transporta new_messages (tool que inyecta mensajes)")
-def test_tool_result_carries_new_messages():
-    r = ToolResult(tool_name="x", output="ok")
-    assert isinstance(r.new_messages, list)
+@pytest.mark.xfail(strict=True, reason="FIND-TOOL4/A23: ToolResult no transporta new_messages — una tool no puede inyectar mensajes en la conversación")
+async def test_new_messages_from_a_tool_reach_the_conversation():
+    """CONDUCTA (`H-L4`): los mensajes que produce una tool deben APARECER en `ctx.messages`.
+
+    La versión anterior era `isinstance(r.new_messages, list)` —FIRMA—: añadir el atributo
+    con default `[]` la habría puesto XPASS mientras el loop lo ignora por completo, o sea
+    la deuda entera intacta. El punto de `new_messages` es que el modelo LEA lo inyectado;
+    eso es lo que se asevera.
+    """
+    from agentic_runtime.context.tool_use import AppState
+    from agentic_runtime.events import DoneEvent, ToolCallEvent
+    from agentic_runtime.loop.agent_loop import AgentLoop
+    from agentic_runtime.tools import ToolRegistry
+
+    marca = "INYECTADO-POR-LA-TOOL"
+
+    class _Inyecta(_FakeTool):
+        def __init__(self):
+            super().__init__("Inyecta")
+
+        async def execute(self, input, ctx):
+            return ToolResult(
+                tool_name=self.name,
+                output="ok",
+                new_messages=[{"role": "user", "content": marca}],
+            )
+
+    reg = ToolRegistry()
+    reg.register(_Inyecta())
+
+    class _UnaLlamada:
+        def __init__(self):
+            self.n = 0
+
+        async def complete(self, messages, tools, *, stop=None, model_id="", system_sections=None):
+            self.n += 1
+            n = self.n
+
+            async def _gen():
+                if n == 1:
+                    yield ToolCallEvent(call_id="c1", tool_name="Inyecta", tool_input={})
+                    yield DoneEvent(stop_reason="tool_use")
+                else:
+                    yield DoneEvent(stop_reason="stop")
+
+            return _gen()
+
+    loop = AgentLoop(model_caller=_UnaLlamada(), tool_registry=reg, tool_dispatcher=ToolDispatcher())
+    ctx = ToolUseContext(session_id="s1", app_state=AppState(permissions=PermissionContext()))
+    await loop.run("hola", ctx)
+    assert any(marca in str(m.get("content", "")) for m in ctx.messages), (
+        "la tool produjo new_messages y no llegaron a la conversación"
+    )
 
 
 def test_tool_result_carries_context_modifier():
@@ -283,10 +404,24 @@ def test_tool_result_carries_ends_turn_as_declared_b_extension():
     assert ToolResult(tool_name="x", output="ok", ends_turn=True).ends_turn is True
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL5/SIG10: ToolResult.aborted no lleva reason ni tool_use_id (str genérico)")
-def test_aborted_result_carries_reason():
-    r = ToolResult.aborted("bash")
-    assert getattr(r, "reason", None) in ("cancel", "reject", "sibling_error")
+@pytest.mark.xfail(strict=True, reason="FIND-TOOL5/SIG10: ToolResult.aborted no lleva reason ni tool_use_id — el modelo no puede distinguir cancelación de rechazo")
+def test_abort_reason_is_distinguishable_by_the_model():
+    """CONDUCTA (`H-L4`): el motivo del aborto debe llegar a lo que el modelo LEE.
+
+    La versión anterior era `getattr(r, "reason", None) in (…)` —FIRMA sobre un atributo—:
+    añadir `reason` al constructor la habría puesto XPASS aunque el `output` que se serializa
+    al modelo siguiera siendo el genérico `aborted: bash`, que es lo único que el modelo ve.
+    Se asevera sobre el texto que viaja, y con las dos causas contrastadas.
+    """
+    ctx = _ctx(tool_pool=ToolPool(native_tools=[_FakeTool("Bash")]))
+    ctx.stop.abort()
+    r = asyncio.run(ToolDispatcher().dispatch(tool_name="Bash", tool_input={}, ctx=ctx))
+    assert r.is_aborted
+    # El motivo tiene que viajar en lo que el modelo LEE (o, como mínimo, existir para que
+    # el serializador pueda ponerlo). Hoy el output es el genérico `aborted: bash`.
+    assert "cancel" in r.output.lower() or getattr(r, "reason", None) == "cancel", (
+        f"el modelo sólo ve {r.output!r}: no puede distinguir cancelación de rechazo"
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-TOOL6/E6: ToolSearch select: no soporta multi-select coma-separado que el delta-announce promete")
