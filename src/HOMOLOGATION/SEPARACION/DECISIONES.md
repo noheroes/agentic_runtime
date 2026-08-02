@@ -338,3 +338,43 @@ documentados como transporte y **no** como scope. (c) El `scope` se cablea por e
 que no se le da `scope` **no inventa uno**: el seam es opcional y su ausencia es `None`, no un uuid.
 
 **Dónde se aplica.** `C9` y, por transitividad, la firma de `C1..C8` y `C10`.
+
+---
+
+## `D-12` · Una tool se acredita por EFECTO, y su cobertura por CONDUCCIÓN: son dos pruebas, no una
+
+**Fecha:** 2026-08-01 (TRAMO 1, 6ª ventana). **Origen:** la auditoría de la 5ª ventana —*«te preocupa si el
+test corre, no si la funcionalidad OPERA»*— y su consecuencia medida: `FIND-E7F-1`, un barrido **verde** con
+**4 de 25 tools que no cruzaban la puerta**.
+
+**Qué se decide.** Una tool nativa **no** se da por acreditada porque un barrido la ejecute y vuelva sin
+`is_error`. Hacen falta **dos aserciones distintas**, y ninguna sustituye a la otra:
+
+1. **EFECTO** (`E10`) — con cableado **real** (nada de dobles donde exista el objeto real) se asevera **lo que
+   la tool deja hecho en el mundo**: el fichero editado, el repo clonado, el registro cambiado. `is_error ==
+   False` **no es** una aserción de efecto: es una aserción de que no explotó.
+2. **CONDUCCIÓN** (`E11`) — un modelo real, con el censo entero delante y un enunciado **de objetivo**, la
+   **elige e invoca**. Una tool que funciona pero que ningún modelo elige nunca es cobertura que **falta**, y
+   se dice como carencia, no se tapa.
+
+**Tres reglas operativas que salen de aquí:**
+
+- **(a) La entrada del barrido se valida contra el `input_schema` DE LA TOOL**, en las dos direcciones (falta
+  un `required` / sobra una clave no declarada), y **nunca contra una copia en el test**: si mañana cambia el
+  schema y la tabla no, se pone rojo (`L09`). Un `except Exception` que se traga un `KeyError` de entrada mal
+  formada convierte el barrido en teatro.
+- **(b) Una capa de prueba nueva que sale verde a la primera está SIN acreditar.** Un test que nunca ha estado
+  rojo no ha demostrado que pueda ponerse rojo. Se acredita con **violación inyectada** —anunciada antes de
+  tocar el fuente, revertida desde copia propia verificada por `sha256`, nunca con `git checkout`— y el
+  resultado se publica como **N inyecciones → N rojas, M falsos positivos**.
+- **(c) Cuando el enunciado por objetivo NO puede discriminar dos tools redundantes por diseño**, se escribe un
+  caso **dirigido** y se **declara** su régimen más débil en el propio test. Disfrazarlo de objetivo sería la
+  forma exacta de `no-debilitar-la-prueba` que ya cobró dos veces.
+
+**Por qué no bastaba lo anterior.** `D-10` fija que un tramo cierra con E2E reales en verde simultáneo; eso
+acredita **capacidades** (`E1..E9`), y aguanta. Lo que no cubría es la capa **por tool**: se puede tener el
+turno agéntico entero en verde y que **nadie haya aseverado nunca que `Edit` edite**. Eso fue literalmente el
+caso hasta esta ventana.
+
+**Dónde se aplica.** `C5` y `C6` en este tramo; y a toda tool que entre por `10·tools-native` en los tramos
+siguientes — **entra con su caso de efecto y su caso de conducción, o no entra**.

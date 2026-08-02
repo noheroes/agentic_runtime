@@ -712,3 +712,109 @@ modelo de las 11 nunca invocadas · caza del caso rojo de `E2g`.
 
 **Aviso dado por adelantado:** `E10` va a salir **roja en varias tools**. Eso es lo que se está comprando, y
 ninguna de esas rojas se atiende bajando el listón.
+
+---
+
+## 2026-08-01 · TRAMO 1 · 6ª ventana — `E10` (efecto) · `E11` (conducción) · `E7f` re-medido · veredicto plan-mode
+
+**Encargo:** 5 puntos en orden, con la regla dura *«ninguna de las rojas que aparezcan se atiende bajando el
+listón; se atienden AHORA, no hay un después»*. **Pagados 4 de 5** — el 5º (cazar el rojo de `E2g`) no se cazó
+y se dice como tal.
+
+### 1 · `E10` — la matriz funcional de las 25 tools ✅ verde 25/25
+
+Paga el hueco de método que abrió la SÉPTIMA CORRECCIÓN: aseverar **mecanismo** (la tool arranca y vuelve sin
+error) no es aseverar **función** (la tool hace su trabajo). Cada una corre con **cableado real** —
+`ConfinedFilesystem` real, `LocalExecEnvironment` real, `InMemoryTaskRegistry` real, git real,
+`ThreadingHTTPServer` en `127.0.0.1` para `WebFetch`, y para `clone_repository` un **servidor git-https con
+certificado propio** (su `_normalize` fuerza `https://` sea cual sea el esquema de entrada, así que un `file://`
+no habría probado el camino de producción) — y **asevera el efecto observable, no `is_error`**.
+
+- `Edit` **edita**, con **tres negativas** (`old_string` ausente · ambiguo · ruta relativa), cada una aseverando
+  que el fichero queda **byte a byte idéntico**. Nadie lo había aseverado nunca.
+- `Sleep` corre con duración **medible**; antes se había ejercitado con `duration: 0`.
+- `Config`(set) se asevera **aplicando el `context_modifier`** como hace el dispatcher, no leyendo su JSON.
+- `ExitPlanMode` obligó a escribir un `StorageContract` **real** para el test: el runtime no trae ninguno.
+- Cierra con `assert set(comprobadas) == _NATIVE_CENSUS`, y el nombre se marca **antes** de correr el caso para
+  que una excepción no pueda sacar una tool del censo en silencio.
+
+**El verde 25/25 a la primera se trató como bandera roja, no como éxito** (`L09`: un test que nunca ha estado
+rojo no ha demostrado que pueda ponerse rojo). Acreditado con **violación inyectada** —anunciada antes de tocar
+el fuente, revertida desde copia propia verificada con `sha256sum -c`, **nunca `git checkout`**—:
+**7 inyecciones en 6 ficheros → 7 rojas, 0 falsos positivos, las 18 restantes intactas en verde.**
+
+**Defecto propio, dicho:** la primera corrida dio 24/25 con `TypeError: the first argument must be callable` en
+`clone_repository`. Era bug **mío**, no del sujeto: usé `functools.partial(SimpleHTTPRequestHandler, …)` como
+**clase base**, y `partial` devuelve un objeto, no una clase. Se subclasa primero y el `partial` va **sobre** la
+subclase.
+
+### 2 · Veredicto plan-mode ✅ emitido
+
+`test_plan_mode_binding.py` (157 L) y `test_cap_plan_homologation.py` (188 L) abiertos **1→EOF**. Veredicto:
+**`EnterPlanMode` y `ExitPlanMode` SÍ tienen prueba funcional de efecto, con negativa.** Enter asevera
+`_PLAN_MODE_KEY is True` tras aplicar el `context_modifier`, más la negativa de subagente bloqueado. Exit lee el
+plan **de disco**, arma el one-shot, sale de plan mode y **cierra el turno**; el provider lo rinde **una vez** y
+después calla; y la negativa es **de efecto**: sin plan-file es error **y no sale de plan mode**, con el estado
+aseverado intacto. Re-aseveradas por `E10` con storage real.
+
+**Límites dichos, no escondidos:** el storage de esos dos ficheros es un **doble** (hace E/S real en un tmpdir,
+pero es un doble); y los gaps siguen fijados como `xfail(strict=True)` — `FIND-PLAN1/2/3/5/6/12`, entre ellos
+**`FIND-PLAN2`: `ExitPlanMode` no tiene guard de plan-mode activo**.
+
+### 3 · `E7f` re-medido ✅ — y el número cambió
+
+Con las claves correctas del schema, **el mapa de escapes no es el firmado**: se escapan **3, no 2**. El tercero
+es **`clone_repository` (`subproceso-directo`)**, que antes **ni cruzaba la puerta** y por eso no aparecía. Y
+pasan por la costura **22 de 25**, no 23. La cifra vieja **se dice**, no se sobrescribe en silencio.
+
+Guarda añadida (`_assert_input_matches_schema`) en **las dos direcciones** y contra el `input_schema` **de la
+tool**, no contra una copia en el test: falta un `required` ⇒ la tool vuelve temprano y no mide nada; sobra una
+clave no declarada ⇒ la entrada es ficción que el modelo real nunca mandaría. Aparecieron **dos entradas falsas
+más que nadie había nombrado**: `TaskCreate` mandaba `prompt` y `TaskUpdate` mandaba `status`; ninguna existe en
+sus schemas.
+
+### 4 · `E11` — conducción por el modelo de las 11 nunca invocadas ✅ 11/11
+
+Escenarios reales con LLM, censo entero delante, enunciados **por objetivo** (no por nombre de herramienta),
+salvo uno **declarado dirigido** (régimen `E2d`): `TaskOutput` y `TaskGet` son **redundantes por diseño**
+—`TaskGet` también devuelve `result`— y **ningún enunciado por objetivo los discrimina**. Se declara en vez de
+disfrazarse. `conducidas == _E11_OBJETIVO`. La unión medida de tools conducidas por un modelo real sube de
+**14 a 25 de 25**.
+
+**Tres hallazgos, uno pagado y dos abiertos:**
+
+- ✅ **`FIND-E11-3` — defecto del SUJETO, pagado.** `TaskList` tenía un parámetro `status` que **A no tiene**. El
+  modelo llamó con `status="all"`; el campo era `string` libre **sin `enum`**, el filtro comparaba por igualdad,
+  y un valor fuera de dominio devolvía `[]` — **indistinguible de «no hay tareas»**. El modelo respondió que la
+  sesión no tenía trabajos, **con dos tareas sembradas delante**. Resuelto **leyendo el canónico** (`D-08`):
+  `TaskListTool.ts:13` es `z.strictObject({})`. Parámetro y filtro **retirados** (`L10`), no parcheados con un
+  `enum`. Regresión clavada en `_e10_task_list`.
+- ⚠ **`FIND-E11-1` — abierto, no pagado.** No existe costura para restringir las tools del agente **raíz**:
+  `initial_allowed_tools` es una allow-list **aditiva de permisos** (`runtime.py:295-298`), no recorta el
+  anuncio. Para subagentes sí hay `agent_allowed_tools`; para la raíz, no. Las 5 rojas de la 1ª corrida eran
+  **de mi andamio**, no del sujeto; el andamio se retiró **entero**, porque el resultado medido —el modelo
+  condujo las 11 **teniendo `bash` disponible**, la vía de escape más fácil— es más fuerte que el que habría
+  dado un catálogo recortado. Pertenece a `S17`/`K1`, **arriba de la línea**.
+- ⚠ **`FIND-E11-2` — abierto y vigilado por el gate.** En **2 de 4** corridas medidas el modelo **preguntó en
+  prosa** en vez de conducir `AskUserQuestion`. Verificado contra el canónico (`prompts.ts:350-380`, leído) que
+  **no es déficit del montaje**. **No se retocó el prompt ni el system prompt para que pasara.**
+
+**Segundo defecto propio, dicho:** un fichero sembrado en `tmp_path` (fuera de `write_roots`) puso rojo
+`editar-en-sitio`. El rechazo del runtime era **correcto**; el montaje estaba mal.
+
+### 5 · `FIND-E2G-1` ⛔ no cazado
+
+Suite completa capturada **entera a fichero** (método ya fijado tras haber perdido la roja anterior con
+`| tail -6`): **706 passed / 3 skipped / 112 xfailed / 0 failed**, `rc=0`, 434 s. **`E2g` no cayó.** Marcador:
+**1 roja de 3 corridas de suite**. Sigue **abierto** — una corrida verde no arregla un intermitente.
+
+### Medición de cierre (nada heredado)
+
+| medida | valor | delta |
+|---|---|---|
+| gate `-m gate_tramo1` | **27 passed / 0 skipped**, una sola corrida, 212 s | +2 (`E10`, `E11`) |
+| suite completa | **706 passed / 3 skipped / 112 xfailed / 0 failed** (`rc=0`) | +2 |
+| `ruff` (`src/agentic_runtime`) | **505** | **0** — subió a 511 y se pagó entero |
+| `mypy --strict` | **138 err / 54 f** | **0** |
+
+**Sigue faltando `E8`** (8 de 9 capacidades del gate) **y `C10` sigue ⛔.** El tramo **no** está cerrado.

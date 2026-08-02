@@ -114,31 +114,32 @@ class TaskGetTool:
 class TaskListTool:
     name = "TaskList"
     description = "List all tasks currently tracked by the registry."
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "description": "Filter by status (pending, running, completed, failed, killed). Omit for all.",
-            }
-        },
-    }
+    #: **Sin parámetros, como el canónico** (`TaskListTool.ts:13`:
+    #: `inputSchema = z.strictObject({})`).
+    #:
+    #: ⚠ Aquí había un `status` de filtro que **A no tiene**, y que cobró en `E11`
+    #: (`FIND-E11-3`): el modelo leyó «Filter by status (pending, running, …). Omit
+    #: for all.» y llamó con `status="all"`. Como el campo era `string` libre —sin
+    #: `enum` que acotara el dominio— y el filtro comparaba por igualdad, un valor
+    #: fuera de dominio se tragaba en silencio y devolvía `[]`: **indistinguible de
+    #: «no hay tareas»**. El modelo concluyó que la sesión no tenía trabajos y
+    #: respondió eso, con dos tareas sembradas delante. No es un fallo del modelo:
+    #: es una invención de B, mal acotada, que hace mentir a la tool. `L10` —una
+    #: divergencia con el canónico no es una mejora hasta que se demuestre— así que
+    #: se retira en vez de parchearse con un `enum`.
+    input_schema = {"type": "object", "properties": {}}
     category = ToolCategory.BACKGROUND
     requires_permission = False
     safe_for_background = True
     timeout_seconds = 5.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
-        status_filter = input.get("status")
         registry = _registry_of(ctx)
         if registry is None:
             return ToolResult.error(self.name, _NO_REGISTRY)
         # Escopado a la lista de la sesión activa (espejo de `getTaskListId()` →
         # `getSessionId()`): una sesión sólo ve sus propias tareas, sin bleed.
         records = registry.list_for(_session_of(ctx))
-
-        if status_filter:
-            records = [r for r in records if r.status == status_filter]
 
         return ToolResult(
             tool_name=self.name,

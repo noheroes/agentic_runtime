@@ -41,12 +41,19 @@ trabajo.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
+import http.server
 import json
 import os
 import random
+import ssl
+import subprocess
+import threading
+import time
 import uuid
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, ClassVar
 
 import pytest
 
@@ -1404,7 +1411,22 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
 
 
 #: Escapes MEDIDOS corriendo (no inferidos) en el barrido de las 25, con motivo y
-#: destino. 23 de 25 pasan por la costura; estas 2 no.
+#: destino. **22 de 25 pasan por la costura; estas 3 no.**
+#:
+#: ⚠ **Re-medido tras `FIND-E7F-1` (6ª ventana), y el número cambió.** Lo anterior
+#: decía «23 de 25 … estas 2» y estaba MAL: `clone_repository` recibía `url`/`destination`
+#: cuando su schema declara `repository`/`directory`, así que volvía en la primera línea
+#: (`repository es obligatorio`) sin llegar nunca a `asyncio.create_subprocess_exec`. Con la
+#: entrada correcta el barrido lo caza en el acto. No es un escape nuevo: `clone_repository.py`
+#: lo declara en su docstring («decisión A: el `git clone` corre FUERA del sandbox, como
+#: subproceso privilegiado del runtime con red») desde que existe. Lo nuevo es que **está
+#: medido**, que es justo lo que el barrido decía hacer y no hacía. Que un escape declarado
+#: en el fuente pasara tres ventanas sin aparecer en la tabla de escapes es la demostración
+#: de que la tabla no medía: `L09`, verificar el cableado y no la existencia.
+#:
+#: `clone_repository` NO se paga aquí por el mismo motivo que las otras dos: sacarlo por
+#: `S15` lo dejaría sin red bajo `BwrapExecEnvironment` (`--unshare-all`) y por tanto
+#: inservible, y la política de red es `09·F3`, arriba de la LÍNEA DE CORTE del tramo 1.
 #:
 #: `WebFetch`/`WebSearch` llaman `urllib.request.urlopen` **directo**, en el proceso
 #: del runtime y sobre la red del host. Es la MISMA forma que tenía `worktree.py`
@@ -1424,11 +1446,29 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
 _ESCAPES_DECLARADOS: dict[str, list[str]] = {
     "WebFetch": ["red-directa"],
     "WebSearch": ["red-directa"],
+    "clone_repository": ["subproceso-directo"],
 }
 
 
 #: Entrada mínima por tool para el barrido. Cubrir el censo ENTERO es parte del
 #: contrato del test: `test_e7f` asevera que las claves == `_NATIVE_CENSUS`.
+#:
+#: ⚠ **`FIND-E7F-1`, pagado aquí.** La versión anterior de esta tabla pasaba claves
+#: que NO eran las del schema en cuatro entradas —`read_file`/`write_file` recibían
+#: `file_path` y declaran `path`; `Config` iba vacía y declara `setting` requerido;
+#: `clone_repository` recibía `url`/`destination` y declara `repository`/`directory`—
+#: y el `except Exception` del barrido se tragaba el `KeyError`/el `is_error` de vuelta
+#: temprana. Resultado: **4 de 25 no cruzaban la puerta** y el barrido salía verde
+#: igual, así que el «23 de 25 pasan por la costura» que se firmó con esa tabla no
+#: medía lo que decía. Dos entradas más estaban mal sin que nadie las hubiera nombrado
+#: (`TaskCreate` mandaba `prompt`, que no existe en su schema, y `TaskUpdate` mandaba
+#: `status`, tampoco): ésas sí cruzaban —las tools leen con `.get(..., default)`— pero
+#: eran igual de falsas como entrada.
+#:
+#: Lo que impide que vuelva a pasar no es esta tabla corregida sino
+#: `_assert_input_matches_schema`, que la valida contra el `input_schema` REAL de cada
+#: tool ANTES de ejecutar: una clave inventada o un `required` ausente ponen el test
+#: rojo en vez de convertirse en una vuelta temprana silenciosa.
 def _tool_inputs(ws: Path, seeded: Path) -> dict[str, dict]:
     return {
         "Agent": {"description": "x", "prompt": "y"},
@@ -1436,30 +1476,66 @@ def _tool_inputs(ws: Path, seeded: Path) -> dict[str, dict]:
             "question": "¿q?", "header": "h", "multiSelect": False,
             "options": [{"label": "a", "description": "d"}, {"label": "b", "description": "d"}],
         }]},
-        "Config": {},
+        "Config": {"setting": "model", "value": "x"},
         "Edit": {"file_path": str(seeded), "old_string": "token", "new_string": "otro"},
         "EnterPlanMode": {},
         "EnterWorktree": {"name": "barrido"},
         "ExitPlanMode": {},
         "ExitWorktree": {"action": "keep"},
         "Sleep": {"duration": 0},
-        "TaskCreate": {"description": "d", "prompt": "p"},
+        "TaskCreate": {"subject": "s", "description": "d"},
         "TaskGet": {"task_id": "no-existe"},
         "TaskList": {},
         "TaskOutput": {"task_id": "no-existe"},
         "TaskStop": {"task_id": "no-existe"},
-        "TaskUpdate": {"task_id": "no-existe", "status": "completed"},
+        "TaskUpdate": {"task_id": "no-existe", "description": "d"},
         "TodoWrite": {"todos": []},
         "ToolSearch": {"query": "select:bash", "max_results": 3},
         "WebFetch": {"url": "http://127.0.0.1:9/no-existe"},
         "WebSearch": {"query": "x"},
         "bash": {"command": "echo hola"},
-        "clone_repository": {"url": "https://example.invalid/r.git", "destination": "r"},
+        "clone_repository": {"repository": "https://example.invalid/r.git", "directory": "r"},
         "glob": {"pattern": "*"},
         "grep": {"pattern": "token"},
-        "read_file": {"file_path": str(seeded)},
-        "write_file": {"file_path": str(ws / "salida.txt"), "content": "c"},
+        "read_file": {"path": str(seeded)},
+        "write_file": {"path": str(ws / "salida.txt"), "content": "c"},
     }
+
+
+class _SeamEscape(Exception):
+    """Una tool salió por fuera de la costura. Tipo propio, no `AssertionError`.
+
+    La versión anterior levantaba `AssertionError` desde las trampas y el bucle hacía
+    `except AssertionError: raise`, así que el barrido **moría en el primer escape** y
+    no llegaba a medir los 24 restantes. Con un tipo propio, la trampa registra, el
+    barrido sigue, y quien decide es la igualdad EXACTA contra `_ESCAPES_DECLARADOS`
+    del final: aparecer un escape nuevo pone rojo igual, y además se ve el mapa entero.
+    """
+
+
+def _assert_input_matches_schema(name: str, payload: dict, schema: dict) -> None:
+    """Guarda de `FIND-E7F-1`: la entrada del barrido tiene que ser la del schema.
+
+    Dos direcciones, y las dos hacen falta:
+
+    · falta un `required` → la tool vuelve temprano (`is_error`) o revienta con
+      `KeyError`, y en ambos casos NO cruza la puerta que el barrido dice medir;
+    · sobra una clave que el schema no declara → la entrada es ficción: el modelo
+      real nunca la mandaría, así que lo barrido no es lo que corre en producción.
+
+    Se valida contra `input_schema` **de la tool**, no contra una copia en el test:
+    si mañana cambia el schema y la tabla no, esto se pone rojo (`L09`).
+    """
+    props = set((schema.get("properties") or {}).keys())
+    required = set(schema.get("required") or ())
+    faltan = required - set(payload)
+    sobran = set(payload) - props
+    assert not faltan and not sobran, (
+        f"entrada del barrido incompatible con el `input_schema` de `{name}`: "
+        f"faltan requeridas {sorted(faltan)}; sobran no declaradas {sorted(sobran)}. "
+        "Una entrada así no cruza la puerta de la tool y convierte el barrido en un "
+        "conteo de vueltas tempranas (`FIND-E7F-1`)."
+    )
 
 
 async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, monkeypatch):
@@ -1500,11 +1576,11 @@ async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, mon
 
     def _no_spawn(*a: Any, **k: Any):
         _record("subproceso-directo")
-        raise AssertionError(f"{current.get('tool')}: subproceso FUERA de `S15`")
+        raise _SeamEscape(f"{current.get('tool')}: subproceso FUERA de `S15`")
 
     def _no_net(*a: Any, **k: Any):
         _record("red-directa")
-        raise AssertionError(f"{current.get('tool')}: red FUERA de toda costura")
+        raise _SeamEscape(f"{current.get('tool')}: red FUERA de toda costura")
 
     monkeypatch.setattr(_asyncio, "create_subprocess_exec", _no_spawn)
     monkeypatch.setattr(_asyncio, "create_subprocess_shell", _no_spawn)
@@ -1541,14 +1617,30 @@ async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, mon
             presentation=_MaskingPresentation(),
             exec_env=_SpyExecEnv(),
         )
+        # `FIND-E7F-1`: la entrada se valida contra el schema REAL antes de ejecutar.
+        # Sin esto, una entrada mal formada se convierte en vuelta temprana y el
+        # barrido cuenta como «pasó por la costura» a una tool que no llegó a entrar.
+        _assert_input_matches_schema(tool.name, inputs[tool.name], tool.input_schema)
         try:
             result = await tool.execute(inputs[tool.name], ctx)
             outputs[tool.name] = result.output or ""
-        except AssertionError:
-            raise
-        # Silenciado a propósito: el barrido mide POR DÓNDE sale la tool, no si tiene éxito.
-        # Una tool puede reventar por falta de cableado (sin `task_registry`, sin runner)
-        # y aun así haber intentado escaparse — el registro del escape ya ocurrió arriba.
+        except _SeamEscape as exc:
+            # Escape REGISTRADO (arriba, en la trampa) y barrido que continúa: quien
+            # dictamina es la igualdad exacta del final, no morir en el primero.
+            outputs[tool.name] = f"<escape {exc}>"
+        # `KeyError`/`TypeError` ya NO se tragan: son exactamente la firma de una
+        # entrada que no cruza la puerta, que es como `FIND-E7F-1` pasó desapercibido.
+        # La guarda de arriba debería haberlos hecho imposibles; si aparecen, el
+        # barrido está mintiendo otra vez y tiene que decirlo en voz alta.
+        except (KeyError, TypeError) as exc:
+            raise AssertionError(
+                f"`{tool.name}` no cruzó la puerta: {type(exc).__name__}: {exc}. "
+                "La entrada del barrido no es la que la tool lee (`FIND-E7F-1`)."
+            ) from exc
+        # Silenciado a propósito, y sólo esto: el barrido mide POR DÓNDE sale la tool,
+        # no si tiene éxito. Una tool puede reventar por falta de cableado (sin
+        # `task_registry`, sin runner) y aun así haber intentado escaparse — el
+        # registro del escape ya ocurrió arriba. Lo que NO puede es no haber entrado.
         except Exception as exc:  # noqa: BLE001
             outputs[tool.name] = f"<excepción {type(exc).__name__}: {exc}>"
 
@@ -2346,4 +2438,1340 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
     assert not fallos, (
         f"SOLVENCIA CON ToolSearch: {len(fallos)} incumplimientos en {n} casos "
         f"(GATE_E2G_SEED={seed} para reproducir)\n" + "\n".join(fallos)
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# E10 · MATRIZ FUNCIONAL DE LAS 25 — que la tool OPERE, no que el test corra
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# **Por qué existe, dicho sin adorno.** La 5ª ventana cerró con una auditoría propia
+# que decía que la capa por tool acreditaba MECANISMO y no FUNCIÓN, y tenía razón:
+# `E2c` prueba que las 25 se registran, `E2c'` que se anuncian, `E7f` que no se
+# escapan de la costura. Ninguna de las tres prueba que la tool HAGA SU TRABAJO.
+# Se podía vaciar el cuerpo de `Edit` dejando `return ToolResult(output="Edited x")`
+# y el censo, el anuncio y el barrido seguían verdes los tres. Literalmente:
+# **nadie había aseverado nunca que `Edit` editara**.
+#
+# Es `L09` —verificar el cableado, no la existencia— aplicado a la última capa que
+# se había quedado sin él. Reglas de esta matriz, y son las que la hacen prueba:
+#
+#   1. **Se asevera el EFECTO OBSERVABLE, nunca `is_error is False`.** Un
+#      `is_error` falso sólo dice que la tool no reventó. Lo que se mira es el
+#      archivo en disco, el registro en el registry, el estado en `app_state`, el
+#      árbol de git, los segundos de reloj. Donde el único efecto de una tool es su
+#      contrato de turno (`AskUserQuestion`), se dice y se asevera ESO.
+#   2. **Cableado real**: `ConfinedFilesystem` real sobre un workspace real,
+#      `LocalExecEnvironment` real (subprocesos de verdad), `InMemoryTaskRegistry`
+#      real, git real sobre un repo real, servidor HTTP real en `127.0.0.1` para
+#      `WebFetch`, servidor HTTPS real sirviendo un repo bare para
+#      `clone_repository`. Nada de dobles donde el sujeto es la tool.
+#   3. **Negativas donde el modo de fallo importa**: que `Edit` no toque el archivo
+#      cuando el `old_string` es ambiguo vale tanto como que lo edite cuando no lo es.
+#   4. **Cierra con `set(comprobadas) == _NATIVE_CENSUS`**: ninguna se queda fuera en
+#      silencio. Y `_E10_CASES` se compara con el censo ANTES de correr, así que una
+#      tool nueva sin caso pone rojo en vez de colarse.
+#   5. **Se recogen TODOS los fallos y se reportan juntos.** Morir en el primero
+#      daría una matriz de una casilla. El `except Exception` de aquí NO silencia:
+#      convierte en fallo reportado, y el test acaba rojo igual.
+#
+# ⚠ **Las dos substituciones que hay, declaradas, no disimuladas:**
+#
+#   · `WebSearch` apunta a `https://google.serper.dev` **en literal** dentro de
+#     `_serper_search`: no hay costura por donde redirigirlo a un servidor local, así
+#     que su peer de red va sustituido y lo que se asevera es (a) la petición que la
+#     tool CONSTRUYE de verdad —método, cabecera `X-API-KEY`, cuerpo `q`/`num`— y (b)
+#     el renderizado de la respuesta. Un gate que dependa de una API de pago de
+#     terceros no es un gate (misma decisión que `E2f·3`). El egress REAL de esa tool
+#     ya está medido y acotado en `E7f`.
+#   · `ExitPlanMode` lee por `ctx.storage`, y el runtime **no envía ninguna
+#     implementación concreta** de `StorageContract` (`FilesystemStorage` no tiene
+#     `real_path`/`ensure_local`: son del integrador). Así que se implementa el seam
+#     con E/S de disco REAL — es el contrato tal cual, no un doble que finge la lectura.
+#
+# **Acreditación adversarial de la propia matriz (6ª ventana).** `E10` salió verde
+# 25/25 a la primera, y un verde total a la primera es indistinguible de una matriz
+# que no mide nada — que es exactamente lo que `E7f` acababa de descubrir de la capa
+# anterior. Así que se midió con **violación inyectada**: 7 mutaciones en 6 fuentes
+# (`Edit` devuelve «Edited …» sin escribir · `write_file` escribe cadena vacía ·
+# `TaskUpdate` no persiste en el registry · `TaskStop` no llama a `kill` · `Sleep`
+# duerme 0 · `Config` no guarda el valor en el modifier · `WebFetch` devuelve un
+# cuerpo fijo sin usar el de la red) — todas dejando el `is_error` en `False`, que es
+# el modo de fallo que las capas viejas no veían. Resultado medido:
+# **7 rojas de 7 inyecciones y las 18 restantes en verde** (sin falsos positivos).
+# Fuentes restaurados desde copia propia y verificados con `sha256sum -c`.
+#
+# ⚠ **Hallazgo del montaje, y es del sujeto, no del test:** `clone_repository`
+# **reescribe a `https://` cualquier URL de entrada** (`_normalize` devuelve
+# `f"https://{host}/{path}.git"` aunque el esquema recibido sea `http`). Por eso este
+# caso monta un TLS de verdad con certificado autofirmado en vez de un http plano:
+# no es capricho del test, es la única forma de que la tool llegue a hablar con él.
+
+
+class _E10Env:
+    """Cableado compartido de la matriz: workspace real, repo git real, registry real."""
+
+    def __init__(self, ws: Path, tmp: Path, monkeypatch: Any, session_id: str) -> None:
+        from agentic_runtime.execution.tasks.registry import InMemoryTaskRegistry
+
+        self.ws = ws
+        self.tmp = tmp
+        self.mp = monkeypatch
+        self.session_id = session_id
+        self.registry = InMemoryTaskRegistry()
+
+    def tag(self, prefijo: str) -> str:
+        """Centinela único por corrida: si aparece en el efecto, lo puso ESTA ejecución."""
+        return f"{prefijo}-{uuid.uuid4().hex[:10].upper()}"
+
+    def ctx(self, **overrides: Any) -> ToolUseContext:
+        from agentic_runtime.tools.exec_env import LocalExecEnvironment
+        from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+        base: dict[str, Any] = {
+            "session_id": self.session_id,
+            "fs": ConfinedFilesystem(roots=[self.ws], write_roots=[self.ws]),
+            "exec_env": LocalExecEnvironment(),
+            "task_registry": self.registry,
+        }
+        base.update(overrides)
+        return ToolUseContext(**base)
+
+    def hermana(self, nombre: str) -> Any:
+        """La tool `nombre` del pool de PRODUCCIÓN (para pares como Enter/ExitWorktree)."""
+        from agentic_runtime.tools.factory import create_tools
+
+        tool = next((t for t in create_tools().all_tools() if t.name == nombre), None)
+        assert tool is not None, f"la tool hermana `{nombre}` no está en el pool"
+        return tool
+
+
+def _aplicar(result: Any, ctx: ToolUseContext) -> ToolUseContext:
+    """Aplica el `context_modifier` como lo aplica el dispatcher. Sin esto, aseverar
+    sobre `app_state` mediría lo que la tool PROMETE, no lo que el turno hace."""
+    assert result.context_modifier is not None, (
+        f"`{result.tool_name}` dice tener efecto de contexto y no trae `context_modifier`"
+    )
+    return result.context_modifier(ctx)
+
+
+def _git(*argv: str, cwd: Path) -> subprocess.CompletedProcess:
+    """git REAL. Identidad por env: un `git commit` sin `user.email` falla en CI limpio."""
+    return subprocess.run(
+        ["git", *argv],
+        cwd=str(cwd),
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "gate", "GIT_AUTHOR_EMAIL": "gate@tramo1",
+            "GIT_COMMITTER_NAME": "gate", "GIT_COMMITTER_EMAIL": "gate@tramo1",
+        },
+        check=True, capture_output=True, text=True,
+    )
+
+
+@contextlib.contextmanager
+def _servidor_http(cuerpo: bytes):
+    """Servidor HTTP REAL en `127.0.0.1`, puerto efímero. Para `WebFetch`."""
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(cuerpo)))
+            self.end_headers()
+            self.wfile.write(cuerpo)
+
+        def log_message(self, *a: Any) -> None:
+            return None
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield httpd.server_address[1]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@contextlib.contextmanager
+def _servidor_git_https(raiz: Path, tmp: Path):
+    """Repo bare servido por HTTPS real (dumb protocol) con cert autofirmado.
+
+    TLS y no http plano **porque la tool lo obliga**: `_normalize` reescribe el esquema
+    a `https://` pase lo que pase. `GIT_SSL_NO_VERIFY` lo pone el caso, no esto.
+    """
+    key, crt = tmp / "e10_key.pem", tmp / "e10_crt.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(key), "-out", str(crt), "-days", "1",
+         "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+        check=True, capture_output=True,
+    )
+    class _Silencioso(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a: Any) -> None:
+            return None
+
+    # `partial` SOBRE la subclase, nunca al revés: `functools.partial` devuelve un
+    # objeto, no una clase, y heredar de él revienta con `TypeError: the first
+    # argument must be callable` al instanciar el servidor.
+    handler = functools.partial(_Silencioso, directory=str(raiz))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(crt), str(key))
+    httpd.socket = ssl_ctx.wrap_socket(httpd.socket, server_side=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield httpd.server_address[1]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# ── los 25 casos ──────────────────────────────────────────────────────────────
+# Cada uno devuelve la frase de lo que dejó ASEVERADO; esa frase es la que se
+# imprime como matriz al final, para que el veredicto se lea sin abrir el código.
+
+
+async def _e10_bash(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("BASH")
+    destino = env.ws / "bash.out"
+    ctx = env.ctx()
+    r = await tool.execute({"command": f"printf %s '{marca}' > '{destino}'"}, ctx)
+    assert not r.is_error, f"bash falló: {r.output!r}"
+    assert destino.read_text() == marca, (
+        f"el subproceso no escribió el efecto en disco: {destino.read_text()!r}"
+    )
+    r2 = await tool.execute({"command": "exit 3"}, ctx)
+    assert r2.is_error, "un returncode != 0 no se propagó como `is_error`"
+    return "subproceso REAL: escribió el centinela en disco; rc!=0 → is_error"
+
+
+async def _e10_write_file(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("WRITE")
+    destino = env.ws / "sub" / "escrito.txt"
+    ctx = env.ctx()
+    r = await tool.execute({"path": str(destino), "content": marca}, ctx)
+    assert not r.is_error, r.output
+    assert destino.read_text() == marca, "no escribió el contenido pedido"
+    fuera = env.tmp / "fuera_del_workspace.txt"
+    r2 = await tool.execute({"path": str(fuera), "content": "x"}, ctx)
+    assert r2.is_error, "escribió fuera del write-root sin error"
+    assert not fuera.exists(), "NEGATIVA rota: el archivo fuera del workspace se creó"
+    return "creó el archivo (y los padres) con el contenido exacto; fuera del root no escribe"
+
+
+async def _e10_read_file(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("READ")
+    p = env.ws / "leido.txt"
+    p.write_text(f"linea0\n{marca}\nlinea2\n", encoding="utf-8")
+    ctx = env.ctx()
+    r = await tool.execute({"path": str(p)}, ctx)
+    assert not r.is_error, r.output
+    assert r.output == f"linea0\n{marca}\nlinea2", f"no devolvió el contenido: {r.output!r}"
+    r2 = await tool.execute({"path": str(p), "offset": 1, "limit": 1}, ctx)
+    assert r2.output == marca, f"offset/limit no recorta: {r2.output!r}"
+    return "devolvió el contenido real del archivo; `offset`/`limit` recortan de verdad"
+
+
+async def _e10_edit(tool: Any, env: _E10Env) -> str:
+    """El agujero que nombró la auditoría: NADIE había aseverado nunca que `Edit` edite."""
+    viejo, nuevo = env.tag("VIEJO"), env.tag("NUEVO")
+    p = env.ws / "editado.txt"
+    p.write_text(f"cabecera\n{viejo}\npie\n", encoding="utf-8")
+    ctx = env.ctx()
+
+    r = await tool.execute(
+        {"file_path": str(p), "old_string": viejo, "new_string": nuevo}, ctx
+    )
+    assert not r.is_error, f"Edit falló: {r.output!r}"
+    contenido = p.read_text(encoding="utf-8")
+    assert contenido == f"cabecera\n{nuevo}\npie\n", (
+        f"`Edit` NO editó el archivo como dice: {contenido!r}"
+    )
+
+    # NEGATIVA 1 — `old_string` que ya no está: error y archivo INTACTO.
+    antes = p.read_text(encoding="utf-8")
+    r2 = await tool.execute(
+        {"file_path": str(p), "old_string": viejo, "new_string": "z"}, ctx
+    )
+    assert r2.is_error, "reemplazó un `old_string` inexistente"
+    assert p.read_text(encoding="utf-8") == antes, "tocó el archivo en el camino de error"
+
+    # NEGATIVA 2 — `old_string` ambiguo: error y archivo INTACTO (no edita «el primero»).
+    amb = env.ws / "ambiguo.txt"
+    amb.write_text("REP\nmedio\nREP\n", encoding="utf-8")
+    r3 = await tool.execute(
+        {"file_path": str(amb), "old_string": "REP", "new_string": "X"}, ctx
+    )
+    assert r3.is_error, "editó con un `old_string` que casa 2 veces"
+    assert amb.read_text(encoding="utf-8") == "REP\nmedio\nREP\n", (
+        "el camino de ambigüedad dejó el archivo modificado"
+    )
+
+    # NEGATIVA 3 — ruta relativa: rechazada por contrato.
+    r4 = await tool.execute({"file_path": "rel.txt", "old_string": "a", "new_string": "b"}, ctx)
+    assert r4.is_error, "aceptó un `file_path` relativo"
+    return "EDITA de verdad (contenido nuevo en disco) y no toca el archivo en 3 negativas"
+
+
+async def _e10_glob(tool: Any, env: _E10Env) -> str:
+    d = env.ws / "globdir"
+    d.mkdir(exist_ok=True)
+    for n in ("a.py", "b.py", "c.txt"):
+        (d / n).write_text("x", encoding="utf-8")
+    ctx = env.ctx()
+    r = await tool.execute({"pattern": "globdir/*.py"}, ctx)
+    assert not r.is_error, r.output
+    lineas = [ln for ln in r.output.splitlines() if ln.strip()]
+    nombres = {Path(ln).name for ln in lineas}
+    assert nombres == {"a.py", "b.py"}, f"no devolvió los matches reales: {nombres}"
+    assert all(Path(ln).exists() for ln in lineas), (
+        f"emitió rutas que no existen: {lineas}"
+    )
+    return "devolvió exactamente los archivos que casan y existen en disco"
+
+
+async def _e10_grep(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("GREP")
+    d = env.ws / "grepdir"
+    d.mkdir(exist_ok=True)
+    (d / "con.txt").write_text(f"ruido\nclave: {marca}\n", encoding="utf-8")
+    (d / "silencio.txt").write_text("nada aqui\n", encoding="utf-8")
+    ctx = env.ctx()
+    r = await tool.execute({"pattern": marca, "path": str(d)}, ctx)
+    assert not r.is_error, r.output
+    assert marca in r.output, f"no encontró la línea que casa: {r.output!r}"
+    assert "con.txt:2:" in r.output, f"no reporta archivo:línea: {r.output!r}"
+    assert "silencio.txt" not in r.output, "reportó un archivo que no casa"
+    return "encontró la coincidencia real con archivo:línea y excluyó la que no casa"
+
+
+async def _e10_sleep(tool: Any, env: _E10Env) -> str:
+    ctx = env.ctx()
+    t0 = time.monotonic()
+    r = await tool.execute({"duration": 0.25}, ctx)
+    transcurrido = time.monotonic() - t0
+    assert not r.is_error, r.output
+    assert transcurrido >= 0.2, f"no durmió de verdad: {transcurrido:.3f}s"
+    assert r.output == "Slept for 0.25 seconds.", r.output
+    # El clamp inferior, medido: negativo → 0.0 y vuelve en el acto.
+    t1 = time.monotonic()
+    r2 = await tool.execute({"duration": -5}, ctx)
+    assert time.monotonic() - t1 < 0.2, "un `duration` negativo no volvió inmediato"
+    assert r2.output == "Slept for 0.0 seconds.", r2.output
+    return "durmió el tiempo de reloj pedido; clamp inferior a 0.0 medido"
+
+
+async def _e10_web_fetch(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("FETCH")
+    ctx = env.ctx()
+    with _servidor_http(f"<html>{marca}</html>".encode()) as puerto:
+        r = await tool.execute({"url": f"http://127.0.0.1:{puerto}/x"}, ctx)
+    assert not r.is_error, f"no trajo la página: {r.output!r}"
+    assert marca in r.output, f"el cuerpo servido no llegó a la salida: {r.output!r}"
+    ctx2 = env.ctx()
+    r2 = await tool.execute({"url": "file:///etc/passwd"}, ctx2)
+    assert r2.is_error and "http" in r2.output, f"aceptó un esquema no-http: {r2.output!r}"
+    return "trajo por HTTP REAL el cuerpo servido en 127.0.0.1; `file://` rechazado"
+
+
+async def _e10_web_search(tool: Any, env: _E10Env) -> str:
+    """Peer de red SUSTITUIDO (endpoint en literal, sin costura). Ver cabecera de `E10`."""
+    import urllib.request
+
+    marca = env.tag("SERP")
+    capturado: dict[str, Any] = {}
+
+    class _Resp:
+        def __init__(self, body: bytes) -> None:
+            self._b = body
+
+        def read(self) -> bytes:
+            return self._b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    def _fake_urlopen(req: Any, *a: Any, **k: Any) -> _Resp:
+        capturado["url"] = req.full_url
+        capturado["method"] = req.get_method()
+        capturado["headers"] = {k.lower(): v for k, v in req.header_items()}
+        capturado["body"] = json.loads(req.data)
+        return _Resp(json.dumps({"organic": [
+            {"title": "Titulo uno", "link": "https://ej.invalid/1", "snippet": f"dice {marca}"},
+            {"title": "Titulo dos", "link": "https://ej.invalid/2", "snippet": "otro"},
+        ]}).encode())
+
+    ctx = env.ctx()
+    with env.mp.context() as mp:
+        mp.setenv("SERPER_API_KEY", "clave-e10")
+        mp.setattr(urllib.request, "urlopen", _fake_urlopen)
+        r = await tool.execute({"query": "consulta", "max_results": 2}, ctx)
+        assert not r.is_error, r.output
+        # (a) la petición que la tool CONSTRUYE de verdad
+        assert capturado["url"] == "https://google.serper.dev/search", capturado["url"]
+        assert capturado["method"] == "POST", capturado["method"]
+        assert capturado["headers"].get("X-api-key".lower()) == "clave-e10", capturado["headers"]
+        assert capturado["body"] == {"q": "consulta", "num": 2}, capturado["body"]
+        # (b) el renderizado de la respuesta
+        assert "1. **Titulo uno**" in r.output, r.output
+        assert "https://ej.invalid/1" in r.output and marca in r.output, r.output
+        # el filtro de dominios entra en la query efectiva
+        await tool.execute({"query": "q", "allowed_domains": ["a.io"]}, ctx)
+        assert capturado["body"]["q"] == "(q) (site:a.io)", capturado["body"]
+
+        mp.delenv("SERPER_API_KEY")
+        r3 = await tool.execute({"query": "q"}, ctx)
+        assert r3.is_error and "SERPER_API_KEY" in r3.output, r3.output
+    return "construyó POST+X-API-KEY+cuerpo q/num, renderizó los resultados, y sin clave falla"
+
+
+async def _e10_clone_repository(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("CLON")
+    origen = env.tmp / "origen"
+    origen.mkdir()
+    (origen / "SENTINELA.txt").write_text(f"{marca}\n", encoding="utf-8")
+    _git("init", "-q", "-b", "main", cwd=origen)
+    _git("add", "-A", cwd=origen)
+    _git("commit", "-q", "-m", "inicial", cwd=origen)
+
+    servidos = env.tmp / "servidos"
+    servidos.mkdir()
+    _git("clone", "-q", "--bare", str(origen), str(servidos / "repo.git"), cwd=env.tmp)
+    _git("-C", str(servidos / "repo.git"), "update-server-info", cwd=env.tmp)
+
+    ctx = env.ctx()
+    with env.mp.context() as mp:
+        mp.setenv("GIT_SSL_NO_VERIFY", "1")  # cert autofirmado del servidor de prueba
+        with _servidor_git_https(servidos, env.tmp) as puerto:
+            r = await tool.execute(
+                {"repository": f"https://127.0.0.1:{puerto}/repo.git", "directory": "clonado"},
+                ctx,
+            )
+            assert not r.is_error, f"el clone falló: {r.output!r}"
+            clonado = env.ws / "clonado"
+            assert (clonado / ".git").is_dir(), "no quedó un repo git en el destino"
+            assert (clonado / "SENTINELA.txt").read_text().strip() == marca, (
+                "el árbol clonado no trae el contenido del origen"
+            )
+            r2 = await tool.execute(
+                {"repository": f"https://127.0.0.1:{puerto}/repo.git", "directory": "clonado"},
+                ctx,
+            )
+            assert r2.is_error and "ya existe" in r2.output, r2.output
+    r3 = await tool.execute({"repository": "ftp://ej.invalid/x"}, env.ctx())
+    assert r3.is_error, "aceptó un esquema no soportado"
+    return "clonó con git REAL por HTTPS: árbol y .git en el workspace; destino ocupado → error"
+
+
+async def _e10_config(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("CFG")
+    ctx = env.ctx()
+    r = await tool.execute({"setting": "model", "value": marca}, ctx)
+    assert not r.is_error, r.output
+    ctx = _aplicar(r, ctx)
+    assert (ctx.app_state.native.get("config") or {}).get("model") == marca, (
+        f"el `set` no dejó el valor en `app_state`: {ctx.app_state.native.get('config')}"
+    )
+    assert json.loads(r.output)["operation"] == "set"
+    r2 = await tool.execute({"setting": "model"}, ctx)
+    assert json.loads(r2.output)["value"] == marca, f"el `get` no lee lo escrito: {r2.output}"
+    r3 = await tool.execute({"setting": ""}, ctx)
+    assert r3.is_error, "aceptó un `setting` vacío"
+    return "el `set` deja el valor en `app_state` y el `get` posterior lo lee"
+
+
+async def _e10_todo_write(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("TODO")
+    todos = [{"id": "1", "content": marca, "status": "pending", "priority": "high"}]
+    ctx = env.ctx()
+    r = await tool.execute({"todos": todos}, ctx)
+    ctx = _aplicar(r, ctx)
+    assert ctx.app_state.native["todos"] == todos, (
+        f"la lista no quedó en `app_state`: {ctx.app_state.native.get('todos')}"
+    )
+    assert json.loads(r.output)["old_todos"] == [], r.output
+    nuevos = [{"id": "1", "content": marca, "status": "completed", "priority": "high"}]
+    r2 = await tool.execute({"todos": nuevos}, ctx)
+    assert json.loads(r2.output)["old_todos"] == todos, (
+        f"no reporta la lista anterior: {r2.output}"
+    )
+    ctx = _aplicar(r2, ctx)
+    assert ctx.app_state.native["todos"] == nuevos, "el segundo write no reemplazó"
+    return "escribe la lista en `app_state` y reporta la anterior en el reemplazo"
+
+
+async def _e10_tool_search(tool: Any, env: _E10Env) -> str:
+    from agentic_runtime.tools.deferred import discovered_tool_names
+    from agentic_runtime.tools.pool import ToolPool
+
+    class _DiferidaTestigo:
+        name = "e10_diferida"
+        description = "Testigo diferido de la matriz funcional."
+        input_schema: ClassVar[dict] = {
+            "type": "object", "properties": {"campo": {"type": "string"}},
+        }
+        category = ToolCategory.UTILITY
+        requires_permission = False
+        safe_for_background = True
+        timeout_seconds = 5.0
+        deferred = True
+
+        async def execute(self, input: dict, ctx: ToolUseContext) -> ToolResult:
+            return ToolResult(tool_name=self.name, output="ok")
+
+    ctx = env.ctx(tool_pool=ToolPool(capability_tools=[_DiferidaTestigo()]))
+    r = await tool.execute({"query": "select:e10_diferida"}, ctx)
+    assert not r.is_error, r.output
+    payload = json.loads(r.output)
+    nombres = [m["name"] for m in payload["matches"]]
+    assert nombres == ["e10_diferida"], f"no resolvió la diferida por nombre: {nombres}"
+    assert payload["matches"][0]["parameters"]["properties"].get("campo"), (
+        "devolvió la descubierta sin schema invocable"
+    )
+    assert discovered_tool_names(ctx) == {"e10_diferida"}, discovered_tool_names(ctx)
+    r2 = await tool.execute({"query": "select:bash"}, env.ctx())
+    assert json.loads(r2.output)["matches"] == [], "descubrió una tool que no es diferida"
+    return "descubrió la diferida, devolvió su schema y marcó el estado; una no-diferida no"
+
+
+async def _e10_ask_user_question(tool: Any, env: _E10Env) -> str:
+    """Su efecto ES el contrato de turno: `ends_turn` y no bloquear. Se asevera eso."""
+    ctx = env.ctx()
+    t0 = time.monotonic()
+    r = await tool.execute({"questions": [{
+        "question": "¿seguimos?", "header": "rumbo",
+        "options": [{"label": "si", "description": "d"}, {"label": "no", "description": "d"}],
+    }]}, ctx)
+    transcurrido = time.monotonic() - t0
+    assert not r.is_error, r.output
+    assert r.ends_turn is True, "no cedió el turno: el HITL multi-turno no arranca"
+    assert transcurrido < 2.0, (
+        f"BLOQUEÓ {transcurrido:.1f}s (su `timeout_seconds` es 300): la tool debe volver ya"
+    )
+    assert r.output.strip(), "volvió sin placeholder para el tool_result"
+    return "cede el turno (`ends_turn`) y vuelve en el acto en vez de bloquear 300s"
+
+
+async def _e10_agent(tool: Any, env: _E10Env) -> str:
+    from agentic_runtime.execution.runner import SubagentSpec
+
+    marca = env.tag("SUBAG")
+    recibidos: list[Any] = []
+
+    class _RunnerTestigo:
+        async def run(self, spec: Any, *, background: bool = False) -> str:
+            recibidos.append((spec, background))
+            return f"salida del subagente {marca}"
+
+    ctx = env.ctx(runner=_RunnerTestigo())
+    r = await tool.execute({"prompt": "haz X", "description": "desc"}, ctx)
+    assert not r.is_error, r.output
+    assert len(recibidos) == 1, "no delegó en el runner"
+    spec, background = recibidos[0]
+    assert isinstance(spec, SubagentSpec), f"delegó con algo que no es `SubagentSpec`: {spec!r}"
+    assert spec.prompt == "haz X" and spec.description == "desc"
+    assert spec.parent_session_id == env.session_id, (
+        f"no transportó el `session_id` padre: {spec.parent_session_id!r}"
+    )
+    assert background is False
+    assert marca in r.output, f"no devolvió lo que produjo el runner: {r.output!r}"
+
+    r2 = await tool.execute({"prompt": "x", "description": "d"}, env.ctx(runner=None))
+    assert r2.is_error and "S18" in r2.output, f"sin runner no falla en voz alta: {r2.output!r}"
+    r3 = await tool.execute(
+        {"prompt": "x", "description": "d"}, env.ctx(runner=_RunnerTestigo(), subagent_depth=5)
+    )
+    assert r3.is_error and "depth" in r3.output.lower(), r3.output
+    return "delegó un `SubagentSpec` real con el session_id padre y devolvió su salida"
+
+
+async def _e10_enter_plan_mode(tool: Any, env: _E10Env) -> str:
+    from agentic_runtime.capabilities.plan.plan_file import _PLAN_MODE_KEY
+
+    ctx = env.ctx()
+    r = await tool.execute({}, ctx)
+    assert not r.is_error, r.output
+    ctx = _aplicar(r, ctx)
+    assert ctx.app_state.native.get(_PLAN_MODE_KEY) is True, (
+        f"no dejó plan mode activo: {ctx.app_state.native}"
+    )
+    r2 = await tool.execute({}, env.ctx(is_subagent=True))
+    assert r2.is_error, "un subagente pudo entrar en plan mode (es root-only)"
+    return "deja `plan_mode=True` en `app_state`; desde subagente es error"
+
+
+async def _e10_exit_plan_mode(tool: Any, env: _E10Env) -> str:
+    from agentic_runtime.capabilities.plan.plan_file import (
+        _PLAN_EXIT_PENDING_KEY,
+        _PLAN_KEY,
+        _PLAN_MODE_KEY,
+    )
+
+    marca = env.tag("PLAN")
+
+    class _StoragePlanReal:
+        """`StorageContract` con E/S de disco REAL — el runtime no trae implementación."""
+
+        def __init__(self, raiz: Path) -> None:
+            self._raiz = raiz
+
+        def real_path(self, token: str) -> Path:
+            return self._raiz / token.lstrip("/")
+
+        async def ensure_local(self, token: str) -> Path:
+            return self.real_path(token)
+
+        async def commit(self, token: str, content: bytes, mime: str | None = None) -> str:
+            p = self.real_path(token)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(content)
+            return token
+
+        async def teardown(self) -> None:
+            return None
+
+    raiz = env.tmp / "plan_storage"
+    storage = _StoragePlanReal(raiz)
+
+    # NEGATIVA primero: sin plan-file en disco, error — y no toca el estado.
+    ctx_vacio = env.ctx(storage=storage)
+    ctx_vacio.app_state.native[_PLAN_MODE_KEY] = True
+    r0 = await tool.execute({}, ctx_vacio)
+    assert r0.is_error, "salió de plan mode sin plan escrito"
+    assert ctx_vacio.app_state.native.get(_PLAN_MODE_KEY) is True, (
+        "el camino de error ya había desactivado plan mode"
+    )
+
+    destino = raiz / "plans" / "plan.md"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_text(f"# Plan\n\n{marca}\n", encoding="utf-8")
+
+    ctx = env.ctx(storage=storage)
+    ctx.app_state.native[_PLAN_MODE_KEY] = True
+    r = await tool.execute({}, ctx)
+    assert not r.is_error, r.output
+    assert marca in r.output, f"no leyó el plan del disco: {r.output!r}"
+    assert r.ends_turn is True, "no cedió el turno para esperar aprobación"
+    ctx = _aplicar(r, ctx)
+    assert ctx.app_state.native.get(_PLAN_MODE_KEY) is None, "no salió de plan mode"
+    assert marca in ctx.app_state.native[_PLAN_KEY], "no cacheó el plan leído"
+    assert ctx.app_state.native[_PLAN_EXIT_PENDING_KEY] is True, "no armó el one-shot"
+    return "leyó el plan-file REAL de disco, salió de plan mode y armó el one-shot"
+
+
+async def _e10_enter_worktree(tool: Any, env: _E10Env) -> str:
+    from agentic_runtime.tools.native.worktree import _WORKTREE_KEY
+
+    nombre = "e10-enter"
+    ctx = env.ctx()
+    r = await tool.execute({"name": nombre}, ctx)
+    assert not r.is_error, f"EnterWorktree falló: {r.output!r}"
+    destino = env.ws / ".worktrees" / nombre
+    assert destino.is_dir(), "no creó el directorio del worktree"
+    assert (destino / ".git").exists(), "el directorio creado no es un worktree de git"
+    listado = _git("worktree", "list", cwd=env.ws).stdout
+    assert str(destino) in listado, f"git no lo reconoce como worktree: {listado!r}"
+    ramas = _git("branch", "--list", f"worktree/{nombre}", cwd=env.ws).stdout
+    assert f"worktree/{nombre}" in ramas, f"no creó la rama: {ramas!r}"
+    ctx = _aplicar(r, ctx)
+    assert ctx.app_state.native[_WORKTREE_KEY]["branch"] == f"worktree/{nombre}"
+    r2 = await tool.execute({"name": "otro"}, ctx)
+    assert r2.is_error, "permitió anidar dos sesiones de worktree"
+    r3 = await tool.execute({"name": "mal nombre/../x"}, env.ctx())
+    assert r3.is_error, "aceptó un nombre de rama inválido"
+    return "creó un worktree de git REAL (dir + rama + `worktree list`) y guardó la sesión"
+
+
+async def _e10_exit_worktree(tool: Any, env: _E10Env) -> str:
+    """Se prueba el PAR: se entra con la tool real y se sale con ésta."""
+    from agentic_runtime.tools.native.worktree import _WORKTREE_KEY
+
+    nombre = "e10-exit"
+    ctx = env.ctx()
+    entrada = await env.hermana("EnterWorktree").execute({"name": nombre}, ctx)
+    assert not entrada.is_error, f"no se pudo montar el caso: {entrada.output!r}"
+    ctx = _aplicar(entrada, ctx)
+    destino = env.ws / ".worktrees" / nombre
+    assert destino.is_dir()
+
+    r = await tool.execute({"action": "remove"}, ctx)
+    assert not r.is_error, f"ExitWorktree falló: {r.output!r}"
+    assert not destino.exists(), "dijo que lo quitó y el directorio sigue en disco"
+    listado = _git("worktree", "list", cwd=env.ws).stdout
+    assert nombre not in listado, f"git sigue registrando el worktree: {listado!r}"
+    ctx = _aplicar(r, ctx)
+    assert _WORKTREE_KEY not in ctx.app_state.native, "no limpió la sesión de worktree"
+
+    r2 = await tool.execute({"action": "keep"}, env.ctx())
+    assert r2.is_error, "salió de un worktree sin estar en ninguno"
+    return "quitó el worktree del disco y del registro de git, y limpió la sesión"
+
+
+async def _e10_task_create(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("TCREATE")
+    ctx = env.ctx()
+    r = await tool.execute({"subject": marca, "description": "lo que hay que hacer"}, ctx)
+    assert not r.is_error, r.output
+    task_id = json.loads(r.output)["task_id"]
+    record = env.registry.get(task_id)
+    assert record is not None, "dijo crear una tarea que el registry no tiene"
+    assert record.description == f"{marca}: lo que hay que hacer", record.description
+    assert record.owner_session_id == env.session_id, (
+        f"no escopó la tarea a la sesión: {record.owner_session_id!r}"
+    )
+    r2 = await tool.execute({"subject": "s", "description": "d"}, env.ctx(task_registry=None))
+    assert r2.is_error and "S19" in r2.output, r2.output
+    return "registró la tarea REAL en el registry, escopada a la sesión"
+
+
+async def _e10_task_get(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("TGET")
+    rec = env.registry.register(description=marca, session_id=env.session_id)
+    ajena = env.registry.register(description="ajena", session_id="otra-sesion")
+    ctx = env.ctx()
+    r = await tool.execute({"task_id": rec.task_id}, ctx)
+    assert not r.is_error, r.output
+    datos = json.loads(r.output)
+    assert datos["description"] == marca and datos["task_id"] == rec.task_id, datos
+    r2 = await tool.execute({"task_id": ajena.task_id}, ctx)
+    assert r2.is_error, "leyó una tarea de OTRA sesión (bleed de aislamiento)"
+    return "leyó la tarea real del registry; la de otra sesión es invisible"
+
+
+async def _e10_task_list(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("TLIST")
+    env.registry.register(description=marca, session_id=env.session_id)
+    env.registry.register(description="de-otra-sesion", session_id="otra-sesion")
+    ctx = env.ctx()
+    r = await tool.execute({}, ctx)
+    assert not r.is_error, r.output
+    descripciones = [t["description"] for t in json.loads(r.output)]
+    assert marca in descripciones, f"no listó la tarea de la sesión: {descripciones}"
+    assert "de-otra-sesion" not in descripciones, "listó tareas de otra sesión"
+    # `FIND-E11-3`: el filtro `status` que B se había inventado (A: `z.strictObject({})`)
+    # convertía un valor fuera de dominio en `[]` — «no hay tareas» donde sí las había.
+    # Que el schema no lo declare es lo que impide que el modelo lo intente.
+    assert not (tool.input_schema.get("properties") or {}), (
+        f"`TaskList` volvió a declarar parámetros: {tool.input_schema}. El canónico "
+        "no tiene ninguno, y un filtro sin dominio acotado hace mentir a la tool."
+    )
+    return "listó las tareas reales de SU sesión y sólo ésas; schema sin parámetros (como A)"
+
+
+async def _e10_task_update(tool: Any, env: _E10Env) -> str:
+    nueva = env.tag("TUPD")
+    rec = env.registry.register(description="original", session_id=env.session_id)
+    ctx = env.ctx()
+    r = await tool.execute({"task_id": rec.task_id, "description": nueva}, ctx)
+    assert not r.is_error, r.output
+    assert env.registry.get(rec.task_id).description == nueva, (
+        "la descripción del REGISTRO no cambió (el output puede decir misa)"
+    )
+    r2 = await tool.execute({"task_id": "no-existe"}, ctx)
+    assert r2.is_error, "actualizó una tarea inexistente"
+    return "cambió la descripción en el registro del registry, no sólo en su salida"
+
+
+async def _e10_task_stop(tool: Any, env: _E10Env) -> str:
+    rec = env.registry.register(description="a-matar", session_id=env.session_id)
+    ctx = env.ctx()
+    r = await tool.execute({"task_id": rec.task_id}, ctx)
+    assert not r.is_error, r.output
+    assert env.registry.get(rec.task_id).status is TaskStatus.KILLED, (
+        f"la tarea no quedó KILLED: {env.registry.get(rec.task_id).status}"
+    )
+    ajena = env.registry.register(description="ajena", session_id="otra-sesion")
+    r2 = await tool.execute({"task_id": ajena.task_id}, ctx)
+    assert r2.is_error, "mató una tarea de otra sesión"
+    assert env.registry.get(ajena.task_id).status is not TaskStatus.KILLED, (
+        "NEGATIVA rota: la tarea ajena quedó matada igual"
+    )
+    return "dejó la tarea en KILLED en el registry; una de otra sesión no la toca"
+
+
+async def _e10_task_output(tool: Any, env: _E10Env) -> str:
+    marca = env.tag("TOUT")
+    rec = env.registry.register(description="con-salida", session_id=env.session_id)
+    ctx = env.ctx()
+    r0 = await tool.execute({"task_id": rec.task_id}, ctx)
+    assert not r0.is_error and "no result yet" in r0.output, r0.output
+    env.registry.complete(rec.task_id, result=marca)
+    r = await tool.execute({"task_id": rec.task_id}, ctx)
+    assert not r.is_error, r.output
+    assert r.output == marca, f"no devolvió el resultado real de la tarea: {r.output!r}"
+    return "devolvió el resultado que el registry tiene, y avisa cuando aún no lo hay"
+
+
+#: Un caso por tool del censo. La igualdad con `_NATIVE_CENSUS` se asevera al correr:
+#: una tool nueva sin caso pone el gate rojo en vez de entrar sin prueba funcional.
+_E10_CASES: dict[str, Any] = {
+    "Agent": _e10_agent,
+    "AskUserQuestion": _e10_ask_user_question,
+    "Config": _e10_config,
+    "Edit": _e10_edit,
+    "EnterPlanMode": _e10_enter_plan_mode,
+    "EnterWorktree": _e10_enter_worktree,
+    "ExitPlanMode": _e10_exit_plan_mode,
+    "ExitWorktree": _e10_exit_worktree,
+    "Sleep": _e10_sleep,
+    "TaskCreate": _e10_task_create,
+    "TaskGet": _e10_task_get,
+    "TaskList": _e10_task_list,
+    "TaskOutput": _e10_task_output,
+    "TaskStop": _e10_task_stop,
+    "TaskUpdate": _e10_task_update,
+    "TodoWrite": _e10_todo_write,
+    "ToolSearch": _e10_tool_search,
+    "WebFetch": _e10_web_fetch,
+    "WebSearch": _e10_web_search,
+    "bash": _e10_bash,
+    "clone_repository": _e10_clone_repository,
+    "glob": _e10_glob,
+    "grep": _e10_grep,
+    "read_file": _e10_read_file,
+    "write_file": _e10_write_file,
+}
+
+
+async def test_e10_every_native_tool_produces_its_observable_effect(tmp_path, monkeypatch):
+    """`E10`: las 25 corren con cableado real y se asevera su EFECTO, no su `is_error`."""
+    from agentic_runtime.tools.factory import create_tools
+
+    assert set(_E10_CASES) == set(_NATIVE_CENSUS), (
+        "la matriz funcional no cubre el censo — sin caso, una tool entra sin prueba de "
+        f"que opere. Sin caso: {sorted(_NATIVE_CENSUS - set(_E10_CASES))}; "
+        f"sobrantes: {sorted(set(_E10_CASES) - _NATIVE_CENSUS)}"
+    )
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    # Repo git real: lo necesitan `EnterWorktree`/`ExitWorktree`, y un repo sin
+    # ningún commit no tiene HEAD, así que `worktree add` no tendría de dónde partir.
+    _git("init", "-q", "-b", "main", cwd=ws)
+    (ws / "README.md").write_text("gate tramo 1\n", encoding="utf-8")
+    _git("add", "-A", cwd=ws)
+    _git("commit", "-q", "-m", "inicial", cwd=ws)
+
+    env = _E10Env(ws=ws, tmp=tmp_path, monkeypatch=monkeypatch, session_id="sess-e10")
+
+    comprobadas: set[str] = set()
+    fallos: list[str] = []
+    matriz: list[str] = []
+
+    for tool in sorted(create_tools().all_tools(), key=lambda t: t.name):
+        caso = _E10_CASES[tool.name]
+        # Se marca ANTES de correr: «comprobada» = el caso se ejecutó sobre esta tool.
+        # Que además pase lo decide `fallos`. Así una tool no puede quedar fuera del
+        # censo por haberse caído — que es como se pierden las cosas en silencio.
+        comprobadas.add(tool.name)
+        try:
+            nota = await caso(tool, env)
+            matriz.append(f"  ✔ {tool.name}: {nota}")
+        except AssertionError as exc:
+            fallos.append(f"[{tool.name}] {exc}")
+            matriz.append(f"  ✘ {tool.name}: {str(exc).splitlines()[0]}")
+        # No silencia: convierte en fallo REPORTADO. Un caso que revienta por algo
+        # inesperado es un rojo del gate igual, con su tipo de excepción a la vista.
+        except Exception as exc:  # noqa: BLE001
+            fallos.append(f"[{tool.name}] excepción inesperada {type(exc).__name__}: {exc}")
+            matriz.append(f"  ✘ {tool.name}: {type(exc).__name__}: {exc}")
+
+    print(f"\n[E10] matriz funcional de las {len(_NATIVE_CENSUS)} nativas:\n" + "\n".join(matriz))
+
+    assert comprobadas == set(_NATIVE_CENSUS), (
+        f"quedaron tools sin comprobar: {sorted(set(_NATIVE_CENSUS) - comprobadas)}"
+    )
+    assert not fallos, (
+        f"MATRIZ FUNCIONAL: {len(fallos)}/{len(_NATIVE_CENSUS)} tools no acreditan su "
+        "efecto observable\n" + "\n".join(fallos)
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# E11 · las 11 que NINGUNA corrida medida había conducido — ahora con modelo real
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# **El agujero, tal cual salió del censo honesto de la 6ª corrección.** Cuando
+# `_invoked_tool_names` dejó de contar por substring y pasó a leer
+# `msg["tool_calls"][*]["function"]["name"]`, la unión de tools que el modelo había
+# invocado de verdad en TODAS las corridas medidas (`E2d`+`E2f`+`E2g`) bajó a 14 de
+# 25. Las otras 11 estaban **anunciadas** (`E2c'`) y **barridas** (`E7f`) y desde
+# `E10` también **acreditadas funcionalmente** — pero ningún modelo las había
+# conducido nunca. Eso no es una laguna cosmética: entre el schema que se anuncia y
+# la tool que se ejecuta hay una traducción, y una descripción ambigua o un schema
+# que el modelo no sabe rellenar rompe la cadena sin que ninguna de las tres capas
+# anteriores se entere. Aquí se cierra.
+#
+# **`E10` mide EFECTO; `E11` mide CONDUCCIÓN.** Son cosas distintas y por eso son
+# dos tests: `E10` invoca la tool a mano y mira lo que dejó; `E11` no la nombra
+# jamás en el enunciado —enuncia el objetivo— y mira si el modelo llega a ella con
+# argumentos válidos. Donde el escenario tiene además efecto verificable (archivo,
+# árbol de git, registro del registry) se asevera **también** el efecto: así una
+# invocación con argumentos plausibles pero inertes no cuenta como conducida.
+#
+# **El censo ENTERO está delante en todos los escenarios, y no por elegancia.**
+# La primera versión de este test retiraba del anuncio las alternativas equivalentes
+# (`bash` con `sed` sustituye a `Edit`, con `curl` a `WebFetch`, con `git clone` a
+# `clone_repository`) para que el escenario sólo se pudiera resolver con la tool
+# objetivo. Dos cosas salieron de correrlo, y ninguna es la que yo esperaba:
+#
+#   1. **`FIND-E11-1` — no existe la costura.** Yo pasaba `initial_allowed_tools`
+#      creyendo que restringía el anuncio, y no: es una **allow-list de permisos**
+#      (`runtime.py:295-298` → `PermissionContext(always_allow_command=…)`), aditiva,
+#      que concede a las `requires_permission` y no retira nada. La guarda del test
+#      lo cazó (se anunciaron las 24 igual). Revisado el ensamblador entero: el único
+#      mecanismo de restricción por nombre es `agent_allowed_tools`, y sólo alcanza a
+#      **subagentes** con `AgentDefinition` (`runtime.py:447-472`,
+#      `agent_loop.py:139`). Para el agente RAÍZ el integrador no tiene ninguna vía de
+#      no anunciar una tool nativa. Queda **nombrado y sin pagar aquí**, por el mismo
+#      motivo que los escapes de red de `E7f`: eso es `S17 PermissionGate`, arriba de
+#      la LÍNEA DE CORTE del tramo 1. Lo que se paga es dejar de no saberlo.
+#   2. **El resultado medido es MÁS fuerte que el diseño.** Con las 24 anunciadas —
+#      `bash` y `write_file` incluidos— el modelo condujo **las 11** igual: eligió
+#      `Edit` teniendo `sed` a mano y `clone_repository` teniendo `git` a mano. Así
+#      que el andamio se retira en vez de arreglarse: el escenario ya no le quita
+#      alternativas a nadie, y sigue aseverando la conducción. Un escenario con menú
+#      corto habría medido obediencia (`E2d`); éste mide elección.
+#
+# ⚠ El precio, dicho: sin exclusión, una corrida en la que el modelo resuelva
+# `editar-en-sitio` con `bash` sale ROJA. Ese rojo sería verdad —no condujo `Edit`—
+# y es el que hay que ver, no el que hay que evitar.
+#
+# ── LO QUE ESTE TEST COBRÓ EL PRIMER DÍA ─────────────────────────────────────
+#
+# `FIND-E11-3` · **defecto del SUJETO, pagado aquí.** `TaskList` declaraba un
+# parámetro `status` que **el canónico no tiene** (`TaskListTool.ts:13` es
+# `z.strictObject({})`, leído 1→EOF). El campo era `string` libre, sin `enum`, y su
+# descripción decía «Filter by status (…). Omit for all» — así que el modelo llamó
+# con `status="all"`, el filtro comparó por igualdad, y la tool devolvió `[]`:
+# **indistinguible de «no hay tareas»**. El modelo respondió «no hay trabajos en
+# segundo plano en esta sesión» con dos tareas sembradas delante. Retirado el
+# parámetro (`L10`: una divergencia con A no es una mejora hasta que se demuestre);
+# la regresión la fija `_e10_task_list`.
+#
+# `FIND-E11-2` · **ABIERTO y vigilado por el gate.** En 2 de 4 corridas medidas el
+# modelo resolvió `preguntar-al-usuario` **preguntando en prosa** en vez de conducir
+# `AskUserQuestion` (respuesta: «¿Qué formato quieres…? - PDF - DOCX - ZIP»). Se
+# verificó que no es déficit del montaje: la descripción de la tool en B dice
+# literalmente «Prefer this over asking in free-form prose whenever you need input to
+# proceed» —fiel a A— y el único empujón que A pone en su system prompt es para el
+# caso de tool denegada (`prompts.ts:365-366`), no una cláusula general. Así que es
+# solvencia del modelo, y **no se atiende retocando el enunciado ni el system prompt
+# para que pase**: eso sería el tell exacto. Queda rojo cuando pasa, igual que
+# `FIND-E2G-1`.
+#
+# Lo que impide aprobar sin mérito, igual que en `E2f`/`E2g`: centinelas `uuid4` por
+# corrida (nada sale del conocimiento paramétrico), escenarios barajados, la tool
+# **nunca nombrada** en el prompt, y la semilla impresa y fijable por
+# `GATE_E11_SEED`. Cierra con `assert conducidas == _E11_OBJETIVO`: si mañana un
+# escenario deja de conducir la suya, el gate se pone rojo en vez de perderla.
+
+#: Las 11 del censo que ninguna corrida medida había conducido nunca.
+_E11_OBJETIVO = frozenset({
+    "AskUserQuestion", "Config", "Edit", "EnterWorktree", "ExitWorktree",
+    "TaskList", "TaskOutput", "TaskStop", "TodoWrite", "WebFetch",
+    "clone_repository",
+})
+
+_E11_SYSTEM = (
+    "Eres un agente con herramientas reales. Elige tu la herramienta adecuada para "
+    "cada objetivo; nadie te va a decir cual usar. No inventes datos ni finjas "
+    "haber hecho algo: si hay que actuar, actua con una herramienta. Cuando "
+    "termines, responde con el dato pedido, sin adornos."
+)
+
+
+def _invoked_tool_args(calls: list[dict], name: str) -> list[dict]:
+    """Argumentos con los que el modelo invocó `name`, parseados del historial.
+
+    Misma fuente estructural que `_invoked_tool_names` — `tool_calls`, no texto —
+    porque lo que se quiere aseverar es *con qué la llamó*, y eso en el cuerpo de un
+    mensaje sería adivinar.
+    """
+    out: list[dict] = []
+    for call in calls:
+        for msg in call["messages"]:
+            for tc in msg.get("tool_calls") or ():
+                fn = tc.get("function") or {}
+                if fn.get("name") != name:
+                    continue
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(args, dict):
+                    out.append(args)
+    return out
+
+
+def _e11_scenarios(
+    tmp_path: Path, rnd: random.Random, puertos: dict[str, int], codigos: dict[str, str],
+) -> list[dict]:
+    """Un escenario por objetivo. `must_use` es la tool que debe quedar conducida.
+
+    Campos: `id` · `prompt` (nunca nombra la tool) · `must_use` · `tambien` (otras
+    que el escenario debe conducir) · `seed(runtime, session_id)` opcional ·
+    `expect_in_answer` · `check(runtime, session_id, answer, probe) -> str|None` con
+    el efecto observable.
+    """
+    def tag(prefix: str) -> str:
+        return f"{prefix}-{uuid.uuid4().hex[:10].upper()}"
+
+    escenarios: list[dict] = []
+
+    # 1 · Edit — sustitución quirúrgica sobre un archivo que NO se puede reescribir
+    #     entero: el enunciado pide explícitamente conservar el resto.
+    viejo, nuevo = tag("CLAVE"), tag("NUEVA")
+    # DENTRO del write-root: la primera versión lo puso en `tmp_path` (sólo lectura) y
+    # el runtime lo rechazó con razón — el confinamiento hizo su trabajo, el montaje no.
+    edit_dir = tmp_path / "ws" / "edit"
+    edit_dir.mkdir(parents=True, exist_ok=True)
+    edit_file = edit_dir / "registro.txt"
+    relleno = "\n".join(f"linea de relleno numero {i}" for i in range(40))
+    edit_file.write_text(f"{relleno}\nclave activa: {viejo}\n{relleno}\n", encoding="utf-8")
+
+    def _check_edit(runtime, sid, answer, probe, *, p=edit_file, v=viejo, n=nuevo, r=relleno):
+        contenido = p.read_text(encoding="utf-8")
+        if n not in contenido:
+            return f"el archivo no contiene la clave nueva {n}"
+        if v in contenido:
+            return f"la clave vieja {v} sigue en el archivo"
+        if contenido != f"{r}\nclave activa: {n}\n{r}\n":
+            return "el archivo cambió más allá de la clave (no fue una edición quirúrgica)"
+        return None
+
+    escenarios.append({
+        "id": "editar-en-sitio",
+        "prompt": (
+            f"En el archivo {edit_file} hay una linea que dice 'clave activa: {viejo}'. "
+            f"Sustituye ese valor por {nuevo} dejando el resto del archivo exactamente "
+            "igual, sin reescribirlo entero. Luego confirma diciendo la clave nueva."
+        ),
+        "must_use": "Edit",
+        "check": _check_edit,
+    })
+
+    # 2 · WebFetch — hay URL concreta, así que `WebSearch` no aplica; se retira `bash`
+    #     para que `curl`/`wget` no sean la vía.
+    escenarios.append({
+        "id": "traer-una-url",
+        "prompt": (
+            f"En la pagina http://127.0.0.1:{puertos['http']}/boletin hay un codigo de "
+            "boletin. Traela y dime el codigo exacto que aparece."
+        ),
+        "must_use": "WebFetch",
+        "expect_in_answer": codigos["fetch"],
+    })
+
+    # 3 · clone_repository — repo git servido de verdad; se retira `bash` para que no
+    #     sea `git clone` a mano.
+    escenarios.append({
+        "id": "clonar-repo",
+        "prompt": (
+            f"Clona el repositorio https://127.0.0.1:{puertos['git']}/repo.git en el "
+            "directorio 'copia' de tu espacio de trabajo y dime que dice el archivo "
+            "SENTINELA.txt que hay dentro."
+        ),
+        "must_use": "clone_repository",
+        "expect_in_answer": codigos["clone"],
+    })
+
+    # 4 · TodoWrite — el objetivo es registrar el plan, no ejecutarlo.
+    def _check_todos(runtime, sid, answer, probe):
+        args = _invoked_tool_args(probe.calls, "TodoWrite")
+        if not args:
+            return "no llegaron argumentos de TodoWrite al historial"
+        todos = args[-1].get("todos")
+        if not isinstance(todos, list) or len(todos) < 3:
+            return f"registró una lista que no tiene las 3 tareas pedidas: {todos!r}"
+        return None
+
+    escenarios.append({
+        "id": "registrar-plan",
+        "prompt": (
+            "Voy a pedirte un trabajo largo en tres pasos: (1) revisar el inventario, "
+            "(2) corregir los precios, (3) publicar el informe. Antes de empezar, deja "
+            "registrada tu lista de tareas pendientes con esos tres pasos. No ejecutes "
+            "ninguno todavia; responde 'listo' cuando la lista este registrada."
+        ),
+        "must_use": "TodoWrite",
+        "check": _check_todos,
+    })
+
+    # 5 · Config — set y luego get: la respuesta sólo puede salir de leer lo escrito.
+    cfg_valor = tag("PERFIL")
+    escenarios.append({
+        "id": "ajuste-de-sesion",
+        "prompt": (
+            f"Deja el ajuste 'model' de esta sesion con el valor {cfg_valor}. Despues "
+            "consulta ese mismo ajuste y dime el valor que tiene ahora."
+        ),
+        "must_use": "Config",
+        "expect_in_answer": cfg_valor,
+    })
+
+    # 6 · TaskList — no se le da ningún id, así que enumerar es la única vía.
+    lista_desc = tag("ENCARGO")
+
+    def _seed_list(runtime, sid, *, desc=lista_desc):
+        runtime._task_registry.register(description=f"{desc}: revisar el almacen", session_id=sid)
+        runtime._task_registry.register(description="otro encargo distinto", session_id=sid)
+
+    escenarios.append({
+        "id": "enumerar-tareas",
+        "prompt": (
+            "Tienes trabajos en segundo plano de esta sesion. No se sus identificadores. "
+            "Averigua cuales hay y dime la descripcion completa del que empieza por "
+            f"{lista_desc}."
+        ),
+        "must_use": "TaskList",
+        "seed": _seed_list,
+        "expect_in_answer": lista_desc,
+    })
+
+    # 7 · TaskOutput — se da el id y se pide el RESULTADO. Se retira `TaskGet` porque
+    #     devuelve el registro entero y resolvería el objetivo por otra puerta.
+    out_code = tag("DICTAMEN")
+    out_id: dict[str, str] = {}
+
+    def _seed_out(runtime, sid, *, code=out_code, holder=out_id):
+        rec = runtime._task_registry.register(description="analisis del lote", session_id=sid)
+        runtime._task_registry.complete(rec.task_id, result=f"resultado final: {code}")
+        holder["id"] = rec.task_id
+
+    # ⚠ **`TaskOutput` y `TaskGet` son redundantes para este objetivo, y es del
+    #   catálogo, no del modelo**: `TaskGet` devuelve el registro ENTERO, `result`
+    #   incluido (`task_tools.py:105-111`), así que «dime qué resultado produjo» lo
+    #   resuelven las dos y **no hay enunciado por objetivo que las discrimine**.
+    #   Retirar `TaskGet` del anuncio tampoco se puede (`FIND-E11-1`). Así que el
+    #   escenario se parte en dos y cada mitad dice su grado:
+    #     · por OBJETIVO — se acepta cualquiera de las dos; lo que se asevera es que
+    #       el modelo consultó el registry de verdad (el centinela sólo está ahí).
+    #     · DIRIGIDO — la tool se nombra en el enunciado. Es el régimen de `E2d`
+    #       (invocar lo que se te dice), más débil que el resto de `E11`, y se
+    #       declara como tal en vez de disfrazarlo de elección. Es lo máximo
+    #       acreditable para una tool redundante sin inventarme una restricción que
+    #       el runtime no ofrece.
+    escenarios.append({
+        "id": "resultado-de-tarea",
+        "prompt_factory": lambda: (
+            f"El trabajo en segundo plano {out_id['id']} ya termino. Dime exactamente "
+            "que resultado produjo."
+        ),
+        "must_use": "TaskOutput",
+        "aceptables": {"TaskOutput", "TaskGet"},
+        "seed": _seed_out,
+        "expect_in_answer": out_code,
+    })
+
+    out2_code = tag("VEREDICTO")
+    out2_id: dict[str, str] = {}
+
+    def _seed_out2(runtime, sid, *, code=out2_code, holder=out2_id):
+        rec = runtime._task_registry.register(description="segundo lote", session_id=sid)
+        runtime._task_registry.complete(rec.task_id, result=f"salida cruda: {code}")
+        holder["id"] = rec.task_id
+
+    escenarios.append({
+        "id": "resultado-de-tarea-dirigido",
+        "prompt_factory": lambda: (
+            f"Con la herramienta TaskOutput, obten la salida del trabajo en segundo "
+            f"plano {out2_id['id']} y dimela tal cual."
+        ),
+        "must_use": "TaskOutput",
+        "seed": _seed_out2,
+        "expect_in_answer": out2_code,
+    })
+
+    # 8 · TaskStop — efecto REAL sobre el registry, no sobre la narración.
+    stop_id: dict[str, str] = {}
+
+    def _seed_stop(runtime, sid, *, holder=stop_id):
+        rec = runtime._task_registry.register(description="proceso desbocado", session_id=sid)
+        holder["id"] = rec.task_id
+
+    def _check_stop(runtime, sid, answer, probe, *, holder=stop_id):
+        rec = runtime._task_registry.get(holder["id"])
+        if rec.status is not TaskStatus.KILLED:
+            return f"la tarea sigue en {rec.status} — no la detuvo de verdad"
+        return None
+
+    escenarios.append({
+        "id": "detener-tarea",
+        "prompt_factory": lambda: (
+            f"El trabajo en segundo plano {stop_id['id']} se ha desbocado y hay que "
+            "pararlo ya. Encargate y confirma diciendo 'detenida'."
+        ),
+        "must_use": "TaskStop",
+        "seed": _seed_stop,
+        "check": _check_stop,
+    })
+
+    # 9 · el PAR de worktree en un solo turno: abrir aislamiento y deshacerlo.
+    wt_nombre = f"aislado-{rnd.randrange(10_000)}"
+    escenarios.append({
+        "id": "worktree-ida-y-vuelta",
+        "prompt": (
+            f"Necesito trabajar aislado del arbol principal: abre un espacio de trabajo "
+            f"aislado llamado '{wt_nombre}' sobre el repositorio actual. En cuanto lo "
+            "tengas abierto, cierralo eliminandolo por completo. Responde 'hecho'."
+        ),
+        "must_use": "EnterWorktree",
+        "tambien": {"ExitWorktree"},
+        "wt": wt_nombre,
+    })
+
+    # 10 · AskUserQuestion — el dato NO existe en ninguna parte: la única salida
+    #      legítima es preguntar. Si el modelo inventa, el escenario lo caza.
+    escenarios.append({
+        "id": "preguntar-al-usuario",
+        "prompt": (
+            "Tengo que archivar unos documentos y no te he dicho en que formato los "
+            "quiero. Ese dato no esta en ningun archivo ni en la web: solo lo se yo. "
+            "No elijas por mi ni supongas nada: consultamelo a mi antes de seguir."
+        ),
+        "must_use": "AskUserQuestion",
+    })
+
+    return escenarios
+
+
+@_needs_azure
+async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path, monkeypatch):
+    """`E11`: modelo real conduce las 11 que ninguna corrida medida había conducido."""
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+
+    seed = int(os.getenv("GATE_E11_SEED") or uuid.uuid4().int % (2**32))
+    rnd = random.Random(seed)
+
+    # Workspace REAL y compartido: repo git con un commit (lo piden los worktree) y
+    # raíz de confinamiento de todos los escenarios.
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _git("init", "-q", "-b", "main", cwd=ws)
+    (ws / "README.md").write_text("gate e11\n", encoding="utf-8")
+    _git("add", "-A", cwd=ws)
+    _git("commit", "-q", "-m", "inicial", cwd=ws)
+
+    # Repo bare servido por HTTPS real, igual que en `E10` (la tool fuerza `https://`).
+    sentinela = f"CARGA-{uuid.uuid4().hex[:10].upper()}"
+    origen = tmp_path / "origen"
+    origen.mkdir()
+    (origen / "SENTINELA.txt").write_text(f"{sentinela}\n", encoding="utf-8")
+    _git("init", "-q", "-b", "main", cwd=origen)
+    _git("add", "-A", cwd=origen)
+    _git("commit", "-q", "-m", "inicial", cwd=origen)
+    servidos = tmp_path / "servidos"
+    servidos.mkdir()
+    _git("clone", "-q", "--bare", str(origen), str(servidos / "repo.git"), cwd=tmp_path)
+    _git("-C", str(servidos / "repo.git"), "update-server-info", cwd=tmp_path)
+    monkeypatch.setenv("GIT_SSL_NO_VERIFY", "1")
+
+    fallos: list[str] = []
+    conducidas: set[str] = set()
+    matriz: list[str] = []
+
+    with contextlib.ExitStack() as stack:
+        fetch_code = f"BOLETIN-{uuid.uuid4().hex[:10].upper()}"
+        puerto_http = stack.enter_context(
+            _servidor_http(f"<html><body>codigo de boletin: {fetch_code}</body></html>".encode())
+        )
+        puerto_git = stack.enter_context(_servidor_git_https(servidos, tmp_path))
+
+        escenarios = _e11_scenarios(
+            tmp_path, rnd,
+            {"http": puerto_http, "git": puerto_git},
+            {"fetch": fetch_code, "clone": sentinela},
+        )
+        rnd.shuffle(escenarios)
+
+        for n, sc in enumerate(escenarios):
+            objetivo = {sc["must_use"], *sc.get("tambien", set())}
+            probe = ModelSeamProbe(_build_caller(_E11_SYSTEM))
+            runtime = _runtime(
+                tmp_path / f"rt_e11_{n}", probe, (), Scope(f"scope-e11-{n}"),
+                fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[ws]),
+                # Allow-list de PERMISOS, no de anuncio (`FIND-E11-1`): sin esto las
+                # `requires_permission` quedan fuera del pool y el escenario mediría
+                # una restricción que nadie pidió.
+                initial_allowed_tools=sorted(_NATIVE_CENSUS),
+            )
+            session_id = f"sess-E11-{sc['id']}-{uuid.uuid4().hex}"
+            if "seed" in sc:
+                sc["seed"](runtime, session_id)
+            prompt = sc["prompt_factory"]() if "prompt_factory" in sc else sc["prompt"]
+
+            task_id = await runtime.dispatch(RuntimeTask(
+                prompt=prompt, description=f"gate-e11-{sc['id']}", session_id=session_id,
+            ))
+            await runtime._task_registry.get(task_id).asyncio_task
+
+            answer = runtime.result(task_id) or ""
+            status = runtime.status(task_id)
+            invocadas = _invoked_tool_names(probe.calls)
+            conducidas |= invocadas & _E11_OBJETIVO
+            anunciadas = {t.get("name") for call in probe.calls for t in call["tools"]}
+
+            problemas: list[str] = []
+            # `AskUserQuestion` cede el turno: la tarea no «completa» resolviendo, y
+            # exigirle COMPLETED sería exigirle que ignore su propio contrato.
+            if status is not TaskStatus.COMPLETED and sc["must_use"] != "AskUserQuestion":
+                problemas.append(f"la tarea no completó ({status})")
+            # El censo entero estuvo delante: la elección fue una elección. `ToolSearch`
+            # se retira en la rama nativa, de ahí el 24 y no 25 (`E2g`).
+            if len(anunciadas) < 20:
+                problemas.append(f"anuncio incompleto ({len(anunciadas)}): {sorted(anunciadas)}")
+            # `aceptables` = el objetivo admite más de una tool legítima (ver el par
+            # `TaskOutput`/`TaskGet`): basta con que eligiera UNA capaz. Sin él, se
+            # exigen todas las del objetivo.
+            if "aceptables" in sc:
+                faltan = set() if (invocadas & sc["aceptables"]) else set(sc["aceptables"])
+                if faltan:
+                    problemas.append(
+                        f"no eligió ninguna capaz de {sorted(sc['aceptables'])} "
+                        f"(invocó {sorted(invocadas)})"
+                    )
+            else:
+                faltan = objetivo - invocadas
+                if faltan:
+                    problemas.append(f"no condujo {sorted(faltan)} (invocó {sorted(invocadas)})")
+            if "expect_in_answer" in sc and sc["expect_in_answer"] not in answer:
+                problemas.append(f"el centinela {sc['expect_in_answer']} no llegó a la respuesta")
+            if "check" in sc and not faltan:
+                fallo = sc["check"](runtime, session_id, answer, probe)
+                if fallo:
+                    problemas.append(fallo)
+            if "wt" in sc and not faltan and (ws / ".worktrees" / sc["wt"]).exists():
+                problemas.append("el worktree sigue en disco: no completó la vuelta")
+
+            if problemas:
+                # Los argumentos REALES de la tool objetivo van en el fallo: sin ellos,
+                # «la invocó y no salió el efecto» obliga a adivinar si el problema es
+                # del modelo, del schema o del montaje. Con ellos se lee.
+                fallos.append(
+                    f"[{sc['id']}] " + "; ".join(problemas)
+                    + f"\n    anunciadas={len(anunciadas)} invocadas={sorted(invocadas)}"
+                    + f"\n    args({sc['must_use']})={_invoked_tool_args(probe.calls, sc['must_use'])}"
+                    + f"\n    respuesta={answer[:200]!r}"
+                )
+                matriz.append(f"  ✘ {sc['id']} → {sorted(objetivo)}: {problemas[0]}")
+            else:
+                matriz.append(f"  ✔ {sc['id']} → condujo {sorted(objetivo)}")
+
+    print(
+        f"\n[E11] GATE_E11_SEED={seed} · conducción por el modelo de las "
+        f"{len(_E11_OBJETIVO)} nunca conducidas:\n" + "\n".join(matriz)
+        + f"\n  conducidas: {sorted(conducidas)}"
+    )
+    assert not fallos, (
+        f"CONDUCCIÓN: {len(fallos)}/{len(_E11_OBJETIVO)} objetivos sin acreditar "
+        f"(GATE_E11_SEED={seed} para reproducir)\n" + "\n".join(fallos)
+    )
+    assert conducidas == set(_E11_OBJETIVO), (
+        "quedaron tools del objetivo sin conducir por el modelo: "
+        f"{sorted(set(_E11_OBJETIVO) - conducidas)}"
     )
