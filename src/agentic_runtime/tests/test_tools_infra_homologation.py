@@ -277,8 +277,8 @@ async def test_concurrency_safe_tools_run_in_parallel_within_a_turn():
     """
     import time
 
-    from agentic_runtime.events import DoneEvent, ToolCallEvent
     from agentic_runtime.context.tool_use import AppState
+    from agentic_runtime.events import DoneEvent, ToolCallEvent
 
     class _Lento(_FakeTool):
         def __init__(self):

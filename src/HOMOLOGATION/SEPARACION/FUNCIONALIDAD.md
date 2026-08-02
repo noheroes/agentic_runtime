@@ -259,9 +259,15 @@ los dos ficheros tocados** · suite **735 passed / 3 skipped / 114 xfailed / 0 f
 arreglo de §5.1 **736 passed / 3 skipped / 113 xfailed / 0 failed** (el xfail pagado pasa a passed,
 cuadra exacto) con `mypy --strict` **138/54** sin cambio.
 
-⚠ **No reproduje la cifra base de `ruff` 505**: `pyproject.toml` de `agentic_runtime` no tiene
-sección `[tool.ruff]` y el binario disponible corre con defaults (11 hallazgos, ninguno en lo
-tocado). Se dice en vez de fingir el número; queda como pendiente de método, no de código.
+✅ **`ruff` 505 — pendiente RESUELTO al cierre de la ventana, y el error era mío.** Dije que no
+reproducía la cifra base; la causa no era la falta de `[tool.ruff]` sino que yo estaba corriendo el
+binario del venv de **otro** proyecto (`packages_openclaw`, ruff 0.15.5 → 11 hallazgos) en vez del
+comando **documentado en el propio `pyproject.toml:45`**: `uvx ruff check src/agentic_runtime`.
+Con él salen **506**, o sea **+1 sobre la base**. Aislado montando un worktree en el commit de
+cierre de la 8ª ventana (`f15ab3d`) y difando por fichero+regla: da **505 exactos**, y el +1 era un
+`I001` (bloque de imports sin ordenar) **introducido por mí** en `test_tools_infra_homologation.py`.
+Corregido ⇒ **505**, idéntico a la base. Lección: «no reproduzco la cifra» era, de hecho, «no estoy
+corriendo el comando que el repo documenta» — el pendiente había que cerrarlo, no heredarlo.
 
 ### 5.2 Deuda de LECTURA pagada — los 19 módulos 1→EOF, y lo que sólo se ve leyendo
 
