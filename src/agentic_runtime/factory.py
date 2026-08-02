@@ -153,7 +153,7 @@ class RuntimeFactory:
 
     @classmethod
     def register_execution_mode(cls, name: str, runtime_cls: Type) -> None:
-        cls._modes[name] = name if False else runtime_cls
+        cls._modes[name] = runtime_cls
 
     @classmethod
     def _build_capability_manager(

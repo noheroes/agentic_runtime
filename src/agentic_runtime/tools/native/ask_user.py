@@ -9,19 +9,38 @@ if TYPE_CHECKING:
 
 ASK_USER_QUESTION_TOOL_NAME = "AskUserQuestion"
 
+#: Ancho del chip, literal de A (`prompt.ts:5`): entra en la descripción de `header`.
+ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12
+
 _OPTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "label": {
             "type": "string",
-            "description": "The display text for this option (concise, 1-5 words).",
+            "description": (
+                "The display text for this option that the user will see and select. Should be "
+                "concise (1-5 words) and clearly describe the choice."
+            ),
         },
         "description": {
             "type": "string",
-            "description": "What this option means or what happens if chosen (trade-offs/implications).",
+            "description": (
+                "Explanation of what this option means or what will happen if chosen. Useful for "
+                "providing context about trade-offs or implications."
+            ),
+        },
+        "preview": {
+            "type": "string",
+            "description": (
+                "Optional preview content rendered when this option is focused. Use for mockups, "
+                "code snippets, or visual comparisons that help users compare options. See the "
+                "tool description for the expected content format."
+            ),
         },
     },
-    "required": ["label"],
+    # A los tiene los dos requeridos (`z.object({label, description})`, sólo `preview`
+    # es `.optional()`): B pedía únicamente `label` — divergencia, no mejora (`L10`).
+    "required": ["label", "description"],
 }
 
 _QUESTION_SCHEMA: dict[str, Any] = {
@@ -29,11 +48,19 @@ _QUESTION_SCHEMA: dict[str, Any] = {
     "properties": {
         "question": {
             "type": "string",
-            "description": "The complete question to ask the user. Clear, specific, ends with '?'.",
+            "description": (
+                "The complete question to ask the user. Should be clear, specific, and end with a "
+                'question mark. Example: "Which library should we use for date formatting?" If '
+                'multiSelect is true, phrase it accordingly, e.g. "Which features do you want to '
+                'enable?"'
+            ),
         },
         "header": {
             "type": "string",
-            "description": "Very short label (max 12 chars) displayed as a chip. E.g. 'Objective'.",
+            "description": (
+                f"Very short label displayed as a chip/tag (max {ASK_USER_QUESTION_TOOL_CHIP_WIDTH} "
+                'chars). Examples: "Auth method", "Library", "Approach".'
+            ),
         },
         "options": {
             "type": "array",
@@ -41,30 +68,72 @@ _QUESTION_SCHEMA: dict[str, Any] = {
             "minItems": 2,
             "maxItems": 4,
             "description": (
-                "2-4 distinct, mutually exclusive options (unless multiSelect). Do NOT add an 'Other' "
-                "option: free-form input is always offered to the user automatically."
+                "The available choices for this question. Must have 2-4 options. Each option should "
+                "be a distinct, mutually exclusive choice (unless multiSelect is enabled). There "
+                "should be no 'Other' option, that will be provided automatically."
             ),
         },
         "multiSelect": {
             "type": "boolean",
-            "description": "Allow selecting multiple options. Use when choices are not mutually exclusive.",
+            "default": False,
+            "description": (
+                "Set to true to allow the user to select multiple options instead of just one. Use "
+                "when choices are not mutually exclusive."
+            ),
         },
     },
-    "required": ["question", "header", "options"],
+    "required": ["question", "header", "options", "multiSelect"],
+}
+
+#: `annotations` de A (`AskUserQuestionTool.tsx:26-30`): lo rellena la capa de
+#: interacción al devolver las respuestas, no el modelo.
+_ANNOTATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "preview": {
+            "type": "string",
+            "description": "The preview content of the selected option, if the question used previews.",
+        },
+        "notes": {
+            "type": "string",
+            "description": "Free-text notes the user added to their selection.",
+        },
+    },
 }
 
 
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
+    # Mímica de lo que A manda REALMENTE al modelo: `api.ts:171` serializa
+    # `description: await tool.prompt(…)`, o sea `ASK_USER_QUESTION_TOOL_PROMPT`
+    # (`AskUserQuestionTool/prompt.ts:31-44`), no el `DESCRIPTION` corto —ése es el
+    # `searchHint`/UI—. La sección de preview se omite porque A también la omite
+    # cuando el consumidor no ha optado por un formato (`getQuestionPreviewFormat()
+    # === undefined`, rama «SDK consumer»), que es exactamente el caso de B.
+    #
+    # ⚠ La versión anterior de B decía «Prefer this over asking in free-form prose…»
+    # y «GROUP related questions into a SINGLE call»: **texto que A no tiene**
+    # (`FIND-E11-4`). Empujaba más que el canónico, así que medía a un sujeto que no
+    # es A. Retirado por `L10` — una divergencia no es una mejora hasta demostrarlo.
     description = (
-        "Ask the user one or more multiple-choice questions to gather information, clarify ambiguity, "
-        "understand preferences, or get decisions on direction. Presents a QUESTIONNAIRE of 1-4 "
-        "questions that the user answers together in one interaction, each with 2-4 options; the user "
-        "can always give a free-form answer ('Other') instead, so open-ended details (a number, a name) "
-        "are fine. Prefer this over asking in free-form prose whenever you need input to proceed. GROUP "
-        "related questions into a SINGLE call (up to 4) so the user can answer everything at once, "
-        "rather than asking one at a time. If you recommend an option, list it first and append "
-        "\"(Recommended)\" to its label."
+        "Use this tool when you need to ask the user questions during execution. This allows you to:\n"
+        "1. Gather user preferences or requirements\n"
+        "2. Clarify ambiguous instructions\n"
+        "3. Get decisions on implementation choices as you work\n"
+        "4. Offer choices to the user about what direction to take.\n"
+        "\n"
+        "Usage notes:\n"
+        '- Users will always be able to select "Other" to provide custom text input\n'
+        "- Use multiSelect: true to allow multiple answers to be selected for a question\n"
+        "- If you recommend a specific option, make that the first option in the list and add "
+        '"(Recommended)" at the end of the label\n'
+        "\n"
+        "Plan mode note: In plan mode, use this tool to clarify requirements or choose between "
+        "approaches BEFORE finalizing your plan. Do NOT use this tool to ask \"Is my plan ready?\" or "
+        "\"Should I proceed?\" - use ExitPlanMode for plan approval. IMPORTANT: Do not reference "
+        '"the plan" in your questions (e.g., "Do you have feedback about the plan?", "Does the plan '
+        'look good?") because the user cannot see the plan in the UI until you call ExitPlanMode. If '
+        "you need plan approval, use ExitPlanMode instead.\n"
     )
     input_schema = {
         "type": "object",
@@ -74,7 +143,36 @@ class AskUserQuestionTool:
                 "items": _QUESTION_SCHEMA,
                 "minItems": 1,
                 "maxItems": 4,
-                "description": "The questions to ask the user (1-4). Group related ones into one call.",
+                "description": "Questions to ask the user (1-4 questions)",
+            },
+            # Los tres de A que NO rellena el modelo sino la capa de interacción al
+            # devolver las respuestas (`AskUserQuestionTool.tsx:26-62`). Van en el
+            # schema porque en A van: quitarlos sería recortar el sujeto.
+            "annotations": {
+                "type": "object",
+                "additionalProperties": _ANNOTATION_SCHEMA,
+                "description": (
+                    "Optional per-question annotations from the user (e.g., notes on preview "
+                    "selections). Keyed by question text."
+                ),
+            },
+            "answers": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "User answers collected by the permission component",
+            },
+            "metadata": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": (
+                            'Optional identifier for the source of this question (e.g., "remember" '
+                            "for /remember command). Used for analytics tracking."
+                        ),
+                    },
+                },
+                "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
             },
         },
         "required": ["questions"],

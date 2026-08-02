@@ -818,3 +818,111 @@ Suite completa capturada **entera a fichero** (método ya fijado tras haber perd
 | `mypy --strict` | **138 err / 54 f** | **0** |
 
 **Sigue faltando `E8`** (8 de 9 capacidades del gate) **y `C10` sigue ⛔.** El tramo **no** está cerrado.
+
+---
+
+## 2026-08-02 · TRAMO 1 · 7ª ventana — `E8` (aislamiento) · `C10` cerrada · `FIND-E11-2` medido · `FIND-SEQ-1` cazado
+
+**Encargo:** 5 puntos en orden, con la regla dura *«ninguna roja se atiende bajando el listón; se atienden
+AHORA, no hay un después»*. **Pagados 4; el 5º —declarar el tramo cerrado— NO se paga, y se dice por qué.**
+
+### 1 · `E8` — el aislamiento, aseverado ✅ 5 piezas, ninguna con Azure
+
+El problema de método era real: *¿cómo se asevera agnosticismo cuando no existe ninguna battery?* Se escribe
+una — `batteries/e8_commands/`, **fuera de `src/`** (`packages.find where=["src"]`, así que no se empaqueta y
+no llega a un consumidor) — y **el sujeto de la prueba es la dirección del grafo de imports**, medida con
+`ast` sobre los fuentes de las dos partes. Nunca con grep (`D-05`: grep localiza, no dictamina).
+
+| pieza | qué asevera |
+|---|---|
+| `E8·a` | ningún módulo del base importa la battery; los importadores del motor son **exactamente** `{compose, el gate}` y el `__init__` de la battery no re-exporta nada de su propio paquete. **Control positivo** delante: >150 módulos barridos y el conjunto exacto de importadores de `S11` — un barrido que no resuelva los imports relativos no puede pasar en vacío |
+| `E8·b` | intérprete **limpio** (`PYTHONPATH` sin `batteries/`): importar el base no arrastra battery alguna y el `input_processor` por defecto es `None` |
+| `E8·c` | **compuesta vs no compuesta**: con `compose(...)` el `/eco` corta el turno (`caller.calls == []`); sin ella el mismo prompt cruza al modelo verbatim y responde el modelo |
+| `E8·d` | **la negativa**: `subagent_runner_factory=lambda _rt: None` ⇒ `ctx.runner is None` en el ctx de **producción** y `AgentTool` devuelve `is_error` limpio con `S18` en el texto |
+| `E8·e` | el estado mutable **de clase y de módulo** del ensamblador es **exactamente** el declarado — es lo que convierte *«prohibido cualquier singleton mutable nuevo»* en aserción en vez de prosa |
+
+**Acreditado con violación inyectada (`D-12·b`): 9 inyecciones → 9 rojas, 0 falsos positivos.** Las 7
+primeras sobre `a`–`d` (import diferido de la battery desde `factory`; `NoopUserInputProcessor` atendiendo
+`/eco`; el `__init__` re-exportando el motor; un segundo importador; `compose` sin `input_processor=`; el
+ensamblador ignorando `subagent_runner_factory`; `RuntimeConfig.input_processor` con `default_factory`), y
+2 sobre `E8·e` (singleton nuevo **de clase** y **de módulo**). Cada una **anunciada antes de tocar el
+fuente**, revertida desde copia propia y verificada con `sha256sum -c` — nunca `git checkout`.
+
+### 2 · `C10` — ficha cerrada, con dos hallazgos del ensamblador
+
+- ⚠ **`FIND-C10-1` ABIERTO, vigilado por `E8·e`:** `RuntimeFactory._modes` (`factory.py:152`) **es** un
+  singleton mutable de clase. Es **preexistente** y la prohibición de la ficha es de singleton **nuevo**, así
+  que queda medido, nombrado y congelado en `_E8_SINGLETONS_DECLARADOS`. Retirarlo exige mover el registro de
+  modos a la config: **no entra en el tramo**, y se dice en vez de disfrazarse.
+- ✅ **`FIND-C10-2` PAGADO:** `factory.py:156` llevaba código muerto — `cls._modes[name] = name if False else
+  runtime_cls`. Ahora es la asignación directa.
+
+### 3 · `FIND-E2G-1` no cayó — pero cayó **otra**, y ésta SÍ se cazó: `FIND-SEQ-1`
+
+`E2g` pasó en las dos corridas de suite de la ventana ⇒ marcador **1 roja de 4 corridas**. Sigue **abierto**.
+
+Lo que sí cayó fue `test_real_sequential_dependent_tools`: **2 rojas de 6 corridas** (1 en suite + 1 en 5
+corridas del test solo). Reproducida con un script propio que vuelca el transcript entero, **capturada a la
+5ª corrida**, y el mecanismo queda medido, no supuesto:
+
+```
+paso1.calls=1 · paso2.calls=[{'token': '__PENDING__'}] · turn_count=2
+tool_start obtener_token {} · tool_start canjear_token {"token": "__PENDING__"}   ← MISMO turno
+tool_result token=TK-8c97966865 · tool_result ERROR: token inválido
+resultado='ERROR: token inválido'
+```
+
+El modelo emite **las dos calls en el mismo turno** y rellena el argumento dependiente con un placeholder
+(`'__PENDING__'` aquí, `''` en la roja de la suite). **El runtime hizo su trabajo**: despachó las dos y
+devolvió **ambos** resultados al historial — el token real cruzó. Lo que no ocurrió es que el modelo se
+**recuperara** del `ERROR: token inválido`: cerró el turno con el error como respuesta. Es no-determinismo
+del modelo, y la aserción vigente presupone esa recuperación. **No se tocó el test.**
+
+### 4 · `FIND-E11-2` decidido — y por el camino, un defecto del SUJETO
+
+Marcador tomado corriendo el escenario aislado 10 veces por rama, mismo montaje, sin retocar enunciado ni
+system prompt:
+
+| sujeto | conduce `AskUserQuestion` |
+|---|---|
+| descripción **que B tenía** | **2 de 10** |
+| descripción **homologada a A** | **0 de 10** |
+
+La tool estaba **anunciada en 10 de 10** (24 delante) y las dos veces que la condujo los argumentos eran
+**válidos contra el schema** ⇒ no es montaje ni schema: es **solvencia del modelo**. Veredicto: hallazgo
+sobre A, no un test que arreglar.
+
+⚠ **`FIND-E11-4` — defecto del SUJETO, PAGADO.** Al medir salió que la `description` de B decía *«Prefer this
+over asking in free-form prose whenever you need input to proceed»* y *«GROUP related questions into a SINGLE
+call»*: **texto que A no tiene**. Resuelto **leyendo el canónico** (`D-08`): lo que A manda al modelo es
+`tool.prompt()` (`api.ts:171`) = `ASK_USER_QUESTION_TOOL_PROMPT` (`prompt.ts:31-44`) — el `DESCRIPTION` corto
+es chip/UI — y ahí no está ninguna de las dos cláusulas. **B empujaba más que A**, o sea el escenario medía a
+un sujeto que no es A. Homologados descripción e `input_schema` (`label`+`description` ambos requeridos,
+`preview`, `multiSelect` con default, y los `annotations`/`answers`/`metadata` de nivel superior). `L10`.
+
+**Consecuencia, dicha sin adornos:** con el sujeto homologado esto deja de ser intermitente y pasa a ser
+**determinista**. `E11` queda **rojo** mientras `AskUserQuestion` siga en `_E11_OBJETIVO`.
+
+### 5 · El tramo **NO** se cierra — y la razón no es deuda del runtime
+
+Gate completo, una corrida, capturado entero a fichero: **32 passed / 1 failed**. La única roja es
+`preguntar-al-usuario` (los otros 10 objetivos de `E11` conducen). Con `E8` escrita, las **9 de 9**
+capacidades del gate existen; lo que falta es el **verde simultáneo**, y hoy lo impide un hallazgo sobre el
+modelo, no una costura sin cablear.
+
+Qué hacer con eso **es alcance, no método**: sacar `AskUserQuestion` de `_E11_OBJETIVO` sería el tell exacto
+(«caso fuera»), y dejarlo bloquea el cierre indefinidamente por algo ajeno al runtime. Se deja **medido y
+sin decidir** en vez de decidirlo por mi cuenta.
+
+### Medición de cierre (nada heredado)
+
+| medida | valor | delta |
+|---|---|---|
+| gate (fichero completo, 1 corrida) | **32 passed / 1 failed** (`E11`, `FIND-E11-2`) | +5 tests (`E8`), la roja es nueva y explicada |
+| suite completa | **711 passed / 1 failed / 3 skipped / 112 xfailed** (183 s, capturada entera a fichero); la roja es `E11` | +5 (`E8`) +1 (`test_description_es_la_que_A_manda_al_modelo`) |
+| `ruff` (`src/agentic_runtime`) | **505** | **0** — subió a 506 (`ISC004`) y se pagó |
+| `mypy --strict` | **138 err / 54 f** | **0** |
+
+**Acreditación total de la ventana: 11 inyecciones → 11 rojas, 0 falsos positivos** (9 sobre `E8`, 2 sobre los tests de forma de `AskUserQuestion`). `FIND-SEQ-1` y `FIND-E2G-1` **no cayeron** en la corrida de cierre — siguen abiertos, que un intermitente no caiga no lo arregla.
+
+**Veredicto de avance (`L04`): ⛔ el tramo 1 NO se cierra.** `E8` ✅ y `C10` ✅ ⇒ **9 de 9 capacidades del gate escritas**, pero el verde simultáneo lo impide `FIND-E11-2`, que es un hallazgo sobre el modelo. Lo que falta ya no es cobertura ni cableado: es **una decisión de alcance del usuario**.

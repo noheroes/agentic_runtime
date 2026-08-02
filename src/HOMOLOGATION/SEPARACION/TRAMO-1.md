@@ -219,6 +219,8 @@ Fuera del tramo queda toda **política** (permisos, hooks, modos), toda **estrat
 - **cableado:** él **es** el cableado. Prohibido cualquier singleton mutable nuevo.
 - **orden:** se escribe con C1 y se cierra con C8.
 - **prueba:** el turno E2E lo ejercita por construcción **+** test de aislamiento: una battery importada **sólo** por su compositor; `ctx.runner is None` ⇒ el spawn falla limpio. *El aislamiento se prueba con aserciones, no con prosa* (aprendizaje A2 nº4).
+- **estado 2026-08-02: ✅ acreditada por `E8` corriendo — 5 piezas, ninguna con `@_needs_azure`** (el gate ya no se puede acreditar con `E8` saltada): **`E8·a`** dirección del grafo de imports medida con `ast` sobre los fuentes de las dos partes (nunca grep, `D-05`), con **control positivo** (>150 módulos barridos + el conjunto EXACTO de importadores de `S11`) para que un barrido ciego no pase en vacío; **`E8·b`** intérprete limpio ⇒ importar el base no arrastra battery alguna y el `input_processor` por defecto es `None`; **`E8·c`** compuesta vs NO compuesta, dos ramas, con el corte de `/eco` observable y `caller.calls == []`; **`E8·d`** la negativa `ctx.runner is None` ⇒ `is_error` limpio sobre el ctx de **producción**; **`E8·e`** el estado mutable de clase **y de módulo** del ensamblador es **exactamente** el declarado. La battery vive en `batteries/e8_commands/`, **fuera de `src/`** (no se empaqueta). Acreditado con violación inyectada: **9 inyecciones → 9 rojas, 0 falsos positivos** (7 sobre `E8·a`–`E8·d`, 2 sobre `E8·e`), cada una anunciada antes de tocar el fuente, revertida desde copia propia y verificada con `sha256sum -c`.
+- **⚠ hallazgos del ensamblador, medidos leyendo `factory.py` 1→EOF:** **`FIND-C10-1` ABIERTO y vigilado por `E8·e`** — `RuntimeFactory._modes` (`factory.py:152`) **es** un singleton mutable de clase, **preexistente**: la ficha prohíbe singleton **nuevo**, así que éste queda medido, nombrado y congelado en `_E8_SINGLETONS_DECLARADOS`; retirarlo exige mover el registro de modos a la config y **no** entra en el tramo. **`FIND-C10-2` PAGADO** — `factory.py:156` llevaba código muerto (`cls._modes[name] = name if False else runtime_cls`); ahora es la asignación directa.
 
 ---
 
@@ -267,12 +269,33 @@ El tramo 1 se declara terminado cuando **todas** estas pasan, corriendo:
 | E5 | **abort real**: `stop.aborted=True` corta el stream a mitad | C2 / `S2` | 🟢 1 test | hoy el abort se ignora en silencio |
 | E6 | **sin identidad**: turno completo sin `user_id`; probe de que ninguno llega al seam del modelo | C9 | 🟢 3 tests | es la prueba de que Filosofía B se cumple |
 | E7 | **confinamiento**: traversal/symlink/allow-set rechazados **+ barrido de no-escape sobre las 25 tools** | C6 | 🟢 6 tests (mecanismo: traversal · symlink · allow-set r/w asimétrico · regresión `FIND-C6-1` · costura `S15` load-bearing · **negativa E2E real** con control positivo · `E7f` **RE-MEDIDO con las claves del schema** (`FIND-E7F-1` pagado): las 25 ejecutadas con `subprocess`/`urlopen` prohibidos y `exec_env` espía ⇒ **22 pasan por la costura, se escapan exactamente 3** (`WebFetch`/`WebSearch` red-directa, `clone_repository` subproceso-directo), lista blanca `==` + **guarda de schema** que impide que una entrada mal formada vuelva a pasar por barrido) | promueve C6 de G2 a G1; y sin `E7f` el «no se escapa ninguna» era grep, no medición |
-| E8 | **aislamiento**: battery importada sólo por su compositor; el base no la conoce | C10 | ⛔ sin escribir | el agnosticismo se asevera, no se narra |
+| E8 | **aislamiento**: battery importada sólo por su compositor; el base no la conoce | C10 | 🟢 **5 tests** (`a` grafo de imports por `ast` con control positivo · `b` intérprete limpio · `c` compuesta vs no compuesta · `d` negativa `ctx.runner is None` · `e` estado mutable de clase y módulo del ensamblador == el declarado), **ninguno con `@_needs_azure`**, acreditado con **9 inyecciones → 9 rojas, 0 falsos positivos** | el agnosticismo se asevera, no se narra |
 | E9 | **notificación**: el padre recibe y **aplica** al historial vivo la notificación de un hijo | C8 / `H-5` | ✅ **en verde** | los 7 tests actuales verifican la función, no el comportamiento |
 | **E10** | **matriz funcional de las 25 tools**: cada una con **cableado real** (fs confinado real, `LocalExecEnvironment` real, `InMemoryTaskRegistry` real, git real, servidor HTTP en `127.0.0.1`, servidor git-https local con TLS propio) y aserción sobre su **EFECTO OBSERVABLE**, no sobre `is_error` | la capa **por tool** de C4·C5·C6 | 🟢 **1 test, 25/25 en verde**, cierra con `assert set(comprobadas) == _NATIVE_CENSUS` | paga el hueco de método de la SÉPTIMA CORRECCIÓN: aseverar **mecanismo** (que la tool arranca y vuelve sin error) no es aseverar **función** (que hace su trabajo). Nadie había aseverado nunca que **`Edit` editara** |
 | **E11** | **conducción por el modelo** de las 11 que ninguna corrida medida había invocado: 11 escenarios reales con LLM, enunciados por OBJETIVO, con el censo entero delante | cobertura de conducción de C5 | 🟢 **1 test, `conducidas == _E11_OBJETIVO` (11/11)** | `E10` mide **efecto**, `E11` mide **conducción**: son dos preguntas distintas y por eso son dos tests. Una tool que funciona pero que el modelo nunca elige es cobertura que falta |
 
-**Estado del gate — MEDICIÓN VIGENTE (2026-08-01, 6ª ventana):**
+**Estado del gate — MEDICIÓN VIGENTE (2026-08-02, 7ª ventana):**
+Fichero del gate completo, **una sola corrida**, capturada entera a fichero: **32 passed / 1 failed** (150 s).
+Con `E8` escrita, las **9 de 9** capacidades del gate **existen**; lo que falta es el **verde simultáneo**.
+La única roja es **`E11 · preguntar-al-usuario`** — los otros 10 objetivos conducen — y es **`FIND-E11-2`**:
+medido esta ventana en 10 corridas del escenario aislado, el modelo conduce `AskUserQuestion` **0 de 10** con
+el sujeto homologado a A (**2 de 10** con la descripción que B tenía inventada, `FIND-E11-4`, ya pagada). La
+tool iba anunciada 10 de 10 y, cuando la condujo, con argumentos válidos contra el schema ⇒ **no es montaje
+ni schema: es solvencia del modelo**. Con el sujeto fiel deja de ser intermitente y pasa a **determinista**.
+**⚠ Decisión de ALCANCE pendiente, no tomada aquí:** sacar `AskUserQuestion` de `_E11_OBJETIVO` sería el tell
+«caso fuera» (`no-debilitar-la-prueba`); dejarla bloquea el cierre por algo que no es del runtime. Se deja
+**medido y sin decidir**.
+**⚠ `FIND-SEQ-1` NUEVO, medido, ABIERTO:** `test_real_sequential_dependent_tools` cayó **2 de 6 corridas**.
+Cazado con transcript entero: el modelo emite las **dos** tool calls en el **mismo turno** rellenando el
+argumento dependiente con un placeholder (`'__PENDING__'` / `''`); el runtime despachó las dos y devolvió
+**ambos** resultados al historial —el token real cruzó—, pero el modelo **no se recuperó** del `ERROR: token
+inválido` y cerró el turno con él. No-determinismo del modelo; **el test no se tocó**.
+**`FIND-E2G-1`:** no cayó en ninguna de las corridas de suite de esta ventana ⇒ marcador **1 roja de 4**.
+Sigue **ABIERTO**.
+`ruff` **505** y `mypy --strict` **138 err / 54 f**: **deuda neta cero** (`ruff` subió a 506 por un `ISC004`
+y se pagó entero). **El tramo NO está cerrado.**
+
+**Estado del gate — medición anterior (2026-08-01, 6ª ventana):**
 `-m gate_tramo1` = **27 passed, 0 skipped, en una sola corrida** (`E1`×2 · `E2`×8 · `E3`×1 · `E4`×4 ·
 `E5`×1 · `E6`×3 · `E7`×6 · `E9`×1 · **`E10`×1** · **`E11`×1**; `E10`/`E11` sustituyen a un test que se
 retiró, ver el delta). **8 de 9 de las capacidades `E1..E9` — falta sólo `E8`. El tramo NO está cerrado**,

@@ -40,6 +40,7 @@ trabajo.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import functools
@@ -49,6 +50,7 @@ import os
 import random
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -3353,16 +3355,35 @@ async def test_e10_every_native_tool_produces_its_observable_effect(tmp_path, mo
 # parámetro (`L10`: una divergencia con A no es una mejora hasta que se demuestre);
 # la regresión la fija `_e10_task_list`.
 #
-# `FIND-E11-2` · **ABIERTO y vigilado por el gate.** En 2 de 4 corridas medidas el
-# modelo resolvió `preguntar-al-usuario` **preguntando en prosa** en vez de conducir
-# `AskUserQuestion` (respuesta: «¿Qué formato quieres…? - PDF - DOCX - ZIP»). Se
-# verificó que no es déficit del montaje: la descripción de la tool en B dice
-# literalmente «Prefer this over asking in free-form prose whenever you need input to
-# proceed» —fiel a A— y el único empujón que A pone en su system prompt es para el
-# caso de tool denegada (`prompts.ts:365-366`), no una cláusula general. Así que es
-# solvencia del modelo, y **no se atiende retocando el enunciado ni el system prompt
-# para que pase**: eso sería el tell exacto. Queda rojo cuando pasa, igual que
-# `FIND-E2G-1`.
+# `FIND-E11-2` · **ABIERTO, MEDIDO y vigilado por el gate.** El modelo resuelve
+# `preguntar-al-usuario` **preguntando en prosa** en vez de conducir `AskUserQuestion`
+# (respuesta: «¿Qué formato quieres…? - PDF - DOCX - ZIP»). Marcador tomado
+# 2026-08-02 corriendo el escenario aislado, mismo montaje, 10 veces por rama:
+#
+#   · con la descripción **que B tenía** (con el empujón inventado):  **2 de 10**
+#   · con la descripción **homologada a A** (`FIND-E11-4`, ver abajo): **0 de 10**
+#
+# `AskUserQuestion` estaba **anunciada en 10 de 10** (24 tools delante), y las dos
+# veces que la condujo la llamó con argumentos **válidos contra el schema** ⇒ no es
+# déficit de montaje ni de schema: es **solvencia del modelo**. El único empujón que
+# A pone en su system prompt es para el caso de tool denegada (`prompts.ts:356-366`,
+# leído 1→EOF), no una cláusula general. **No se atiende retocando el enunciado ni el
+# system prompt para que pase**: eso sería el tell exacto. Con el sujeto homologado
+# esto deja de ser intermitente y pasa a ser **determinista**: `E11` queda ROJO
+# mientras `AskUserQuestion` siga en `_E11_OBJETIVO`, y esa decisión —qué significa
+# el gate cuando lo que falla es el modelo y no el runtime— es de alcance, no mía.
+#
+# `FIND-E11-4` · **defecto del SUJETO, PAGADO aquí.** La `description` de
+# `AskUserQuestionTool` en B decía «Prefer this over asking in free-form prose
+# whenever you need input to proceed» y «GROUP related questions into a SINGLE call»:
+# **texto que A no tiene**. Leído el canónico (`D-08`): lo que A manda al modelo es
+# `tool.prompt()` (`api.ts:171`), o sea `ASK_USER_QUESTION_TOOL_PROMPT`
+# (`AskUserQuestionTool/prompt.ts:31-44`) —el `DESCRIPTION` corto es el chip/UI—, y
+# ahí no hay ninguna de esas dos cláusulas. B empujaba MÁS que A ⇒ el escenario
+# medía a un sujeto que no es A. Homologados descripción y `input_schema` (`label` y
+# `description` ambos requeridos, `preview`, `multiSelect` con default, y los
+# `annotations`/`answers`/`metadata` de nivel superior). `L10`: una divergencia con A
+# no es una mejora hasta que se demuestre.
 #
 # Lo que impide aprobar sin mérito, igual que en `E2f`/`E2g`: centinelas `uuid4` por
 # corrida (nada sale del conocimiento paramétrico), escenarios barajados, la tool
@@ -3774,4 +3795,407 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
     assert conducidas == set(_E11_OBJETIVO), (
         "quedaron tools del objetivo sin conducir por el modelo: "
         f"{sorted(set(_E11_OBJETIVO) - conducidas)}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# E8 · AISLAMIENTO — una battery importada SÓLO por su compositor
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# `TRAMO-1 §4·E8`: *aislamiento: battery importada sólo por su compositor; el base
+# no la conoce*. Acredita `C10`, el ensamblador único, que es la costura que
+# sostiene a las demás: si el base conociera a alguna battery —importándola,
+# registrándola en un catálogo por defecto, o trayéndola «por si acaso»— dejaría de
+# ser agnóstico y Filosofía B se quedaría en prosa.
+#
+# ⚠ **El agnosticismo se ASEVERA, no se narra** (aprendizaje `A2` nº4). Lo que se
+# mide es la **dirección del grafo de imports**: battery → base y **nunca** base →
+# battery. Se mide con `ast` sobre los 223 fuentes de las dos partes, no con `grep`
+# y no leyendo (`D-05`: grep es localizador, jamás fuente de veredicto; `L09`:
+# verificar el cableado, no la existencia).
+#
+# El sujeto no podía ser una battery del runtime porque **no hay ninguna**: el base
+# no trae catálogo, que es justo lo que se está aseverando. Así que la battery se
+# escribe donde le toca a una battery — `batteries/e8_commands/`, **fuera de
+# `src/`**, luego fuera del paquete que se distribuye
+# (`[tool.setuptools.packages.find] where = ["src"]`) — y se compone desde fuera,
+# como lo haría un integrador.
+#
+# Cuatro piezas, y cada una sola es satisfacible sin que el aislamiento sirva:
+#
+#   · `E8·a` **el grafo** — nadie del base importa la battery, y el ÚNICO módulo que
+#     importa su motor es su compositor. Igualdad EXACTA, no «no aparece en»: si
+#     mañana alguien la importa desde otro sitio, sale roja aunque el base siga
+#     limpio. Con control positivo del propio barrido: un barrido que no resuelva
+#     imports relativos daría verde por no ver nada.
+#   · `E8·b` **importar el base no arrastra battery alguna** — medido en un proceso
+#     NUEVO, porque en éste el import ya lo hizo el propio test.
+#   · `E8·c` **se compone, no se instala** — las dos ramas aseveradas: compuesta, el
+#     turno lo resuelve la battery y el modelo **no se llama**; sin componer, el
+#     mismo prompt va al modelo verbatim. Sin la segunda rama, «la battery funciona»
+#     no distinguiría composición de comportamiento por defecto del base.
+#   · `E8·d` **la NEGATIVA de la ficha de `C10`**: una capacidad que el ensamblador
+#     no compuso **no se auto-provee** — `ctx.runner is None` ⇒ el spawn falla
+#     limpio, y el `ctx` es el de PRODUCCIÓN, no uno fabricado a mano (eso ya lo
+#     cubre `E4`).
+#
+# Ninguna lleva `@_needs_azure`: `E8` no necesita modelo, así que el gate no puede
+# acreditarse con esta capacidad saltada.
+
+#: El paquete de la battery. Vive fuera de `src/`: no se empaqueta con el runtime.
+_E8_BATTERY = "e8_commands"
+
+#: El comando que resuelve la battery, en literal. No se importa de ella a
+#: propósito — ver la nota de `E8·c`.
+_E8_COMANDO = "/eco"
+
+#: Los ÚNICOS módulos del repo que pueden importar algo de la battery, con motivo:
+#: su compositor (que para eso es el compositor) y este gate (que hace de
+#: integrador). Igualdad exacta: cualquier otro importador pone `E8` roja.
+_E8_IMPORTADORES_LEGITIMOS = {
+    "e8_commands.compose": "es el compositor de la battery",
+    "agentic_runtime.tests.test_tramo1_gate": "este gate compone la battery como integrador",
+}
+
+
+def _e8_repo_root() -> Path:
+    """Raíz del repo, derivada del paquete instalado — no de `__file__` del test."""
+    import agentic_runtime
+
+    return Path(agentic_runtime.__file__).resolve().parents[2]
+
+
+def _e8_modulo(py: Path, base: Path) -> tuple[str, bool]:
+    """`(nombre_de_módulo, es_paquete)` de un fuente, relativo a su raíz de import."""
+    partes = list(py.relative_to(base).with_suffix("").parts)
+    es_paquete = partes[-1] == "__init__"
+    if es_paquete:
+        partes.pop()
+    return ".".join(partes), es_paquete
+
+
+def _e8_imports(py: Path, modulo: str, es_paquete: bool) -> set[str]:
+    """Módulos que `py` importa, con los relativos RESUELTOS a su nombre absoluto.
+
+    Resolver los relativos es la mitad del trabajo: el corpus del base los usa en
+    las dos formas (`from .contracts…` dentro de un `__init__`, `from ..contracts…`
+    dentro de un módulo hoja), y un barrido que sólo mirase `import x.y` no vería
+    prácticamente nada del grafo interno — y saldría verde por ciego. `E8·a` lleva
+    control positivo justo por esto.
+    """
+    arbol = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+    # Paquete contenedor: para un `__init__`, el propio módulo; si no, su padre.
+    contenedor = modulo if es_paquete else modulo.rpartition(".")[0]
+    fuera: set[str] = set()
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.Import):
+            fuera.update(alias.name for alias in nodo.names)
+        elif isinstance(nodo, ast.ImportFrom):
+            if nodo.level:
+                partes = contenedor.split(".") if contenedor else []
+                raiz = ".".join(partes[: len(partes) - (nodo.level - 1)] or partes)
+                absoluto = f"{raiz}.{nodo.module}" if nodo.module else raiz
+            else:
+                absoluto = nodo.module or ""
+            if absoluto:
+                fuera.add(absoluto)
+    return fuera
+
+
+def _e8_grafo(raices: dict[Path, str]) -> dict[str, set[str]]:
+    """Grafo `módulo -> módulos importados` de todas las raíces dadas."""
+    grafo: dict[str, set[str]] = {}
+    for base, paquete in raices.items():
+        for py in sorted((base / paquete).rglob("*.py")):
+            modulo, es_paquete = _e8_modulo(py, base)
+            grafo[modulo] = _e8_imports(py, modulo, es_paquete)
+    return grafo
+
+
+def _e8_importadores(grafo: dict[str, set[str]], prefijo: str) -> set[str]:
+    """Quién importa `prefijo` o algo por debajo de él."""
+    return {
+        modulo
+        for modulo, importados in grafo.items()
+        if any(imp == prefijo or imp.startswith(f"{prefijo}.") for imp in importados)
+    }
+
+
+def test_e8a_the_base_never_imports_a_battery_and_only_its_compositor_does():
+    """`E8·a`: la dirección del grafo es battery → base, medida con `ast`."""
+    raiz = _e8_repo_root()
+    baterias = raiz / "batteries"
+    assert (baterias / _E8_BATTERY).is_dir(), (
+        f"la battery de `E8` no está en {baterias / _E8_BATTERY}: sin sujeto, esta "
+        "prueba no mide nada"
+    )
+
+    grafo = _e8_grafo({raiz / "src": "agentic_runtime", baterias: _E8_BATTERY})
+
+    # ── control POSITIVO del barrido ──────────────────────────────────────────
+    # Un barrido roto (que no parsee, que no resuelva relativos, que no encuentre
+    # los fuentes) daría verde en todo lo de abajo por no ver nada. Así que primero
+    # se acredita que VE: volumen del corpus y las dos formas de import relativo,
+    # resueltas al mismo módulo absoluto.
+    assert len(grafo) > 150, f"el barrido apenas vio {len(grafo)} módulos: no barrió"
+    assert f"{_E8_BATTERY}.compose" in grafo, "el barrido no llegó a la battery"
+    s11 = {
+        m for m in _e8_importadores(grafo, "agentic_runtime.contracts.user_input")
+        if m.startswith("agentic_runtime") and not m.startswith("agentic_runtime.tests")
+    }
+    assert s11 == {"agentic_runtime", "agentic_runtime.contracts",
+                   "agentic_runtime.loop.agent_loop"}, (
+        f"el barrido no resuelve los imports relativos del base: {sorted(s11)}"
+    )
+
+    # ── 1. el base NO conoce la battery ───────────────────────────────────────
+    importadores = _e8_importadores(grafo, _E8_BATTERY)
+    del_base_que_la_importan = {
+        m for m in importadores
+        if m.startswith("agentic_runtime") and m not in _E8_IMPORTADORES_LEGITIMOS
+    }
+    assert not del_base_que_la_importan, (
+        f"el base importa una battery: {sorted(del_base_que_la_importan)}. El runtime "
+        "dejaría de ser agnóstico del framework (Filosofía B)."
+    )
+
+    # ── 2. y el único que importa su MOTOR es su compositor ───────────────────
+    assert importadores == set(_E8_IMPORTADORES_LEGITIMOS), (
+        "el conjunto de importadores de la battery cambió. Medido: "
+        f"{sorted(importadores)} · legítimos: {sorted(_E8_IMPORTADORES_LEGITIMOS)}"
+    )
+    motor = _e8_importadores(grafo, f"{_E8_BATTERY}.processor")
+    assert motor == {f"{_E8_BATTERY}.compose"}, (
+        f"el motor de la battery lo importa alguien que no es su compositor: {sorted(motor)}"
+    )
+    propios = {i for i in grafo[_E8_BATTERY] if i.startswith(_E8_BATTERY)}
+    assert not propios, (
+        f"el `__init__` de la battery re-exporta {sorted(propios)}: tocar el paquete "
+        "arrastraría el motor y «importada sólo por su compositor» dejaría de medir "
+        "lo que dice"
+    )
+
+    # ── 3. la dirección: la battery SÍ importa del base ───────────────────────
+    # Sin esto, «el base no la importa» sería cierto también entre dos partes que no
+    # se conocen de nada — que no es composición, es ausencia.
+    assert any(i.startswith("agentic_runtime") for i in grafo[f"{_E8_BATTERY}.compose"]), (
+        "el compositor no importa del base: no está componiendo nada"
+    )
+
+
+def test_e8b_importing_the_base_pulls_no_battery_at_all():
+    """`E8·b`: en un proceso NUEVO, `import agentic_runtime` no trae ninguna battery.
+
+    En ESTE proceso la battery ya está importada por el propio gate, así que mirar
+    `sys.modules` aquí no probaría nada. Se mide donde se puede medir: un intérprete
+    limpio, con el mismo `sys.path` del test menos el directorio de las batteries.
+    """
+    raiz = _e8_repo_root()
+    entorno = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            p for p in sys.path if p and Path(p).resolve() != (raiz / "batteries")
+        ),
+    }
+    guion = (
+        "import json, sys; import agentic_runtime; "
+        "from agentic_runtime.factory import RuntimeConfig, create_runtime; "
+        "p = RuntimeConfig().input_processor; "
+        "print(json.dumps({"
+        " 'baterias': sorted(m for m in sys.modules if 'e8_commands' in m),"
+        " 'input_processor_por_defecto': None if p is None else type(p).__name__,"
+        "}))"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", guion],
+        env=entorno, capture_output=True, text=True, check=False,
+    )
+    assert r.returncode == 0, f"el import del base falló en un proceso limpio: {r.stderr}"
+    medido = json.loads(r.stdout.strip().splitlines()[-1])
+    assert medido["baterias"] == [], (
+        f"importar el base arrastró battery: {medido['baterias']}"
+    )
+    # Y el base no trae catálogo por defecto en la ranura: `None` = passthrough.
+    assert medido["input_processor_por_defecto"] is None, (
+        "el base trae un procesador de entrada por defecto: eso es catálogo, no costura"
+    )
+
+
+class _E8StubCaller:
+    """Modelo de mentira, y a propósito: `E8` mide composición, no solvencia.
+
+    Registra cada llamada — que **no** haya ninguna es la mitad de lo que `E8·c`
+    asevera, y eso no se puede medir con un modelo real.
+    """
+
+    def __init__(self, respuesta: str) -> None:
+        self.respuesta = respuesta
+        self.calls: list[list[dict]] = []
+
+    def supports_native_tool_search(self, model_id: str = "") -> bool:
+        return False
+
+    async def complete(self, messages, tools, *, stop=None, **kwargs):
+        self.calls.append(messages)
+        respuesta = self.respuesta
+
+        async def _gen():
+            from agentic_runtime.contracts.events import DoneEvent, TokenEvent
+            yield TokenEvent(content=respuesta)
+            yield DoneEvent(stop_reason="end_turn")
+
+        return _gen()
+
+
+async def test_e8c_the_battery_is_composed_not_installed(tmp_path, monkeypatch):
+    """`E8·c`: compuesta, la battery resuelve el turno; sin componer, no existe."""
+    monkeypatch.syspath_prepend(str(_e8_repo_root() / "batteries"))
+    # SÓLO el compositor. Importar aquí el motor (`e8_commands.processor`) pondría
+    # roja —con razón— la igualdad exacta de `E8·a`: el motor lo importa su
+    # compositor y nadie más. Por eso el comando se nombra por su literal.
+    from e8_commands.compose import compose
+
+    marca = f"E8-{uuid.uuid4().hex[:10].upper()}"
+    prompt = f"{_E8_COMANDO} {marca}"
+
+    # ── rama A · CON la battery compuesta ─────────────────────────────────────
+    # La compone su compositor, por el ensamblador único del base (`C10`).
+    caller_a = _E8StubCaller("respuesta del modelo")
+    runtime_a = compose(
+        storage_root=tmp_path / "con",
+        model_caller=caller_a,
+        scope=Scope("scope-e8-con"),
+    )
+    task_a = await runtime_a.dispatch(RuntimeTask(
+        prompt=prompt, description="gate-e8-con-battery",
+        session_id=f"sess-E8a-{uuid.uuid4().hex}",
+    ))
+    await runtime_a._task_registry.get(task_a).asyncio_task
+    resultado_a = runtime_a.result(task_a) or ""
+
+    assert runtime_a.status(task_a) is TaskStatus.COMPLETED, resultado_a
+    assert resultado_a == f"eco: {marca}", (
+        f"la battery compuesta no resolvió el turno: {resultado_a!r}"
+    )
+    # El corte es REAL: el modelo no llegó a llamarse ni una vez.
+    assert caller_a.calls == [], (
+        f"la battery cortó el turno y aun así se llamó al modelo {len(caller_a.calls)} vez/veces"
+    )
+
+    # ── rama B · SIN componerla ───────────────────────────────────────────────
+    # Mismo prompt, mismo ensamblador, misma ranura vacía: el comando no existe.
+    caller_b = _E8StubCaller("respuesta del modelo")
+    runtime_b = _runtime(tmp_path / "sin", caller_b, (), Scope("scope-e8-sin"))
+    task_b = await runtime_b.dispatch(RuntimeTask(
+        prompt=prompt, description="gate-e8-sin-battery",
+        session_id=f"sess-E8b-{uuid.uuid4().hex}",
+    ))
+    await runtime_b._task_registry.get(task_b).asyncio_task
+    resultado_b = runtime_b.result(task_b) or ""
+
+    assert runtime_b.status(task_b) is TaskStatus.COMPLETED, resultado_b
+    assert caller_b.calls, "sin battery el turno tampoco fue al modelo: no se compuso nada"
+    # El prompt cruzó VERBATIM: nadie lo preprocesó por debajo.
+    usuario = [m for m in caller_b.calls[0] if m.get("role") == "user"]
+    assert any(m.get("content") == prompt for m in usuario), (
+        f"el prompt no llegó al modelo tal cual: {usuario}"
+    )
+    assert resultado_b == "respuesta del modelo", (
+        f"el turno sin battery no lo resolvió el modelo: {resultado_b!r}"
+    )
+    assert "eco:" not in resultado_b, (
+        "el comando de la battery operó sin haberla compuesto: eso es catálogo instalado"
+    )
+
+
+async def test_e8d_negative_an_uncomposed_capability_does_not_provide_itself(tmp_path):
+    """`E8·d`: lo que el ensamblador no compuso NO aparece solo — y falla limpio.
+
+    Es la negativa que la ficha de `C10` exige, medida sobre el `ctx` de PRODUCCIÓN:
+    se compone explícitamente un runtime **sin** subagentes (`subagent_runner_factory`
+    devolviendo `None`, la forma que el propio `RuntimeConfig` documenta) y se
+    comprueba que el runtime no se inventa un runner por su cuenta.
+    """
+    from agentic_runtime.tools.native.agent import AgentTool
+
+    capturado: dict[str, Any] = {}
+
+    def _capture_ctx(ctx: ToolUseContext, task: Any) -> ToolUseContext:
+        capturado["ctx"] = ctx
+        return ctx
+
+    runtime = _runtime(
+        tmp_path, _E8StubCaller("ok"), (), Scope("scope-e8d"),
+        subagent_runner_factory=lambda _rt: None,
+        root_context_modifier=_capture_ctx,
+    )
+    task_id = await runtime.dispatch(RuntimeTask(
+        prompt="hola", description="gate-e8d-negativa",
+        session_id=f"sess-E8d-{uuid.uuid4().hex}",
+    ))
+    await runtime._task_registry.get(task_id).asyncio_task
+
+    ctx = capturado.get("ctx")
+    assert ctx is not None, "no se capturó el ctx de producción"
+    assert ctx.runner is None, (
+        "el ensamblador puso un runner que nadie compuso: la costura se auto-provee"
+    )
+
+    resultado = await AgentTool().execute(
+        {"prompt": "haz algo", "description": "hijo-e8d"}, ctx
+    )
+    assert resultado.is_error is True, "el spawn sin costura se dio por bueno"
+    assert "S18" in resultado.output or "not wired" in resultado.output, resultado.output
+    assert resultado.tool_name == "Agent"
+
+
+#: Estado mutable de clase que el ensamblador tiene HOY, con su motivo. La ficha de
+#: `C10` dice «prohibido cualquier singleton mutable **nuevo**»; esto es lo que
+#: convierte esa frase en aserción en vez de prosa: el que hay queda medido y
+#: nombrado (`FIND-C10-1`), y uno nuevo pone `E8·e` roja.
+_E8_SINGLETONS_DECLARADOS = {
+    ("RuntimeFactory", "_modes"): (
+        "registro de modos de ejecución, preexistente (`FIND-C10-1`): se puebla por "
+        "`register_execution_mode` y sobrevive entre ensamblados"
+    ),
+}
+
+#: Estado mutable a nivel de MÓDULO del ensamblador. Hoy no hay ninguno, y esa es
+#: la aserción: un singleton se esconde igual de bien en el módulo que en la clase.
+_E8_SINGLETONS_MODULO_DECLARADOS: dict[str, str] = {}
+
+
+def test_e8e_the_assembler_grows_no_new_mutable_singleton():
+    """`E8·e`: el estado mutable de clase y módulo del ensamblador es EXACTAMENTE el declarado."""
+    import inspect
+
+    from agentic_runtime import factory as ensamblador
+
+    modulo_medido = {
+        nombre for nombre, valor in vars(ensamblador).items()
+        if not nombre.startswith("__") and isinstance(valor, (dict, list, set))
+    }
+    assert modulo_medido == set(_E8_SINGLETONS_MODULO_DECLARADOS), (
+        "el ensamblador ganó estado mutable a nivel de módulo. Medido: "
+        f"{sorted(modulo_medido)} · declarado: {sorted(_E8_SINGLETONS_MODULO_DECLARADOS)}."
+    )
+
+    medido: set[tuple[str, str]] = set()
+    clases = [
+        (nombre, obj) for nombre, obj in vars(ensamblador).items()
+        if inspect.isclass(obj) and obj.__module__ == ensamblador.__name__
+    ]
+    assert clases, "no se encontró ninguna clase en el ensamblador: el barrido no barrió"
+    for nombre, clase in clases:
+        for attr, valor in vars(clase).items():
+            if attr.startswith("__") or not isinstance(valor, (dict, list, set)):
+                continue
+            # `__annotations__`/`__dataclass_fields__` ya caen por el dunder; lo que
+            # queda es estado de clase de verdad.
+            medido.add((nombre, attr))
+
+    assert medido == set(_E8_SINGLETONS_DECLARADOS), (
+        "el estado mutable de clase del ensamblador cambió. Medido: "
+        f"{sorted(medido)} · declarado: {sorted(_E8_SINGLETONS_DECLARADOS)}. "
+        "`C10` prohíbe cualquier singleton mutable NUEVO."
     )
