@@ -50,9 +50,11 @@ class ToolDispatcher:
         ctx: ToolUseContext,
         timeout: Optional[float] = None,
     ) -> ToolResult:
-        # Abort check — antes de cualquier trabajo
+        # Abort check — antes de cualquier trabajo. La razón viaja: la señal la lleva
+        # (`AbortController` deriva `aborted` de `AbortReason`) y perderla aquí hacía
+        # indistinguibles dos cortes de causa distinta (`FIND-TOOL5/SIG10`).
         if ctx.stop is not None and ctx.stop.aborted:
-            return ToolResult.aborted(tool_name)
+            return ToolResult.aborted(tool_name, reason=ctx.stop.reason())
 
         tool = ctx.tool_pool.find(tool_name, ctx.permission_context)
         if tool is None:

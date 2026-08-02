@@ -17,6 +17,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from .abort import AbortReason
 from .identity import Scope
 
 
@@ -89,6 +90,7 @@ class ToolResult:
         metadata: dict[str, Any] | None = None,
         context_modifier: Callable[[Any], Any] | None = None,
         ends_turn: bool = False,
+        reason: AbortReason | None = None,
     ) -> None:
         self.tool_name = tool_name
         self.output = output
@@ -98,6 +100,7 @@ class ToolResult:
         self.metadata = metadata or {}
         self.context_modifier = context_modifier
         self.ends_turn = ends_turn
+        self.reason = reason
 
     @classmethod
     def error(cls, tool_name: str, message: str) -> ToolResult:
@@ -108,8 +111,20 @@ class ToolResult:
         return cls(tool_name=tool_name, output=f"timeout: {tool_name}", is_timeout=True)
 
     @classmethod
-    def aborted(cls, tool_name: str) -> ToolResult:
-        return cls(tool_name=tool_name, output=f"aborted: {tool_name}", is_aborted=True)
+    def aborted(cls, tool_name: str, reason: AbortReason | None = None) -> ToolResult:
+        """El motivo del corte viaja con el resultado (`FIND-TOOL5/SIG10`).
+
+        La señal ya lo lleva (`AbortController` deriva `aborted` de `AbortReason`);
+        lo que se perdía era el tramo señal→resultado. Va también al `output`, que
+        es lo único que el modelo lee.
+        """
+        sufijo = f" ({reason.value})" if reason is not None else ""
+        return cls(
+            tool_name=tool_name,
+            output=f"aborted: {tool_name}{sufijo}",
+            is_aborted=True,
+            reason=reason,
+        )
 
 
 @runtime_checkable

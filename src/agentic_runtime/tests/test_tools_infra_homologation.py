@@ -130,7 +130,14 @@ def test_dispatch_resolves_and_runs_from_ctx_pool():
 
 
 def test_dispatch_aborts_before_work_when_stop_set():
-    """D2: abort-check pre-ejecución (ctx.stop). Binario, sin reason (gap SIG2)."""
+    """D2: abort-check pre-ejecución (ctx.stop).
+
+    ⚠ El rótulo anterior («Binario, sin reason (gap SIG2)») era **falso desde que existe
+    `contracts/abort.py`**: `AbortController` transporta `AbortReason` y deriva `aborted`
+    de ella precisamente para cerrar `SIG2`. Lo que sigue sin razón es el **resultado**
+    (`ToolResult.aborted`), no la señal — ver `test_abort_reason_reaches_the_result`.
+    Un rótulo caducado en un test verde es lo que hace diagnosticar mal el gap.
+    """
     ctx = _ctx(tool_pool=ToolPool(native_tools=[_FakeTool("Echo")]))
     ctx.stop.abort()
     r = asyncio.run(ToolDispatcher().dispatch(tool_name="Echo", tool_input={}, ctx=ctx))
@@ -214,16 +221,28 @@ def test_write_roots_narrower_than_read_roots(tmp_path):
 # GAPS — xfail(strict): fallan HOY, su fallo ES la evidencia
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL3=FIND-SIG4: interruptBehavior 'cancel'|'block' ausente — el dispatcher aborta binariamente, sin consultar la política de la tool")
-def test_dispatcher_honours_block_interrupt_behavior():
-    """CONDUCTA (`H-L4`): una tool `block` NO debe morir por un abort; una `cancel` sí.
+@pytest.mark.xfail(strict=True, reason="FIND-TOOL3=FIND-SIG4: interruptBehavior 'cancel'|'block' ausente — el dispatcher cancela sin consultar la política de la tool NI la razón del abort")
+def test_block_tool_survives_a_user_interrupt_but_not_other_aborts():
+    """CONDUCTA, ajustada al canónico tras contrastarlo (`D-08`).
 
-    La versión anterior aseveraba `t.interrupt_behavior() in ("cancel","block")` **sobre
-    `_FakeTool`, que es el DOBLE de este fichero**: añadirle el método al doble la habría
-    puesto XPASS sin que el runtime cambiara ni una línea — acreditación en falso de libro.
-    Lo que hay que medir es si el **dispatcher** consulta la política: hoy el pre-check de
-    `ctx.stop` (`dispatcher`) aborta todo por igual, así que la tool `block` muere también.
+    Dos correcciones sobre mis propias versiones anteriores:
+
+    1. La primera aseveraba `t.interrupt_behavior() in ("cancel","block")` **sobre
+       `_FakeTool`, el DOBLE de este fichero**: añadirle el método al doble la habría
+       puesto XPASS sin que el runtime cambiara una línea.
+    2. La segunda exigía que una tool `block` sobreviviera a **cualquier** abort. Eso
+       asevera MÁS que A y habría inventado deuda (`L10`). Leído
+       `StreamingToolExecutor.ts:219-229` 1→EOF de esa zona: A consulta
+       `interruptBehavior` **sólo si `signal.reason === 'interrupt'`** —usuario que teclea
+       mientras las tools corren—; para cualquier otra razón cancela todo
+       (`return 'user_interrupted'`). El default es `'block'` cuando la tool no lo
+       implementa (`Tool.ts:414`, `:233-241`).
+
+    Se asevera el espejo exacto, con las dos ramas: sobrevive a `USER_INTERRUPT`, muere
+    con `AGENT_KILLED`.
     """
+    from agentic_runtime.contracts.abort import AbortReason
+
     class _Block(_FakeTool):
         def __init__(self):
             super().__init__("Blocker", output="terminé")
@@ -231,12 +250,19 @@ def test_dispatcher_honours_block_interrupt_behavior():
         def interrupt_behavior(self):
             return "block"
 
+    # RAMA 1 — interrupción del usuario: la tool `block` sigue y entrega su resultado.
     ctx = _ctx(tool_pool=ToolPool(native_tools=[_Block()]))
-    ctx.stop.abort()
+    ctx.stop.abort(AbortReason.USER_INTERRUPT)
     r = asyncio.run(ToolDispatcher().dispatch(tool_name="Blocker", tool_input={}, ctx=ctx))
     assert not r.is_aborted and r.output == "terminé", (
-        "el dispatcher canceló una tool declarada `block` (interrupción no diferenciada)"
+        "canceló una tool `block` ante una interrupción de usuario (política no consultada)"
     )
+
+    # RAMA 2 — CONTROL NEGATIVO: con otra razón, `block` no protege de nada.
+    ctx2 = _ctx(tool_pool=ToolPool(native_tools=[_Block()]))
+    ctx2.stop.abort(AbortReason.AGENT_KILLED)
+    r2 = asyncio.run(ToolDispatcher().dispatch(tool_name="Blocker", tool_input={}, ctx=ctx2))
+    assert r2.is_aborted, "`block` no debe blindar contra un abort que no es interrupción"
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-TOOL1/A3: sin isConcurrencySafe — el fan-out del turno corre en SERIE (declarado en contracts/tools.py:6-9)")
@@ -404,24 +430,58 @@ def test_tool_result_carries_ends_turn_as_declared_b_extension():
     assert ToolResult(tool_name="x", output="ok", ends_turn=True).ends_turn is True
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL5/SIG10: ToolResult.aborted no lleva reason ni tool_use_id — el modelo no puede distinguir cancelación de rechazo")
-def test_abort_reason_is_distinguishable_by_the_model():
-    """CONDUCTA (`H-L4`): el motivo del aborto debe llegar a lo que el modelo LEE.
+def test_abort_reason_reaches_the_result():
+    """`FIND-TOOL5/SIG10` **PAGADO** — CONDUCTA, con la CAUSA localizada y ajustada.
 
-    La versión anterior era `getattr(r, "reason", None) in (…)` —FIRMA sobre un atributo—:
-    añadir `reason` al constructor la habría puesto XPASS aunque el `output` que se serializa
-    al modelo siguiera siendo el genérico `aborted: bash`, que es lo único que el modelo ve.
-    Se asevera sobre el texto que viaja, y con las dos causas contrastadas.
+    Dije que el gap era «la señal de abort es binaria». **Falso**: `contracts/abort.py`
+    define `AbortReason` y `AbortController` **deriva `aborted` de la razón** justamente
+    para cerrar `SIG2`; la señal lleva el motivo desde que existe ese contrato. El gap real
+    es un eslabón más abajo y es de una línea: `dispatcher.py:54-55` consulta
+    `ctx.stop.aborted` y devuelve `ToolResult.aborted(tool_name)` **tirando el
+    `ctx.stop.reason()` que tiene disponible en la línea anterior**.
+
+    Contraste (`D-08`): A usa `signal.reason` como dato de primera clase — lo fija al
+    abortar (`abort('interrupt')`, `abort('sibling_error')`, `abort('user-cancel')`,
+    `abort('background')`) y lo lee para decidir qué cancelar y con qué motivo
+    (`StreamingToolExecutor.ts:213-229`: `streaming_fallback` · `sibling_error` ·
+    `user_interrupted` · `null`). Perder la razón en el resultado es CORE-GAP, no
+    divergencia.
+
+    **Ajuste aplicado** (`dispatcher.py` + `ToolResult.aborted`): la razón se propaga al
+    resultado y al `output`, que es lo único que el modelo lee. `interrupt_behavior` NO se
+    ajustó: `contracts/tools.py:3-6` lo declara **fuera del tramo 1**, y el contraste no
+    autoriza a colarlo por la puerta de atrás.
+
+    Se asevera con dos causas REALES y distintas, que es lo que hace la prueba honesta.
     """
-    ctx = _ctx(tool_pool=ToolPool(native_tools=[_FakeTool("Bash")]))
-    ctx.stop.abort()
-    r = asyncio.run(ToolDispatcher().dispatch(tool_name="Bash", tool_input={}, ctx=ctx))
-    assert r.is_aborted
-    # El motivo tiene que viajar en lo que el modelo LEE (o, como mínimo, existir para que
-    # el serializador pueda ponerlo). Hoy el output es el genérico `aborted: bash`.
-    assert "cancel" in r.output.lower() or getattr(r, "reason", None) == "cancel", (
-        f"el modelo sólo ve {r.output!r}: no puede distinguir cancelación de rechazo"
+    from agentic_runtime.contracts.abort import AbortReason
+
+    def _abortar(razon):
+        ctx = _ctx(tool_pool=ToolPool(native_tools=[_FakeTool("Bash")]))
+        ctx.stop.abort(razon)
+        r = asyncio.run(ToolDispatcher().dispatch(tool_name="Bash", tool_input={}, ctx=ctx))
+        assert r.is_aborted
+        return r
+
+    interrumpido = _abortar(AbortReason.USER_INTERRUPT)
+    matado = _abortar(AbortReason.AGENT_KILLED)
+
+    # 1) la razón que la señal SÍ llevaba tiene que sobrevivir al resultado
+    assert getattr(interrumpido, "reason", None) == AbortReason.USER_INTERRUPT, (
+        f"el dispatcher tiró la razón: resultado sin `reason`, output={interrumpido.output!r}"
     )
+    # 2) y dos causas distintas tienen que ser DISTINGUIBLES por el campo
+    assert interrumpido.reason != matado.reason
+
+    # 3) y también por el `output`, que es lo ÚNICO que el modelo lee. Sin esto la
+    #    prueba es un falso negativo: comparar la tupla `(reason, output)` pasa en
+    #    verde con el `output` idéntico, porque basta con que difiera el `reason`.
+    #    Lo cazó INY-44' (vaciar el sufijo del `output` no ponía el test en rojo).
+    assert AbortReason.USER_INTERRUPT.value in interrumpido.output, (
+        f"la razón no llega al texto que ve el modelo: {interrumpido.output!r}"
+    )
+    assert AbortReason.AGENT_KILLED.value in matado.output
+    assert interrumpido.output != matado.output
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-TOOL6/E6: ToolSearch select: no soporta multi-select coma-separado que el delta-announce promete")

@@ -52,7 +52,8 @@ Veredicto por paquete; ✅ = todo comportamiento con prueba de efecto + control;
 | # | Paquete | Módulos | Líneas | Veredicto | Huecos nombrados |
 |---|---|---|---|---|---|
 | 1 | `loop/` | 6 | 622 | 🟢 | **cable por cable, todos con efecto observable y control** (§4). Ya lo estaban por tests previos verificados como funcionales: `input_processor` (corte + reescritura + default identidad), anuncios de la estrategia diferida (+dedup entre iteraciones), `system_override`, `context_modifier` vía skills. Pagados en esta vuelta: `_drain_notifications` (5), filtro de pool por subagente **en ejecución**, filtro `background`, `model_options` (+control negativo), `[no dispatcher]`, excepción del modifier, ctx devuelto, dedup de recall **real**. Abiertos y nombrados: `H-L4` (fuera del radar), `FIND-LOOP-1` (§3) |
-| 2 | `tools/native/` | 19 | 1891 | 🟡 | **Efecto observable de las 25 tools: YA pagado por `E10`** (cableado real, negativas, acreditado 7/7 — no se duplica). Pagado en la 9ª ventana: auditoría `H-L4` de sus dos ficheros de test y **8 xfail de FIRMA reescritos a CONDUCTA** (§5), 3 FORMA→CONDUCTA, `FIND-CFG-1` nuevo. **Pendiente y nombrado**: los 19 módulos fuente NO se han recorrido 1→EOF en esta ventana — el veredicto cubre la superficie de test, no la lectura íntegra del paquete |
+| 2 | `tools/native/` | 19 | 1891 | 🟡 | **Efecto observable de las 25 tools: YA pagado por `E10`** (cableado real, negativas, acreditado 7/7 — no se duplica). Pagado en la 9ª ventana: auditoría `H-L4` de sus dos ficheros de test y **8 xfail de FIRMA reescritos a CONDUCTA** (§5), 3 FORMA→CONDUCTA, `FIND-CFG-1` nuevo y
+`FIND-TOOL5/SIG10` **pagado** con la causa localizada por contraste (§5.1). **Pendiente y nombrado**: los 19 módulos fuente NO se han recorrido 1→EOF en esta ventana — el veredicto cubre la superficie de test, no la lectura íntegra del paquete |
 | 3 | `tools/` | 11 | 916 | ⛔ | — |
 | 4 | `execution/local/` | 4 | 681 | ⛔ | — |
 | 5 | `execution/` (+fork, tasks, session, observer, context) | 14 | 604 | ⛔ | — |
@@ -94,6 +95,7 @@ sujeto; marcador medido si es no-determinista), de modo que el día que cambie, 
 | `FIND-C6-2` | diferido nombrado | — | ⛔ |
 | `FIND-CFG-1` | **NUEVO (9ª ventana), resuelto contra el canónico por `D-08` antes de tocar nada.** La rama GET de `Config` **escribe**: `ctx.app_state.native.setdefault("config", {})` corre antes de bifurcar (`config.py:44`), así que una simple lectura deja la clave creada en el estado de la sesión. A tiene el GET como lectura pura —`call()` sólo llama a `getValue()`, que lee de `getGlobalConfig()`/`getInitialSettings()` (`ConfigTool.ts:136-144`)— **y lo DECLARA**: `isReadOnly(input) { return input.value === undefined }` (`:90-92`). Medido: el GET deja `{'config': {}}` | `test_tools_native_homologation.py::test_config_get_does_not_write_state` (xfail estricto; incluye control positivo de que el SET sólo actúa por su `context_modifier`) | ⛔ abierto — **fuente NO tocado a propósito**: contrastar contra el canónico y dejar el rojo como evidencia, no «arreglar» por impulso |
 | `FIND-LOOP-1` | **NUEVO, cazado escribiendo la prueba (nació roja).** El loop acepta que un `context_modifier` devuelva OTRO ctx (`ctx = modifier(ctx) or ctx`), pero `ctx.tool_pool` es estado DEL TURNO: un modifier que forka sin arrastrarlo deja al dispatcher con el pool vacío y **las tool calls restantes del mismo turno fallan en silencio** («no encontrado en el tool pool»), indistinguibles de un resultado de tool normal | `test_agent_loop.py::test_FIND_LOOP_1_un_fork_ingenuo_del_ctx_mata_las_tool_calls_restantes` — asevera la conducta REAL, no la deseable | ⛔ abierto |
+| `FIND-TOOL5/SIG10` | **PAGADO (9ª ventana).** Mi diagnóstico previo («la señal de abort es binaria») era **falso**: `AbortController` deriva `aborted` de `AbortReason` para cerrar `SIG2`. La causa real era de una línea — `dispatcher.py:54-55` devolvía `ToolResult.aborted(tool_name)` tirando el `ctx.stop.reason()` disponible en la línea anterior, dejando dos cortes de causa distinta indistinguibles. A trata `signal.reason` como dato de primera clase (`StreamingToolExecutor.ts:213-229`) ⇒ CORE-GAP | `test_tools_infra_homologation.py::test_abort_reason_reaches_the_result` (ya no xfail) | ✅ pagado — `reason` viaja al resultado **y al `output`**. `interrupt_behavior` **sigue abierto y aparte**: `contracts/tools.py:3-6` lo declara fuera del tramo 1 |
 
 ## 4. Registro de capacidades funcionales pagadas en esta obra
 
@@ -189,11 +191,50 @@ una línea**.
 | `test_dispatcher_honours_block_…` | `t.interrupt_behavior()` **sobre el doble** | el dispatcher respeta `block` ante un abort | canceló la tool `block` igual |
 | `test_concurrency_safe_…_parallel` | `isinstance(t.is_concurrency_safe, …)` **sobre el doble** | dos tools del turno **se solapan** | **0,40 s medidos** vs 0,35 (serie) |
 | `test_new_messages_…_conversation` | `isinstance(r.new_messages, list)` | los mensajes **llegan a `ctx.messages`** | no llegan |
-| `test_abort_reason_…` | `getattr(r,"reason",…)` | el motivo viaja en lo que el modelo **lee** | `'aborted: Bash'` genérico |
+| `test_abort_reason_…` | `getattr(r,"reason",…)` | el motivo viaja en lo que el modelo **lee** | `'aborted: Bash'` genérico → **PAGADO, ver §5.1** |
 
-Los ocho siguen **rojos y por el mismo gap**: se invirtió el sujeto de la aserción, no se relajó el
+Siete siguen **rojos y por el mismo gap**: se invirtió el sujeto de la aserción, no se relajó el
 listón. Verificados con `--runxfail` para leer el fallo real (un xfail no distingue «falla por el
-gap» de «falla por un typo»).
+gap» de «falla por un typo»). El octavo (`test_abort_reason_…`) dejó de ser xfail porque el gap se
+**pagó**: §5.1.
+
+### 5.1 `FIND-TOOL5/SIG10` — PAGADO, con la causa localizada por contraste
+
+**Mi diagnóstico era falso y se corrige aquí.** Dije que el gap era «la señal de abort es
+binaria». `contracts/abort.py` define `AbortReason` y `AbortController` **deriva `aborted` de la
+razón** precisamente para cerrar `SIG2`: la señal lleva el motivo desde que ese contrato existe.
+El gap real estaba un eslabón más abajo y era de **una línea** — `dispatcher.py:54-55` consultaba
+`ctx.stop.aborted` y devolvía `ToolResult.aborted(tool_name)` **tirando el `ctx.stop.reason()` que
+tenía disponible en la línea anterior**.
+
+Contraste (`D-08`, leído en A): `signal.reason` es dato de primera clase — se fija al abortar
+(`abort('interrupt')` · `abort('sibling_error')` · `abort('user-cancel')` · `abort('background')`)
+y se lee para decidir qué se cancela y con qué motivo (`StreamingToolExecutor.ts:213-229`:
+`streaming_fallback` · `sibling_error` · `user_interrupted` · `null`). Perder la razón en el
+resultado es **CORE-GAP, no divergencia** (`L10` no aplica: no hay nada que acreditar como mejora).
+
+**Ajuste aplicado**: `ToolResult` acepta `reason`, `ToolResult.aborted()` la propaga al campo y al
+`output`, y el dispatcher deja de tirarla. **`interrupt_behavior` NO se ajustó**: `contracts/tools.py:3-6`
+lo declara **fuera del tramo 1** y el contraste no autoriza a colarlo por la puerta de atrás — su
+xfail (`test_dispatcher_honours_block_…`) sigue rojo y sigue siendo deuda declarada. Los dos gaps
+son distintos y se pagan por separado.
+
+| Fecha | Capacidad | Test | Acreditación |
+|---|---|---|---|
+| 2026-08-02 | la razón del corte sobrevive señal→resultado→`output` | `test_abort_reason_reaches_the_result` | **INY-43′ y INY-44″ → 2 rojas.** 43′ = el dispatcher tira `reason` · 44″ = la razón se guarda pero no llega al `output` |
+
+⚠ **Un falso negativo mío, cazado por la propia inyección y dicho aquí.** La primera pasada de
+INY-44′ salió **verde**: el test comparaba la tupla `(reason, output)` de dos cortes, y basta con
+que difiera el `reason` para que la tupla difiera — vaciar el `output` no lo ponía en rojo, pese a
+que el `output` es lo único que el modelo lee. Se separaron las aserciones (campo por un lado,
+`output` por otro, más pertenencia del literal de cada razón) y se repitió la inyección: roja.
+Sin la inyección, esa aserción habría quedado acreditando en falso, que es exactamente `H-L4`.
+
+⚠ **Un error de método mío, también dicho.** El backup con el que revertí la primera ronda era del
+estado **pre-arreglo**, así que la reversión **borró el arreglo** en vez de restaurarlo, y el
+`sha256sum -c` en verde confirmaba el estado equivocado. La ronda entera se descartó y se repitió
+con backup del estado **arreglado** (`fix9b`). Lección: la copia de reversión debe ser del estado
+que se quiere conservar, no del que había cuando se empezó a mirar.
 
 ### FORMA → CONDUCTA en los que ya pasaban
 
@@ -211,7 +252,9 @@ sembrados, 100 salen + aviso de truncado**, con control positivo por debajo del 
 Anunciadas antes de tocar el fuente y revertidas desde copia propia: `sha256sum -c` → **7 OK**
 (`file_edit · glob_tool · grep_tool · todo_write · ask_user · plan_mode · worktree`).
 Deuda **cero neta**: `mypy --strict` **138/54** (idéntico a la base) · `ruff` **sin hallazgos en
-los dos ficheros tocados** · suite **735 passed / 3 skipped / 114 xfailed / 0 failed**.
+los dos ficheros tocados** · suite **735 passed / 3 skipped / 114 xfailed / 0 failed**, y tras el
+arreglo de §5.1 **736 passed / 3 skipped / 113 xfailed / 0 failed** (el xfail pagado pasa a passed,
+cuadra exacto) con `mypy --strict` **138/54** sin cambio.
 
 ⚠ **No reproduje la cifra base de `ruff` 505**: `pyproject.toml` de `agentic_runtime` no tiene
 sección `[tool.ruff]` y el binario disponible corre con defaults (11 hallazgos, ninguno en lo
