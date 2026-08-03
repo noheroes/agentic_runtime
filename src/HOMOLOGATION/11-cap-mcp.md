@@ -665,6 +665,17 @@ paquete.)*
   > `dispatcher.py:54`) y, con un solo event loop, se congelan stream, subagentes y drenaje de notificaciones.
   > Nuevo hallazgo `FIND-C6-2`, fijado como `xfail(strict=True)` en `test_tool_dispatcher.py`. El arreglo (offload
   > a executor o cliente async) queda **arriba de la LÍNEA DE CORTE** del tramo 1.
+  >
+  > ✅ **PAGADO 2026-08-02 (10ª ventana), y la afirmación original vuelve a ser cierta DONDE LO ERA.** El contraste
+  > partió el hallazgo: (a) que el cap no preempte a una corrutina que no cede **no es divergencia con A** —A tiene la
+  > misma propiedad y **ni siquiera tiene** cap genérico por tool; su único `timeout` es el de INPUT de `Bash`
+  > (`toolExecution.ts:1148-1149`), donde hay subproceso preemptable— así que el cap de `dispatcher.py:70` es
+  > **extensión de B**; (b) la deuda real era que `web_fetch`/`web_search` **fuesen** esa corrutina, con `urlopen`
+  > síncrono dentro de su `async def`. Arreglado con `asyncio.to_thread` en ambas ⇒ **una tool MCP o nativa que ceda
+  > y tarde >30 s FALLA de verdad**, y el event loop deja de congelarse (aseverado con servidor HTTP real + latido
+  > concurrente). El `xfail` que custodiaba esto acreditaba **en falso** (`H-L4`): reventaba en `ToolUseContext(...)`
+  > con `ValidationError: session_id`, nunca llegó a `dispatch`. **Sigue sin pagarse** el corte EN VUELO por
+  > `ctx.stop`: exige un signal esperable y `AbortController` es no-esperable por diseño (`abort.py:47-49`).
   `register_tools_from_specs:125` alimenta el MISMO `config.timeout_seconds or 30` como call-timeout (vía
   `McpTool`) y como connect-timeout (client.py:128) — confirma la observación de McR8 de que hoy ambos
   comparten el 30s. *(`McpTool.timeout_seconds` NO es costura latente: se consume en el dispatcher.)*

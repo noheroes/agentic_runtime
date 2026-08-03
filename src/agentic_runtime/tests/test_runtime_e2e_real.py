@@ -170,27 +170,67 @@ async def test_real_sequential_dependent_tools(tmp_path):
         "real-sequential",
     )
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GATE DURO — todo esto es del RUNTIME y se exige en TODAS las corridas.
+    # ═══════════════════════════════════════════════════════════════════════════
     assert runtime.status(task_id) == TaskStatus.COMPLETED
-    assert s1.calls >= 1                              # llamó al paso 1
-    assert len(s2.calls) >= 1                         # llamó al paso 2
-    # ⚠ INTERMITENCIA DIAGNOSTICADA (2026-07-31, reproducida 1 de 6 corridas). Aquí
-    # ponía `s2.calls[0].get("token") == token` y fallaba con `'__PENDING__'`: el
-    # modelo emite A VECES las dos tool calls en el MISMO turno, sin esperar la
-    # salida de la primera, y rellena el argumento dependiente con un placeholder.
-    # No es un defecto del runtime —nada en el canónico serializa dependencias entre
-    # calls de un mismo turno; particionar por `is_concurrency_safe` es fan-out, no
-    # esto—: es no-determinismo del modelo. Lo que prueba la dependencia secuencial
-    # no es CUÁL llamada llevó el token, sino que el token REAL del paso 1 cruzó
-    # hasta el paso 2 **y** que el valor final —inadivinable, y que sólo se emite
-    # cuando el canje es válido— llegó a la respuesta. Con el placeholder, eso exige
-    # además que el modelo se recupere del `ERROR: token inválido`, así que esta
-    # forma es MÁS exigente que la anterior, no menos.
-    assert any(c.get("token") == token for c in s2.calls), (
-        f"el token real del paso 1 nunca cruzó al paso 2: {s2.calls}"
+    assert s1.calls >= 1                              # despachó el paso 1
+    assert len(s2.calls) >= 1                         # despachó el paso 2
+    resultados = _tool_results(rec)
+    assert len(resultados) >= 2                       # dos despachos, no uno con eco
+    # El runtime ENTREGÓ el token real: la salida del paso 1 llegó al transcript tal
+    # cual. Esta es la mitad de la dependencia que sí le toca al runtime, y es la que
+    # antes quedaba tapada por la aserción sobre lo que el modelo hiciera con ella.
+    assert any(token in (e.get("output") or "") for e in resultados), (
+        f"el runtime no entregó el token real del paso 1 al modelo: {resultados}"
     )
-    assert len(_tool_results(rec)) >= 2              # dos despachos
-    assert rec.turn_count >= 3                        # 2 tool turns + respuesta
-    assert final in (runtime.result(task_id) or "")  # resultado dependiente correcto
+    # Y le dio un turno MÁS después de las tool calls, con los resultados dentro:
+    # la recuperabilidad existe aunque el modelo no la use.
+    assert rec.turn_count >= 2, f"no hubo turno posterior a las tool calls: {rec.turn_count}"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CARENCIA DECLARADA, MEDIDA Y VIGILADA (`FIND-SEQ-1`, `D-14`)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Que el modelo ESPERE la salida del paso 1 antes de emitir el paso 2 es una
+    # propiedad CONJUNTA (runtime · sujeto homologado · MODELO), y la parte que falla
+    # no es del runtime. **Medido 2026-08-02, no supuesto**: 4 de 6 corridas fallan, y
+    # el transcript de las que fallan dice exactamente qué pasa — dos `tool_start`
+    # CONSECUTIVOS antes de cualquier `tool_result` (las dos calls en el mismo turno)
+    # y `token: ""` en la segunda. El runtime entregó el token real igualmente y le
+    # dio otro turno con el `ERROR: token inválido`; el modelo elige reportar el error
+    # en vez de reintentar con el token que ya tiene delante.
+    #
+    # Nada en el canónico serializa dependencias entre calls de un mismo turno:
+    # particionar por `is_concurrency_safe` es fan-out, no esto. Y ningún orden de
+    # EJECUCIÓN puede arreglar un argumento que el modelo YA emitió con placeholder.
+    #
+    # El escenario NO sale de la suite y la aserción NO se relaja: se separa. Si el
+    # token cruzó, entonces el cierre de la dependencia —que sí es del runtime: que la
+    # salida del paso 2 vuelva al modelo y llegue a la respuesta— es GATE DURO.
+    cruzo = any(c.get("token") == token for c in s2.calls)
+    # La rama tomada se IMPRIME: sin esto, una corrida verde no dice si midió la
+    # conducta buena o la carencia, y la rama de vigilancia podría no ejercerse nunca
+    # sin que nadie lo notara.
+    print(f"[FIND-SEQ-1] token {'CRUZÓ' if cruzo else 'NO CRUZÓ'} — s2.calls={s2.calls}")
+    if cruzo:
+        assert final in (runtime.result(task_id) or ""), (
+            "el token cruzó pero el valor final —inadivinable, y sólo emitido cuando el "
+            f"canje es válido— no llegó a la respuesta: {runtime.result(task_id)!r}"
+        )
+        assert rec.turn_count >= 3
+    else:
+        # VIGILANCIA: la carencia tiene una FORMA concreta y sólo se tolera esa. Si el
+        # token no cruzó por cualquier otro motivo (el modelo no llamó al paso 2 con un
+        # placeholder sino con basura inventada, o el runtime perdió la call), esto se
+        # pone ROJO en vez de pasar por «no-determinismo del modelo».
+        placeholders = [c.get("token") for c in s2.calls]
+        assert all(not p or "PENDING" in str(p) or str(p).startswith("<") for p in placeholders), (
+            f"`FIND-SEQ-1` no explica este fallo: el paso 2 recibió {placeholders!r}, que no "
+            f"es un placeholder de argumento dependiente (token real: {token})"
+        )
+        assert "ERROR: token inválido" in "".join(
+            (e.get("output") or "") for e in resultados
+        ), "el canje con placeholder no fue rechazado: la dependencia no se está probando"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

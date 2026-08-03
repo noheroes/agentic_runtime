@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -78,7 +79,13 @@ class WebSearchTool:
                 "SERPER_API_KEY is not set. WebSearch requires a Serper.dev API key.",
             )
 
-        return _serper_search(self.name, effective_query, max_results, api_key)
+        # `FIND-C6-2`: en un THREAD. `_serper_search` hace `urlopen` síncrono (hasta 20 s) y
+        # llamarlo directo desde este `async def` congelaba el único event loop todo ese
+        # rato, dejando el cap del dispatcher sin efecto. Ver la nota extensa en
+        # `web_fetch.py`, que tenía el mismo defecto por la misma causa.
+        return await asyncio.to_thread(
+            _serper_search, self.name, effective_query, max_results, api_key
+        )
 
 
 def _build_query(

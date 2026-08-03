@@ -41,7 +41,13 @@ class ConfigTool:
         if not setting:
             return ToolResult.error(self.name, "setting is required.")
 
-        config: dict[str, Any] = ctx.app_state.native.setdefault(_CONFIG_KEY, {})
+        # LECTURA, no `setdefault` (`FIND-CFG-1`): el `setdefault` corría antes de bifurcar,
+        # así que un simple GET dejaba la clave creada en el estado de la sesión. A declara
+        # el GET como puro —`isReadOnly(input) { return input.value === undefined }`
+        # (`ConfigTool.ts:90-92`)— y su `call()` sólo llama a `getValue()` (`:136-144`).
+        # Quien escribe es la rama SET, y lo hace por su `context_modifier`, que es el único
+        # punto donde el runtime admite mutación de contexto desde una tool.
+        config: dict[str, Any] = ctx.app_state.native.get(_CONFIG_KEY) or {}
 
         if "value" not in input:
             # Get

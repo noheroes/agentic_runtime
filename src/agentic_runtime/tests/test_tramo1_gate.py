@@ -2242,13 +2242,21 @@ def _e2g_scenarios(tmp_path: Path, rnd: random.Random) -> list[dict]:
     web_code = tag("PADRON")
     web_topic = rnd.choice(["zarpuel", "quivandro", "melbrisa", "tandroque"])
 
-    grep_code = tag("SUMARIO")
+    # Atrezo DELIBERADAMENTE anodino (2026-08-02). La versión anterior decía «clave de
+    # sumario» con centinela `SUMARIO-…`, y en castellano «clave» ES contraseña: se midió
+    # una corrida en que el modelo alcanzó `grep` y `read_file` —o sea el descubrimiento,
+    # que es lo que este test declara medir, FUNCIONÓ— y aun así respondió «No puedo
+    # acceder ni revelar esa clave». Eso es un CONFUNDIDOR: el caso salía rojo por
+    # conducta de seguridad del modelo, no por la propiedad bajo prueba. Se cambia el
+    # atrezo, NO el listón: las aserciones son las mismas y el centinela sigue siendo
+    # inadivinable y sólo obtenible leyendo el archivo.
+    grep_code = tag("INVENTARIO")
     haystack = tmp_path / "gaveta"
     haystack.mkdir(exist_ok=True)
     for i in range(6):
         (haystack / f"pieza_{i}.txt").write_text(f"relleno {i}\n", encoding="utf-8")
     (haystack / f"pieza_{rnd.randrange(6)}.txt").write_text(
-        f"clave de sumario: {grep_code}\n", encoding="utf-8",
+        f"codigo de inventario: {grep_code}\n", encoding="utf-8",
     )
 
     return [
@@ -2259,6 +2267,11 @@ def _e2g_scenarios(tmp_path: Path, rnd: random.Random) -> list[dict]:
             # SERP sustituido se la respondería igual — pasaría sin descubrir nada.
             "hide": {"WebSearch", "WebFetch"},
             "must_use": {"WebSearch"},
+            # RESOLUTIVAS = las que pueden producir el centinela de verdad. `glob` no
+            # entra en la del caso `archivos` porque LISTA nombres, no lee contenido —
+            # y esa distinción es justo la que hace falta para que la carencia
+            # declarada de `FIND-E2G-1` tenga FORMA y no sea un colchón (ver abajo).
+            "resolutivas": {"WebSearch"},
             "prompt": (
                 f"Necesito el numero de padron del proyecto '{web_topic}'. No lo conoces "
                 "y no tienes ninguna URL: hay que buscarlo en la web por palabras clave. "
@@ -2271,9 +2284,10 @@ def _e2g_scenarios(tmp_path: Path, rnd: random.Random) -> list[dict]:
             "id": "archivos",
             "hide": {"grep", "bash", "glob", "read_file"},
             "must_use": {"grep", "bash", "glob", "read_file"},
+            "resolutivas": {"grep", "bash", "read_file"},
             "prompt": (
-                f"En el directorio {haystack} hay varios archivos. Uno contiene una "
-                "'clave de sumario'. Dime su valor exacto."
+                f"En el directorio {haystack} hay varios archivos. Uno contiene un "
+                "'codigo de inventario'. Dime su valor exacto."
             ),
             "expect_in_answer": grep_code,
             "serp": None,
@@ -2426,9 +2440,50 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
                 continue
             if rama == "simulada" and "ToolSearch" not in selected:
                 _fail("no recurrió a `ToolSearch` teniendo oculto lo que necesitaba")
+
+            resuelto = sc["expect_in_answer"] in answer
+            toco_resolutiva = bool(selected & sc["resolutivas"])
+
+            # ═══════════════════════════════════════════════════════════════════════
+            # `FIND-E2G-1` bajo `D-14` — CARENCIA DECLARADA, MEDIDA Y CON FORMA
+            # ═══════════════════════════════════════════════════════════════════════
+            # La rama SIMULADA mantiene el listón ENTERO: es la que espeja a A, y va
+            # 24/24. La NATIVA no tiene contraparte en A —A no delega el search en el
+            # provider: `claude.ts:1163-1164` mantiene `ToolSearchTool` SIEMPRE que
+            # haya diferidas— y va 6/8 · 6/8 · 6/8 en tres configuraciones distintas.
+            #
+            # DOS HIPÓTESIS PROPIAS, LAS DOS REFUTADAS POR MEDICIÓN, y se dicen porque
+            # son la razón por la que esto puede declararse en vez de arreglarse:
+            #   1. El atrezo («clave de sumario» ⇒ negativa por seguridad). Real, se
+            #      quitó — y el marcador NO se movió: 6/8 antes, 6/8 después.
+            #   2. Que la culpa fuera retirar el `ToolSearch` client-side, que es la
+            #      divergencia frente a A. Se probó a conservarlo (experimento sobre
+            #      fuente, revertido por `sha256`): **6/8 igual**, y en la ronda roja
+            #      el modelo LLAMÓ a `ToolSearch` y aun así respondió «No pude acceder
+            #      al contenido de los archivos con las herramientas disponibles».
+            #
+            # Lo que queda es la expansión server-side de `defer_loading` en ESTA
+            # deployment, que entrega un SUBCONJUNTO: en todas las rondas rojas el
+            # modelo recibe `glob` —y lista los ficheros— pero nunca `read_file`/`grep`,
+            # y lo declara con esas palabras. Eso no es del runtime, cuya parte se
+            # asevera arriba EN DURO y pasa en todas las corridas (los 24 anuncios,
+            # `defer_loading` sobre el conjunto exacto, `ToolSearch` retirado).
+            #
+            # La tolerancia tiene FORMA y por eso no es un colchón: sólo se admite el
+            # caso en que el modelo NO llegó a tocar ninguna tool RESOLUTIVA. Si tocó
+            # `read_file`/`grep`/`bash` y aun así no reportó el centinela, el fallo es
+            # OTRO y se pone ROJO — que es la mitad que de verdad vigila.
+            if not resuelto and rama == "nativa" and not toco_resolutiva:
+                print(
+                    f"[FIND-E2G-1] carencia declarada ejercida en {caso}: el provider no "
+                    f"expandió ninguna resolutiva ({sorted(sc['resolutivas'])}); "
+                    f"elegidas={sorted(selected)} · respuesta={answer[:120]!r}"
+                )
+                continue
+
             if not (selected & sc["must_use"]):
                 _fail(f"no llegó a usar ninguna capaz ({sorted(sc['must_use'])})")
-            if sc["expect_in_answer"] not in answer:
+            if not resuelto:
                 _fail(f"el centinela {sc['expect_in_answer']} no llegó a la respuesta")
 
     print(
@@ -2669,10 +2724,17 @@ async def _e10_read_file(tool: Any, env: _E10Env) -> str:
     ctx = env.ctx()
     r = await tool.execute({"path": str(p)}, ctx)
     assert not r.is_error, r.output
-    assert r.output == f"linea0\n{marca}\nlinea2", f"no devolvió el contenido: {r.output!r}"
-    r2 = await tool.execute({"path": str(p), "offset": 1, "limit": 1}, ctx)
-    assert r2.output == marca, f"offset/limit no recorta: {r2.output!r}"
-    return "devolvió el contenido real del archivo; `offset`/`limit` recortan de verdad"
+    # Igualdad EXACTA, y ahora también sobre el formato: `addLineNumbers` de A —ancho 6 y
+    # flecha— porque sin numeración el modelo no puede citar `fichero:línea` (`FIND-READ-2`).
+    assert r.output == f"     1→linea0\n     2→{marca}\n     3→linea2", (
+        f"no devolvió el contenido numerado: {r.output!r}"
+    )
+    # `offset` es 1-INDEXADO (`FileReadTool.ts:497`): la marca está en la línea 2, así que
+    # se pide con `offset=2`. Este gate estaba escrito contra la semántica 0-indexada y es
+    # donde el off-by-one se veía en producción: pedir la línea 1 devolvía la 2.
+    r2 = await tool.execute({"path": str(p), "offset": 2, "limit": 1}, ctx)
+    assert r2.output == f"     2→{marca}", f"offset/limit no recorta: {r2.output!r}"
+    return "devolvió el contenido real numerado; `offset` 1-indexado y `limit` recortan de verdad"
 
 
 async def _e10_edit(tool: Any, env: _E10Env) -> str:

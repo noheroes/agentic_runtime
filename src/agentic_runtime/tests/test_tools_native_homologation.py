@@ -153,7 +153,6 @@ def test_worktree_rejects_a_bad_slug_through_execute(tmp_path):
     assert r2.is_error and "not a git repository" in r2.output.lower(), r2.output
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-CFG-1: la rama GET de Config escribe en app_state (config.py:44 `setdefault` antes de bifurcar); el canónico la tiene como lectura pura y la DECLARA read-only (ConfigTool.ts:90-92, :136-144)")
 def test_config_get_does_not_write_state(tmp_path):
     """`FIND-CFG-1`: la rama GET de `Config` debería ser LECTURA PURA, como en el canónico.
 
@@ -304,7 +303,6 @@ def test_bash_persistent_shell(tmp_path):
     assert str(tmp_path) in r.output
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-NATIVE-READ/A3b: read_file no prefija números de línea (canónico addLineNumbers, cat -n)")
 def test_read_adds_line_numbers(tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("alfa\nbeta\n")
@@ -330,7 +328,6 @@ def test_bash_grep_no_match_not_error(tmp_path):
     assert not r.is_error  # rc=1 semántico: "sin coincidencias", no fallo
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-READ-1: `read_file` no tiene NINGÚN cap; A corta por bytes (256 KB) y por tokens (25 000) y LANZA")
 def test_read_file_refuses_a_file_over_the_canonical_size_cap(tmp_path):
     """`FIND-READ-1` — un `Read` sin cap vuelca el fichero entero al contexto.
 
@@ -360,9 +357,18 @@ def test_read_file_refuses_a_file_over_the_canonical_size_cap(tmp_path):
         f"el fichero de {grande.stat().st_size} B salió entero al contexto "
         f"({len(r.output)} chars de output)"
     )
+    # El error tiene que decir la salida, no sólo negarse: es lo que A pone en el mensaje
+    # (`readFileInRange.ts:57-67`) y lo único que el modelo lee para corregir la llamada.
+    assert "offset" in r.output and "limit" in r.output
+
+    # …y el cap NO rige cuando la llamada YA acota el rango: A pasa
+    # `limit === undefined ? maxSizeBytes : undefined` (`FileReadTool.ts:1023`), porque
+    # pedir un trozo es precisamente lo que el error recomienda hacer. Sin este control,
+    # la prueba acreditaría un cap más severo que el del canónico.
+    acotado = await_(ReadFileTool().execute({"path": str(grande), "limit": 1}, ctx))
+    assert not acotado.is_error, "un rango acotado sobre un fichero grande es legítimo"
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-READ-2: `offset` es 0-indexado y la salida no lleva números de línea; A usa offset=1 y addLineNumbers")
 def test_read_file_offset_is_one_indexed_and_output_is_numbered(tmp_path):
     """`FIND-READ-2` — dos divergencias que se pagan juntas porque son el mismo contrato.
 
@@ -381,14 +387,30 @@ def test_read_file_offset_is_one_indexed_and_output_is_numbered(tmp_path):
 
     r = await_(ReadFileTool().execute({"path": str(f), "offset": 1, "limit": 1}, ctx))
     assert "uno" in r.output, f"offset=1 debe dar la PRIMERA línea (1-indexado), dio {r.output!r}"
+    # control negativo: si diera SIEMPRE la primera, la aserción de arriba no discriminaría.
+    r2 = await_(ReadFileTool().execute({"path": str(f), "offset": 2, "limit": 1}, ctx))
+    assert "dos" in r2.output and "uno" not in r2.output
 
+    # `offset=0` y `offset=1` nombran la MISMA primera línea — regla explícita de A
+    # (`FileReadTool.ts:1020`), que evita que un llamante con la grafía vieja se desplace.
+    cero = await_(ReadFileTool().execute({"path": str(f), "offset": 0, "limit": 1}, ctx))
+    assert cero.output == r.output
+
+    # Numeración con el formato de `addLineNumbers`: ancho 6 y flecha, no un "1" suelto
+    # en cualquier parte de la línea (que es lo que aseveraba la versión anterior de este
+    # test — habría pasado con la salida desnuda de `read_file` si el texto tuviera un 1).
     entero = await_(ReadFileTool().execute({"path": str(f)}, ctx))
-    assert "1" in entero.output.split("\n")[0], (
-        f"la salida no lleva número de línea: {entero.output.splitlines()[:1]}"
-    )
+    assert entero.output.splitlines() == [
+        "     1→uno",
+        "     2→dos",
+        "     3→tres",
+    ], entero.output.splitlines()
+    # y el número que abre una lectura desplazada es el de la línea REAL del fichero,
+    # no un contador que reempieza en 1 — sin esto, citar `fichero:línea` sigue mintiendo.
+    desplazado = await_(ReadFileTool().execute({"path": str(f), "offset": 2}, ctx))
+    assert desplazado.output.splitlines()[0] == "     2→dos"
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-GLOB-1: orden alfabético; A ordena por mtime (--sort=modified), y con el cap de 100 el orden decide QUÉ se ve")
 def test_glob_orders_by_mtime_not_alphabetically(tmp_path):
     """`FIND-GLOB-1` — el orden no es presentación cuando hay un cap: es SELECCIÓN.
 
@@ -416,8 +438,31 @@ def test_glob_orders_by_mtime_not_alphabetically(tmp_path):
     r = await_(GlobTool().execute({"pattern": "*.txt", "path": str(tmp_path)}, ctx))
     lineas = [line for line in r.output.splitlines() if line.strip()]
     assert len(lineas) == 3  # control positivo: los tres salen
-    assert lineas[0].endswith("zzz.txt"), (
-        f"A ordena por mtime (oldest first) ⇒ primero `zzz.txt`; B dio {lineas}"
+    # Orden COMPLETO, no sólo el primero: con `zzz` (más antiguo) sembrado en la posición
+    # alfabética contraria, un orden por mtime y uno alfabético son exactamente inversos,
+    # así que la secuencia entera discrimina y un acierto por casualidad no cuela.
+    assert [line.split("/")[-1] for line in lineas] == ["zzz.txt", "mmm.txt", "aaa.txt"], (
+        f"A ordena por mtime (oldest first); B dio {lineas}"
+    )
+
+
+def test_glob_lists_files_only_not_directories(tmp_path):
+    """`FIND-GLOB-2` — destapado leyendo el canónico para pagar `FIND-GLOB-1`, medido antes
+    de levantarlo como hallazgo.
+
+    A pasa `--files` a ripgrep (`utils/glob.ts:98`): la herramienta lista **ficheros**. B
+    hacía `base.glob(pattern)` a secas, que casa igual un directorio cuyo nombre encaje en el
+    patrón — un `carpeta.txt` salía como resultado de `*.txt`. El modelo recibe entonces una
+    ruta que no puede leer, y gasta un turno descubriéndolo.
+    """
+    ctx = _ctx(tmp_path)
+    (tmp_path / "real.txt").write_text("x")
+    (tmp_path / "carpeta.txt").mkdir()
+
+    r = await_(GlobTool().execute({"pattern": "*.txt", "path": str(tmp_path)}, ctx))
+    lineas = [line for line in r.output.splitlines() if line.strip()]
+    assert [line.split("/")[-1] for line in lineas] == ["real.txt"], (
+        f"el directorio `carpeta.txt` no debe salir como resultado: {lineas}"
     )
 
 

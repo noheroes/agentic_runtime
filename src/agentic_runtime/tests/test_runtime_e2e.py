@@ -357,3 +357,70 @@ async def test_e2e_d5_c_hand_composed_primitives(tmp_path):
     task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="d5c", session_id="sess-test"))
     await _await_task(runtime, task_id)
     assert runtime.result(task_id) == "compuesto"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `FIND-E11-1` — restringir el toolset del agente RAÍZ
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_e2e_el_integrador_puede_recortar_el_catalogo_del_agente_raiz(tmp_path):
+    """`FIND-E11-1` REFORMULADO Y CERRADO: la costura EXISTE y está CABLEADA.
+
+    El hallazgo decía «no existe costura para restringir las tools del agente RAÍZ».
+    Contrastado contra el canónico, tenía dos mitades y ninguna se sostiene como estaba
+    escrita:
+
+    1. Que `initial_allowed_tools` sea ADITIVO y no recorte nada es **fiel a A**, no un
+       defecto: `createGetAppStateWithAllowedTools` (`forkedAgent.ts:147-171`) también
+       suma sobre `alwaysAllowRules.command` y no quita del catálogo. Era mi andamio de
+       `E11` el que asumía lo contrario.
+    2. Lo que A sí tiene es el recorte por DENY antes del anuncio —
+       `filterToolsByDenyRules` dentro de `getTools()` (`tools.ts:262-268`, comentario
+       literal: *"before the model sees them — not just at call time"*), alimentado por
+       `alwaysDenyRules: { cliArg: parsedDisallowedToolsCli }` (`permissionSetup.ts:983`)
+       y por `--base-tools`, que deniega todo lo que no esté en el set (`:900-910`).
+
+    Y B lo tiene igual: `assemble_tool_pool` filtra por `denied_names()` **al ensamblar**
+    (`tools/pool.py:59-73`), y el integrador llega hasta ahí por `root_context_modifier`,
+    que corre sobre el ctx RAÍZ (`runtime.py:427-428`) antes de que el loop construya el
+    pool del turno (`agent_loop.py:350`). Este test lo prueba CORRIENDO, sobre el runtime
+    ensamblado por `create_runtime()` y midiendo lo que el caller **ve anunciado**, que es
+    lo único que importa: una tool que el modelo no ve no la puede elegir.
+    """
+    def recortar(ctx, task):
+        # Se DERIVA del PermissionContext vivo, no se construye uno nuevo: así el deny
+        # se suma a lo que el integrador ya hubiera sembrado en vez de pisarlo.
+        return ctx.with_permissions(
+            ctx.app_state.permissions.model_copy(update={"always_deny": ["echo"]})
+        )
+
+    caller = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
+    runtime = create_runtime(config=RuntimeConfig(
+        storage=StorageConfig(backend="filesystem", root=tmp_path),
+        model_caller=caller,
+        tools=ToolsConfig(extras=[EchoTool(), GuardedTool()]),
+        root_context_modifier=recortar,
+    ))
+    task_id = await runtime.dispatch(RuntimeTask(prompt="x", description="deny", session_id="sess-test"))
+    await _await_task(runtime, task_id)
+
+    assert runtime.status(task_id) == TaskStatus.COMPLETED
+    anunciadas = caller.seen_tools[0]
+    assert "echo" not in anunciadas, f"la tool denegada llegó al anuncio: {anunciadas}"
+    # CONTROL POSITIVO: el recorte es SELECTIVO, no un catálogo vacío por accidente —
+    # sin esto, un pool roto pasaría por «deny funcionando».
+    assert "read_file" in anunciadas, f"el recorte se llevó por delante el catálogo: {anunciadas}"
+
+    # CONTROL NEGATIVO en el MISMO escenario: sin el modifier, `echo` sí se anuncia.
+    caller2 = ScriptedCaller([[TokenEvent(content="ok"), DoneEvent(stop_reason="stop")]])
+    runtime2 = create_runtime(config=RuntimeConfig(
+        storage=StorageConfig(backend="filesystem", root=tmp_path / "b"),
+        model_caller=caller2,
+        tools=ToolsConfig(extras=[EchoTool(), GuardedTool()]),
+    ))
+    tid2 = await runtime2.dispatch(RuntimeTask(prompt="x", description="sin-deny", session_id="sess-test"))
+    await _await_task(runtime2, tid2)
+    assert "echo" in caller2.seen_tools[0], (
+        f"`echo` no se anunciaba ni sin deny: el test no probaba el recorte: {caller2.seen_tools[0]}"
+    )

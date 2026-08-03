@@ -6,6 +6,8 @@ from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from ...context.tool_use import ToolUseContext
 
 # Cap de archivos emitidos; sin él un patrón amplio vuelca miles de rutas al contexto.
@@ -36,8 +38,28 @@ class GlobTool:
             return ToolResult.error(self.name, str(exc))
         pattern = input["pattern"]
         try:
+            # Orden por mtime ASCENDENTE y recorte DESPUÉS, como A: `--sort=modified`
+            # (`utils/glob.ts:94-104`, comprobado además contra `rg` real: es ascendente,
+            # «oldest first») y `slice(offset, offset + limit)` en `:127`. `GlobTool.ts:154-170`
+            # no reordena, así que ese es el orden que ve el modelo.
+            #
+            # No es cosmético: **con un cap, el orden es SELECCIÓN**, no presentación — decide
+            # cuáles 100 de 130 llegan al contexto (`FIND-GLOB-1`).
+            #
+            # Y sólo FICHEROS: A pasa `--files` (`:98`), B casaba también los directorios cuyo
+            # nombre encajara en el patrón (`FIND-GLOB-2`, medido: un dir `carpeta.txt` salía
+            # como resultado de `*.txt`).
+            encontrados = [p for p in base.glob(pattern) if p.is_file()]
+            # `stat` puede fallar en un enlace roto que el glob sí casa; ese archivo no tiene
+            # mtime utilizable y se ordena como el más antiguo en vez de tumbar la llamada.
+            def _mtime(p: Path) -> float:
+                try:
+                    return p.stat().st_mtime
+                except OSError:
+                    return 0.0
+
             # `S12`: cada match es una ruta HOST; se presenta en los términos del deployment.
-            matches = sorted(ctx.presentation.to_llm(p) for p in base.glob(pattern))
+            matches = [ctx.presentation.to_llm(p) for p in sorted(encontrados, key=_mtime)]
             shown = matches[:DEFAULT_GLOB_LIMIT]
             output = "\n".join(shown)
             if len(matches) > DEFAULT_GLOB_LIMIT:

@@ -519,8 +519,10 @@
   `deferred_strategy.py:64-66` espeja al canónico; esta rama puso el test ROJO en su primera corrida y la aserción equivocada era la
   mía). `E2d` prueba la **selección por el modelo** con el censo entero anunciado, separando ANUNCIADO (`calls[*].tools`) de ELEGIDO
   (`calls[*].messages`). Añadir una tool sin barrerla pone `E7f` en rojo.
-- **⚠ `FIND-C6-2`, medido, NO pagado:** el cap de `dispatcher.py:76` (`asyncio.wait_for`) **no acota a una tool que bloquea el loop**
-  — cap 0,30 s → 2,00 s transcurridos y resultado ÉXITO. Falsifica `11-cap-mcp.md:656-658`. Fijado `xfail(strict=True)`.
+- **✅ `FIND-C6-2` PAGADO (10ª ventana):** que `asyncio.wait_for` no acote a una corrutina que no cede **no es deuda** (A tiene la misma
+  propiedad y ni siquiera tiene cap genérico por tool); la deuda era que `web_fetch`/`web_search` **fueran** esa corrutina, con `urlopen`
+  síncrono dentro de su `async def`. Arreglado con `asyncio.to_thread` en ambas ⇒ el cap vuelve a valer lo que promete y el loop deja de
+  congelarse. Su `xfail` anterior acreditaba **en falso** (`H-L4`): reventaba en `ToolUseContext(...)` antes de llegar a `dispatch`.
 
 ### S17 · `PermissionGate` (`check_permissions` por-input + modos)
 - **estado:** `existe-parcial` (el gate del dispatcher es deny-por-nombre `dispatcher.py:62-65`; el **seam input-aware VIVE** en `PRE_TOOL_USE` `agent_loop.py:300-313` honrando `block`/`modified_input`; falta `check_permissions` per-tool + modos).
