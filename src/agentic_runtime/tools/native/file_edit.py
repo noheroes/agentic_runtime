@@ -14,7 +14,26 @@ FILE_EDIT_TOOL_NAME = "Edit"
 
 class FileEditTool:
     name = FILE_EDIT_TOOL_NAME
-    description = "A tool for editing files. Replaces an exact string in a file with a new string."
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "modify file contents in place"
+    # Homologada contra `getDefaultEditDescription()` (`FileEditTool/prompt.ts:20-27`).
+    # La línea del PREFIJO DE NUMERACIÓN (`:23`) es la de más valor operativo y se conserva
+    # adaptada al formato real de `read_file` (ancho 6 + flecha, `read_file.py:17-29`): sin
+    # ella el modelo mete el prefijo dentro de `old_string` y el edit falla siempre.
+    # OMITIDAS: la lectura previa obligatoria (`:22`, B no la comprueba) y `replace_all`
+    # (`:26-27`, B no tiene ese parámetro — su unicidad es dura y falla con >1 coincidencia).
+    description = """Performs exact string replacements in files.
+
+Usage:
+- When editing text taken from read_file output, preserve the exact indentation as it appears
+  AFTER the line-number prefix. The prefix format is right-aligned number + arrow; everything
+  after the arrow is the actual file content to match. NEVER include any part of the prefix
+  in old_string or new_string.
+- The edit FAILS if `old_string` is not found, and also if it matches more than once. Provide
+  more surrounding context to make it unique — usually 2-4 adjacent lines is enough.
+- ALWAYS prefer editing existing files over writing new ones.
+- Only use emojis if the user explicitly requests it."""
     input_schema = {
         "type": "object",
         "properties": {

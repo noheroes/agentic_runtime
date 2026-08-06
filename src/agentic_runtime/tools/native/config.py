@@ -14,6 +14,9 @@ _CONFIG_KEY = "config"
 
 class ConfigTool:
     name = CONFIG_TOOL_NAME
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "get or set runtime settings (theme, model)"
     description = (
         "Read or write runtime configuration settings stored in the session. "
         "Omit value to read the current value."

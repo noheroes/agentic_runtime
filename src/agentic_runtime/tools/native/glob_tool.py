@@ -17,7 +17,19 @@ DEFAULT_GLOB_LIMIT = 100
 
 class GlobTool:
     name = "glob"
-    description = "Find files matching a glob pattern."
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "find files by name pattern or wildcard"
+    # Homologada contra `GlobTool/prompt.ts:3-7` (`GAP-PROMPT-1`). Lo que la API recibe como
+    # `description` es en A el retorno de `tool.prompt()` (`utils/api.ts:169-178`), no la
+    # constante `DESCRIPTION`; el homólogo en B es este atributo. Se omite la línea de A que
+    # deriva a la tool de subagente en búsquedas abiertas porque B no expone ese contrato aquí.
+    description = """- Fast file pattern matching tool that works with any codebase size
+- Supports glob patterns like "**/*.py" or "src/**/*.ts"
+- Returns matching file paths sorted by modification time (oldest first)
+- Only files are returned, never directories
+- Use this tool when you need to find files by name patterns
+- Results are capped; if truncated, narrow the pattern or the path rather than paging"""
     input_schema = {
         "type": "object",
         "properties": {

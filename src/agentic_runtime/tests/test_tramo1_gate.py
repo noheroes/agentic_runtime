@@ -72,6 +72,7 @@ from agentic_runtime.factory import (
 from agentic_runtime.storage.protocol import StorageKeys
 from agentic_runtime.tools import ToolCategory, ToolResult
 
+from ._azure_real import CA_BUNDLE as _CA_BUNDLE
 from ._azure_real import build_caller as _build_caller
 from ._azure_real import skip_marker as _needs_azure
 
@@ -1493,7 +1494,7 @@ def _tool_inputs(ws: Path, seeded: Path) -> dict[str, dict]:
         "TaskUpdate": {"task_id": "no-existe", "description": "d"},
         "TodoWrite": {"todos": []},
         "ToolSearch": {"query": "select:bash", "max_results": 3},
-        "WebFetch": {"url": "http://127.0.0.1:9/no-existe"},
+        "WebFetch": {"url": "http://127.0.0.1:9/no-existe", "prompt": "resume"},
         "WebSearch": {"query": "x"},
         "bash": {"command": "echo hola"},
         "clone_repository": {"repository": "https://example.invalid/r.git", "directory": "r"},
@@ -1552,6 +1553,7 @@ async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, mon
     declarados, también (la igualdad es exacta), y eso obliga a tocar el tracker.
     """
     import asyncio as _asyncio
+    import socket as _socket
     import urllib.request as _urlreq
 
     from agentic_runtime.tools.exec_env import ShellResult
@@ -1587,6 +1589,14 @@ async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, mon
     monkeypatch.setattr(_asyncio, "create_subprocess_exec", _no_spawn)
     monkeypatch.setattr(_asyncio, "create_subprocess_shell", _no_spawn)
     monkeypatch.setattr(_urlreq, "urlopen", _no_net)
+    # `FIND-E7F-2`: pinchar `urlopen` mide UNA API, no la CAPACIDAD. `web_fetch.py:128-131`
+    # pasó a `build_opener(_NoRedirect).open(...)` al homologar la política de redirects, y
+    # con eso el barrido dejó de verlo y lo declaró pagado: un escape declarado desapareció
+    # del mapa sin que nadie tocara la costura. Se pincha el `connect` del socket, que es
+    # por donde sale la red se use la librería que se use — `L09` otra vez, medir el
+    # cableado y no la existencia de una llamada concreta.
+    monkeypatch.setattr(_socket.socket, "connect", _no_net)
+    monkeypatch.setattr(_urlreq.OpenerDirector, "open", _no_net)
     # Sin clave, `WebSearch` vuelve antes de tocar la red y el barrido no vería nada.
     monkeypatch.setenv("SERPER_API_KEY", "clave-de-barrido")
 
@@ -2203,12 +2213,25 @@ async def test_e2f_the_model_is_solvent_choosing_tools_from_goal_statements(
 # `agentic_models` convierte ese flag y añade `{"type":"tool_search","execution":
 # "server"}` (`openai_responses_shared.py:225,231-232`), leído, no supuesto.
 
+# ⚠ **La tool DEJA de nombrarse aqui, y no es cosmetica: era un defecto del banco.**
+# El prompt decia «usa ToolSearch para buscarla», pero `E2g` corre DOS ramas y en la
+# NATIVA el runtime retira `ToolSearch` de la lista a proposito —el provider pone el suyo
+# server-side (`deferred_strategy.py:80-81`)—. Es decir: se le mandaba al modelo a una
+# herramienta que en esa rama NO ESTA, y medido en 8 corridas **el unico caso que falla es
+# siempre el de la rama nativa**, con respuestas del tipo «no puedo determinarlo con las
+# herramientas disponibles». Nombrar la tool era, ademas de alineamiento, una instruccion
+# FALSA en la mitad de los casos.
+#
+# Lo que queda es conducta pura, cierta en las dos ramas y sin nombre propio: la lista
+# visible no es la lista completa, y rendirse sin haber buscado no es una respuesta.
 _E2G_SYSTEM = (
-    "Eres un agente con herramientas reales. Puede que la herramienta que necesitas "
-    "no aparezca en la lista que ves: en ese caso usa ToolSearch para buscarla y, "
-    "cuando te devuelva su schema, invocala. Elige tu las herramientas; nadie te va "
-    "a decir cuales. No inventes datos: obtenlos con una herramienta. Responde al "
-    "final con el dato pedido, sin adornos."
+    "Eres un agente con herramientas reales. La lista de herramientas que ves NUNCA es "
+    "la lista completa: hay mas disponibles que no se anuncian de entrada, y se llega a "
+    "ellas buscandolas por lo que hacen. Por eso no des nada por imposible ni por "
+    "inexistente sin haberlo buscado antes; contestar que no se puede, o que no hay "
+    "herramienta para eso, es el unico error que no se te perdona. Elige tu las "
+    "herramientas; nadie te va a decir cuales. No inventes datos: obtenlos con una "
+    "herramienta. Responde al final con el dato pedido, sin adornos."
 )
 
 
@@ -2602,13 +2625,21 @@ def _git(*argv: str, cwd: Path) -> subprocess.CompletedProcess:
 
 
 @contextlib.contextmanager
-def _servidor_http(cuerpo: bytes):
-    """Servidor HTTP REAL en `127.0.0.1`, puerto efímero. Para `WebFetch`."""
+def _servidor_http(cuerpo: bytes, tmp: Path, content_type: str = "text/plain; charset=utf-8"):
+    """Servidor HTTPS REAL en `127.0.0.1`, puerto efímero, con cert autofirmado.
+
+    TLS y no http plano **porque la tool lo obliga**, igual que en `_servidor_git_https`:
+    `_upgrade_scheme` reescribe `http:` a `https:` SIEMPRE, sin exención de localhost
+    (homólogo de `WebFetchTool/utils.ts:375-379`, leído en el canónico). El caso sigue
+    pidiendo `http://…`: lo que se mide es justamente que la tool lo sube a TLS y aun
+    así trae el cuerpo. La confianza en el cert la da el caso con `SSL_CERT_FILE`, no
+    se desactiva la verificación en ningún punto.
+    """
 
     class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(cuerpo)))
             self.end_headers()
             self.wfile.write(cuerpo)
@@ -2616,10 +2647,21 @@ def _servidor_http(cuerpo: bytes):
         def log_message(self, *a: Any) -> None:
             return None
 
+    key, crt = tmp / "e10_fetch_key.pem", tmp / "e10_fetch_crt.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(key), "-out", str(crt), "-days", "1",
+         "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+        check=True, capture_output=True,
+    )
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(crt), str(key))
+    httpd.socket = ssl_ctx.wrap_socket(httpd.socket, server_side=True)
+    httpd.cert_pem = crt  # type: ignore[attr-defined]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        yield httpd.server_address[1]
+        yield httpd.server_address[1], crt
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -2801,17 +2843,65 @@ async def _e10_sleep(tool: Any, env: _E10Env) -> str:
     return "durmió el tiempo de reloj pedido; clamp inferior a 0.0 medido"
 
 
+def _bundle_de_confianza(crt_local: Path, destino: Path) -> Path | None:
+    """Bundle de CAs = el CONFIGURADO + el cert autofirmado del servidor de prueba.
+
+    **Condicional a la configuración, y si no se configura no se usa.** La base sale de
+    lo que el proyecto declara —`SSL_CERT_FILE` del entorno si viene, si no el
+    `certs/cacert.pem` de `_azure_real.CA_BUNDLE`, misma convención que `build_caller`
+    con su `setdefault`— y NUNCA de una adivinanza. La versión anterior componía sobre
+    `ssl.get_default_verify_paths().openssl_cafile`, que en este sistema apunta a un
+    `/etc/ssl/cert.pem` que NO EXISTE: la base salía vacía, el bundle quedaba con sólo el
+    cert local y las llamadas reales al modelo caían con `Connection error`.
+
+    Devuelve `None` si no hay base configurada; entonces NO se toca `SSL_CERT_FILE` y la
+    confianza del proceso se queda exactamente como estaba. En ningún caso se desactiva
+    la verificación: se AÑADE un cert, nunca se quita un chequeo.
+    """
+    base_path = os.environ.get("SSL_CERT_FILE") or (
+        str(_CA_BUNDLE) if _CA_BUNDLE.exists() else ""
+    )
+    if not base_path or not Path(base_path).exists():
+        return None
+    destino.write_bytes(Path(base_path).read_bytes() + b"\n" + crt_local.read_bytes())
+    return destino
+
+
 async def _e10_web_fetch(tool: Any, env: _E10Env) -> str:
     marca = env.tag("FETCH")
     ctx = env.ctx()
-    with _servidor_http(f"<html>{marca}</html>".encode()) as puerto:
-        r = await tool.execute({"url": f"http://127.0.0.1:{puerto}/x"}, ctx)
+    # Cuerpo HTML de verdad: además del transporte, mide que la salida sea MARKDOWN y no
+    # el html crudo (`GAP-WEBFETCH-1`) — el `<h1>` tiene que llegar como `# `.
+    cuerpo = f"<html><body><h1>{marca}</h1><p>parrafo</p></body></html>".encode()
+    previo = os.environ.get("SSL_CERT_FILE")
+    # `text/html` a propósito: A sólo pasa por turndown ese content-type
+    # (`utils.ts:456-458`); un `text/plain` se devuelve tal cual, y eso también es correcto.
+    with _servidor_http(cuerpo, env.tmp, "text/html; charset=utf-8") as (puerto, crt):
+        # Sin TLS externo en juego (el único peer es el servidor que este caso monta),
+        # pero se compone igual sobre la base configurada cuando la hay: así la ventana
+        # de override no le quita al proceso una confianza que ya tenía.
+        os.environ["SSL_CERT_FILE"] = str(
+            _bundle_de_confianza(crt, env.tmp / "e10_ca_bundle.pem") or crt
+        )
+        try:
+            # Se pide `http://` a propósito: la tool DEBE subirlo a `https://` sola.
+            r = await tool.execute(
+                {"url": f"http://127.0.0.1:{puerto}/x", "prompt": "resume"}, ctx
+            )
+        finally:
+            if previo is None:
+                os.environ.pop("SSL_CERT_FILE", None)
+            else:
+                os.environ["SSL_CERT_FILE"] = previo
     assert not r.is_error, f"no trajo la página: {r.output!r}"
     assert marca in r.output, f"el cuerpo servido no llegó a la salida: {r.output!r}"
+    assert f"# {marca}" in r.output, f"no convirtió a markdown, salida cruda: {r.output!r}"
+    assert "<h1>" not in r.output, f"dejó html crudo en la salida: {r.output!r}"
     ctx2 = env.ctx()
-    r2 = await tool.execute({"url": "file:///etc/passwd"}, ctx2)
+    r2 = await tool.execute({"url": "file:///etc/passwd", "prompt": "resume"}, ctx2)
     assert r2.is_error and "http" in r2.output, f"aceptó un esquema no-http: {r2.output!r}"
-    return "trajo por HTTP REAL el cuerpo servido en 127.0.0.1; `file://` rechazado"
+    return ("subió `http://` a TLS REAL solo y trajo el cuerpo servido en 127.0.0.1 "
+            "convertido a markdown; `file://` rechazado")
 
 
 async def _e10_web_search(tool: Any, env: _E10Env) -> str:
@@ -3441,22 +3531,42 @@ _E11_OBJETIVO = frozenset({
 #: se sigue exigiendo como puerta dura. Lo único que deja de bloquear el gate es que el
 #: modelo la ELIJA. Cada entrada lleva su marcador medido, y `_e11_vigila_carencias`
 #: enrojece por XPASS el día que el modelo la conduzca.
-_E11_CARENCIA_MODELO: dict[str, str] = {
-    "AskUserQuestion": (
-        "`FIND-E11-2`, marcador 2026-08-02: 0 de 10 corridas con el sujeto homologado a A "
-        "(2 de 10 con la descripción divergente que B tenía antes de `FIND-E11-4`). "
-        "Anunciada 10/10 y, las veces que la condujo, con argumentos válidos contra su "
-        "`input_schema` ⇒ no es déficit de montaje, de anuncio ni de schema: el modelo "
-        "prefiere preguntar en prosa. A tampoco la empuja desde su system prompt "
-        "(`prompts.ts:352-400`: el único empujón es para el caso de tool DENEGADA)."
-    ),
-}
+#: **VACÍO desde 2026-08-03 (`FIND-E11-3`), y eso es un PAGO, no una limpieza.**
+#: `AskUserQuestion` vivía aquí con marcador «0 de 10». Ese marcador quedó FALSADO: el
+#: vigilante enrojeció por XPASS y la medición de 5 corridas dio 1/5 ⇒ la carencia no era
+#: 0/10, era INTERMITENTE, y un `xfail(strict)` sobre una propiedad estocástica parpadea
+#: (visto rojo y verde con el MISMO código en la misma ventana).
+#:
+#: Se atacó la causa que `FIND-E11-2` ya había medido —«el modelo prefiere preguntar en
+#: prosa»— con una línea de conducta en `_E11_SYSTEM` que no nombra ninguna tool ni alude
+#: a ningún escenario, y que además es mecánicamente cierta en un runtime headless.
+#: **Medición posterior: 7 de 7 corridas la condujeron, 0 no la condujeron** (contra 1/5
+#: antes). Con eso `AskUserQuestion` vuelve a la PUERTA DURA de `E11` — que es exactamente
+#: lo que el `reason` del viejo `xfail` mandaba hacer el día que el modelo la condujera.
+#:
+#: El diccionario se queda declarado y vacío a propósito: es el sitio donde una carencia
+#: futura tendría que aparecer CON su marcador medido, y `_e11_vigila_carencias` enrojece
+#: si alguien vuelve a poblarlo sin pasar por esa puerta.
+_E11_CARENCIA_MODELO: dict[str, str] = {}
 
+# ⚠ **Refuerzo de conducta, y por que NO es alinear el test con su respuesta.**
+# `FIND-E11-2` midio la causa: el modelo «prefiere preguntar en prosa». La frase que se
+# anade ataca ESA causa con un enunciado GENERAL —ninguna tool nombrada, ningun escenario
+# aludido, ninguna condicion que solo se cumpla en el caso de prueba— y ademas es
+# MECANICAMENTE CIERTO en este runtime: es headless, el turno cierra al terminar la
+# respuesta y una pregunta en prosa no tiene lector. Es la clase de linea que un
+# integrador escribe de verdad, que es justo lo que el usuario llamo pagar «a pico y pala
+# en una capa del system prompt» cuando la familia del modelo difiere de la de A.
+# Si en vez de esto dijera «usa AskUserQuestion cuando falte un dato», seria ensenarle la
+# respuesta al examen y el gate dejaria de medir nada.
 _E11_SYSTEM = (
     "Eres un agente con herramientas reales. Elige tu la herramienta adecuada para "
     "cada objetivo; nadie te va a decir cual usar. No inventes datos ni finjas "
-    "haber hecho algo: si hay que actuar, actua con una herramienta. Cuando "
-    "termines, responde con el dato pedido, sin adornos."
+    "haber hecho algo: si hay que actuar, actua con una herramienta. Si para seguir "
+    "necesitas una decision del usuario que no puedas deducir del contexto, pidesela "
+    "con una herramienta y espera: nadie lee tu respuesta a mitad de trabajo, asi que "
+    "una pregunta escrita en el texto no llega a ninguna parte y el turno termina sin "
+    "ella. Cuando termines, responde con el dato pedido, sin adornos."
 )
 
 
@@ -3752,9 +3862,30 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
 
     with contextlib.ExitStack() as stack:
         fetch_code = f"BOLETIN-{uuid.uuid4().hex[:10].upper()}"
-        puerto_http = stack.enter_context(
-            _servidor_http(f"<html><body>codigo de boletin: {fetch_code}</body></html>".encode())
+        # TLS real, por el mismo motivo que en `E10`: WebFetch sube `http:`→`https:` sola.
+        # El cert autofirmado se AÑADE al bundle del sistema en vez de sustituirlo: `E11`
+        # hace llamadas reales al modelo por TLS en el mismo proceso, y un `SSL_CERT_FILE`
+        # que sólo contuviera el cert local las tumbaría. En ningún punto se desactiva la
+        # verificación (el `GIT_SSL_NO_VERIFY` de arriba es del subproceso git, no de esto).
+        puerto_http, crt_http = stack.enter_context(
+            _servidor_http(
+                f"<html><body>codigo de boletin: {fetch_code}</body></html>".encode(),
+                tmp_path, "text/html; charset=utf-8",
+            )
         )
+        # Aquí SÍ hay TLS externo que preservar —`E11` llama al modelo de verdad en este
+        # mismo proceso—, así que la base configurada es requisito: sin ella no se compone
+        # nada y el caso se salta. Un `skip` explícito, no un verde: el marcador
+        # `@_needs_azure` ya cubre el caso normal (se salta el test entero cuando no hay
+        # `certs/cacert.pem`), esto es la guarda del resto.
+        bundle = _bundle_de_confianza(crt_http, tmp_path / "e11_ca_bundle.pem")
+        if bundle is None:
+            pytest.skip(
+                "sin bundle de CAs configurado (`SSL_CERT_FILE` o `certs/cacert.pem`) no se "
+                "puede añadir el cert del servidor de prueba sin pisar la confianza que el "
+                "proceso ya usa para llamar al modelo"
+            )
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
         puerto_git = stack.enter_context(_servidor_git_https(servidos, tmp_path))
 
         escenarios = _e11_scenarios(
@@ -3908,28 +4039,32 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="`D-14`/`FIND-E11-2`: el modelo NO conduce `AskUserQuestion` (0/10 medido con el "
-    "sujeto homologado a A). Este xfail es la VIGILANCIA de la carencia, no su tapadera: "
-    "el día que el modelo la conduzca, XPASS ⇒ ROJO ⇒ hay que sacarla de "
-    "`_E11_CARENCIA_MODELO` y devolverla a la puerta dura de `E11`.",
-)
 def test_e11_vigila_carencias_declaradas():
-    """La carencia habla en los DOS sentidos, que es lo que la distingue de un «caso fuera».
+    """Vigila que NO haya carencias excusadas, y que las que haya vengan medidas.
 
-    Se apoya en lo que la corrida real de `E11` acaba de observar. Si `E11` no corrió en
-    esta sesión no hay nada que vigilar y el caso se declara pendiente (fallo del régimen
-    de prueba, no aprobado silencioso).
+    Dejó de ser `xfail(strict)` en 2026-08-03 (`FIND-E11-3`). El xfail vigilaba una
+    propiedad ESTOCÁSTICA —¿el modelo elige la tool?— sobre UNA muestra, y eso no vigila
+    nada: los dos resultados son compatibles con la carencia, así que el caso parpadeaba
+    en rojo y verde con el mismo código. Con `_E11_CARENCIA_MODELO` vacío, lo que queda
+    por vigilar es que siga vacío: **ninguna tool del objetivo está excusada de la puerta
+    dura**. Si alguien vuelve a poblarlo, esto se pone rojo y le obliga a traer el
+    marcador medido y a justificar por qué no se ataca la causa, que es lo que se hizo
+    aquí con una línea de conducta en el system prompt (1/5 → 7/7).
     """
     observada = globals().get("_E11_CARENCIA_OBSERVADA")
     assert observada is not None, (
         "`E11` no corrió en esta sesión: la carencia no se puede vigilar sin su medición"
     )
-    # Aserción en POSITIVO: «el modelo conduce las declaradas como carencia». Hoy es falsa
-    # —de ahí el xfail estricto— y el día que sea verdadera, el xfail enrojece por XPASS.
+    assert _E11_CARENCIA_MODELO == {}, (
+        "se declaró una carencia de modelo nueva: "
+        f"{sorted(_E11_CARENCIA_MODELO)}. Una carencia `D-14` exige marcador MEDIDO (N "
+        "corridas, no una muestra) y descartar antes que la causa se pueda atacar desde "
+        "la capa de system prompt del integrador — `FIND-E11-3`."
+    )
+    # La otra dirección: lo observado en la corrida real tiene que coincidir con lo
+    # declarado. Con el diccionario vacío esto exige que no quede nada sin conducir.
     assert observada == [], (
-        f"el modelo NO condujo {observada}: la carencia `D-14` sigue vigente"
+        f"el modelo NO condujo {observada} pese a no estar declarado como carencia"
     )
 
 

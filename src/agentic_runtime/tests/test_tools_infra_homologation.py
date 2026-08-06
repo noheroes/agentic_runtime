@@ -12,9 +12,8 @@ import asyncio
 
 import pytest
 
-from agentic_runtime.contracts.abort import AbortController
-
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.abort import AbortController
 from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.tools.deferred import is_deferred_tool
 from agentic_runtime.tools.deferred_strategy import (
@@ -31,7 +30,6 @@ from agentic_runtime.tools.fs_env import (
 from agentic_runtime.tools.native.tool_search import TOOL_SEARCH_TOOL_NAME
 from agentic_runtime.tools.pool import ToolPool, assemble_tool_pool
 from agentic_runtime.tools.protocol import ToolCategory, ToolProtocol, ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Fake tool mínima (implementa ToolProtocol estructural)
@@ -170,7 +168,6 @@ def test_simulated_strategy_hides_undiscovered_deferred():
     assert "Bash" in names
     assert TOOL_SEARCH_TOOL_NAME in names  # hay diferidas → visible
     assert "mcp__x__y" not in names  # oculta hasta ToolSearch
-    assert SimulatedDeferredStrategy().owns_search_dispatch() is True
 
 
 def test_native_strategy_marks_defer_loading_and_drops_toolsearch():
@@ -181,7 +178,6 @@ def test_native_strategy_marks_defer_loading_and_drops_toolsearch():
     assert TOOL_SEARCH_TOOL_NAME not in by_name  # provider lo añade server-side
     assert by_name["mcp__x__y"].get("defer_loading") is True
     assert "defer_loading" not in by_name["Bash"]
-    assert NativeDeferredStrategy().owns_search_dispatch() is False
 
 
 # ===========================================================================
@@ -484,7 +480,9 @@ def test_abort_reason_reaches_the_result():
     assert interrumpido.output != matado.output
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-TOOL6/E6: ToolSearch select: no soporta multi-select coma-separado que el delta-announce promete")
+# `FIND-TOOL6/E6` PAGADO (11ª ventana): `select:` multi-nombre homologado contra
+# `ToolSearchTool.ts:363-406`. El `xfail(strict=True)` se retiró porque XPASSeó — que es
+# exactamente para lo que estaba puesto.
 def test_tool_search_select_multi():
     from agentic_runtime.tools.native.tool_search import ToolSearchTool
 
@@ -495,6 +493,106 @@ def test_tool_search_select_multi():
 
     matched = {m["name"] for m in json.loads(r.output)["matches"]}
     assert matched == {"Read", "Edit", "Grep"}  # homologado: coma-separado
+
+
+# ---------------------------------------------------------------------------
+# `GAP-TOOLSEARCH-1` — lenguaje de consulta de A, homologado y medido por CONDUCTA.
+# Canónico: `ToolSearchTool.ts:186-302` (keyword) y `:363-406` (select).
+# ---------------------------------------------------------------------------
+
+def _buscar(tools, query, **kw):
+    """Ejecuta ToolSearch de verdad sobre un pool y devuelve los nombres hallados."""
+    import json as _json
+
+    ctx = _ctx(tool_pool=ToolPool(capability_tools=tools))
+    from agentic_runtime.tools.native.tool_search import ToolSearchTool
+
+    r = asyncio.run(ToolSearchTool().execute({"query": query, **kw}, ctx))
+    return [m["name"] for m in _json.loads(r.output)["matches"]]
+
+
+def test_tool_search_select_partial_success_and_dedupe():
+    """`:383-405`: un nombre inexistente NO anula la selección, y los repetidos no duplican.
+    Es lo que evita que un nombre alucinado tire abajo una selección buena."""
+    tools = [_FakeTool("Read", deferred=True), _FakeTool("Edit", deferred=True)]
+    assert _buscar(tools, "select:Read,NoExiste,Read,Edit") == ["Read", "Edit"]
+
+
+def test_tool_search_select_falls_back_to_already_loaded_tool():
+    """`:374-375`: si el nombre no está entre las diferidas pero SÍ en el pool completo, se
+    devuelve igual — «a harmless no-op that lets the model proceed without retry churn»."""
+    tools = [_FakeTool("Read", deferred=True), _FakeTool("Bash", deferred=False)]
+    assert _buscar(tools, "select:Bash") == ["Bash"]
+
+
+def test_tool_search_bare_name_without_select_prefix():
+    """`:199-204`: nombre desnudo sin `select:` — atajo para modelos que lo omiten."""
+    tools = [_FakeTool("Read", deferred=True), _FakeTool("Edit", deferred=True)]
+    assert _buscar(tools, "read") == ["Read"]  # case-insensitive
+
+
+def test_tool_search_bare_name_falls_back_to_already_loaded_tool():
+    """`:200-201`: el atajo de nombre desnudo mira PRIMERO las diferidas y luego el pool
+    completo. La primera versión de este test usaba una tool que ya era diferida, así que
+    no medía la caída al set completo: INY-49 salió VERDE y ese fue el hallazgo."""
+    tools = [_FakeTool("Read", deferred=True), _FakeTool("Bash", deferred=False)]
+    assert _buscar(tools, "bash") == ["Bash"]
+
+
+def test_tool_search_mcp_prefix_matches_server():
+    """`:208-216`: `mcp__servidor` devuelve las tools de ese servidor."""
+    tools = [
+        _FakeTool("mcp__slack__send_message", deferred=True),
+        _FakeTool("mcp__slack__list_channels", deferred=True),
+        _FakeTool("mcp__github__create_issue", deferred=True),
+    ]
+    assert set(_buscar(tools, "mcp__slack")) == {
+        "mcp__slack__send_message",
+        "mcp__slack__list_channels",
+    }
+
+
+def test_tool_search_required_term_filters_out_non_matching():
+    """`:220-257`: `+término` es REQUISITO, no peso. Sin él la consulta devolvía las dos."""
+    tools = [
+        _FakeTool("mcp__slack__send_message", deferred=True),
+        _FakeTool("mcp__github__send_dispatch", deferred=True),
+    ]
+    assert _buscar(tools, "+slack send") == ["mcp__slack__send_message"]
+    assert set(_buscar(tools, "slack send")) == {
+        "mcp__slack__send_message",
+        "mcp__github__send_dispatch",
+    }
+
+
+def test_tool_search_name_part_outranks_description_match():
+    """`:271-290`: coincidir en el NOMBRE (10/12) pesa más que en la descripción (2)."""
+    por_nombre = _FakeTool("NotebookEdit", deferred=True)
+    por_descripcion = _FakeTool("Other", deferred=True)
+    por_descripcion.description = "edits a notebook cell"
+    assert _buscar([por_descripcion, por_nombre], "notebook") == ["NotebookEdit", "Other"]
+
+
+def test_tool_search_hint_outranks_description():
+    """`Tool.ts:373-378` + `:283-289`: el `search_hint` curado puntúa +4, la descripción +2.
+
+    El hint se lee opcional (`getattr`): `contracts/tools.py:5` deja `search_hint` fuera del
+    contrato T1 y esto NO lo asciende — homologa el mecanismo de ranking, no el miembro.
+    """
+    con_hint = _FakeTool("Alpha", deferred=True)
+    con_hint.description = "generic tool"
+    con_hint.search_hint = "jupyter notebook execution"
+    con_desc = _FakeTool("Beta", deferred=True)
+    con_desc.description = "works with jupyter files"
+    assert _buscar([con_desc, con_hint], "jupyter") == ["Alpha", "Beta"]
+
+
+def test_tool_search_description_match_uses_word_boundary():
+    """`:171` + `:288`: frontera de palabra. Sin ella «read» puntúa dentro de «already» y la
+    búsqueda devuelve ruido."""
+    ruido = _FakeTool("Alpha", deferred=True)
+    ruido.description = "this is already done"
+    assert _buscar([ruido], "read") == []
 
 
 @pytest.mark.xfail(strict=True, reason="GAP-TOOL3/E1: is_deferred_tool sin precedencia alwaysLoad (opt-out)")

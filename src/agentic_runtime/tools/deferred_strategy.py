@@ -45,11 +45,6 @@ class DeferredToolStrategy(Protocol):
         """Decide schemas (con/sin `defer_loading`) y anuncios a partir del pool ensamblado."""
         ...
 
-    def owns_search_dispatch(self) -> bool:
-        """True (simulada): el runtime ejecuta ToolSearch client-side y marca descubiertas.
-        False (nativa): el provider resuelve el search server-side; el runtime no dispatcha."""
-        ...
-
 
 class SimulatedDeferredStrategy:
     """Fallback client-side — comportamiento vigente encapsulado (ver módulo)."""
@@ -75,9 +70,6 @@ class SimulatedDeferredStrategy:
             announcements.append(render_deferred_tools_delta(added, removed))
         return TurnToolPlan(tool_schemas=schemas, announcements=announcements)
 
-    def owns_search_dispatch(self) -> bool:
-        return True
-
 
 class NativeDeferredStrategy:
     """Rama nativa Responses — el provider resuelve el tool-search server-side."""
@@ -92,9 +84,6 @@ class NativeDeferredStrategy:
                 schema["defer_loading"] = True
             schemas.append(schema)
         return TurnToolPlan(tool_schemas=schemas, announcements=[])
-
-    def owns_search_dispatch(self) -> bool:
-        return False
 
 
 __all__ = [

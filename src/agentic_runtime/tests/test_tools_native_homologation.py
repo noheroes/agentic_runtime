@@ -28,9 +28,8 @@ import asyncio
 
 import pytest
 
-from agentic_runtime.contracts.abort import AbortController
-
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.abort import AbortController
 from agentic_runtime.execution.tasks.registry import InMemoryTaskRegistry
 from agentic_runtime.tools.factory import create_tools
 from agentic_runtime.tools.fs_env import ConfinedFilesystem
@@ -469,3 +468,202 @@ def test_glob_lists_files_only_not_directories(tmp_path):
 def await_(coro):
     """`asyncio.run` con nombre corto: estos tests son síncronos a propósito."""
     return asyncio.run(coro)
+
+
+# ===========================================================================
+# `GAP-WEBFETCH-1` — mecanismos internos de WebFetch, homologados contra
+# `WebFetchTool/utils.ts` y `WebFetchTool.ts`. Medidos por CONDUCTA.
+# ===========================================================================
+
+def test_web_fetch_validates_url_length_credentials_and_host():
+    """`validateURL` (`utils.ts:139-169`). B no tenía NINGUNO de los tres controles."""
+    from agentic_runtime.tools.native.web_fetch import (
+        MAX_URL_LENGTH,
+        InvalidURL,
+        _validate_url,
+    )
+
+    _validate_url("https://example.com/a")  # válida, no lanza
+
+    with pytest.raises(InvalidURL):
+        _validate_url("https://example.com/" + "a" * MAX_URL_LENGTH)
+    with pytest.raises(InvalidURL):
+        _validate_url("https://user:secreto@example.com/")
+    with pytest.raises(InvalidURL):
+        # host de una sola etiqueta = no resoluble públicamente (localhost, intranet)
+        _validate_url("https://localhost/x")
+
+
+def test_web_fetch_upgrades_http_to_https():
+    """`utils.ts:375-379`: el upgrade es INCONDICIONAL, no una preferencia."""
+    from agentic_runtime.tools.native.web_fetch import _upgrade_scheme
+
+    assert _upgrade_scheme("http://example.com/a?b=1") == "https://example.com/a?b=1"
+    assert _upgrade_scheme("https://example.com/a") == "https://example.com/a"
+
+
+def test_web_fetch_permitted_redirect_only_within_same_origin():
+    """`isPermittedRedirect` (`utils.ts:212-243`): se sigue sólo lo que no cambia de
+    origen (el `www.` no cuenta). Todo lo demás se le devuelve al modelo — es la
+    contramedida contra open-redirect."""
+    from agentic_runtime.tools.native.web_fetch import _is_permitted_redirect
+
+    assert _is_permitted_redirect("https://a.com/x", "https://www.a.com/y") is True
+    assert _is_permitted_redirect("https://www.a.com/x", "https://a.com/y") is True
+    assert _is_permitted_redirect("https://a.com/x", "https://a.com/otro?q=1") is True
+    # cambia de host, de esquema, de puerto o trae credenciales → NO
+    assert _is_permitted_redirect("https://a.com/x", "https://malo.com/y") is False
+    assert _is_permitted_redirect("https://a.com/x", "http://a.com/y") is False
+    assert _is_permitted_redirect("https://a.com/x", "https://a.com:8443/y") is False
+    assert _is_permitted_redirect("https://a.com/x", "https://u:p@a.com/y") is False
+
+
+def test_web_fetch_converts_html_to_markdown_and_drops_scripts():
+    """`utils.ts:456-458` (turndown). Antes B devolvía el HTML EN BRUTO: ni legible para
+    el modelo ni asumible en tokens. Homólogo funcional, no turndown literal."""
+    from agentic_runtime.tools.native.web_fetch import html_a_markdown
+
+    md = html_a_markdown(
+        "<html><head><title>t</title></head><body>"
+        "<script>var x = 'no debe salir';</script>"
+        "<style>.a{color:red}</style>"
+        "<h1>Titulo</h1><p>Un <strong>parrafo</strong> con "
+        '<a href="https://ej.com">enlace</a>.</p>'
+        "<ul><li>uno</li><li>dos</li></ul>"
+        "</body></html>"
+    )
+    assert "# Titulo" in md
+    assert "**parrafo**" in md
+    assert "[enlace](https://ej.com)" in md
+    assert "- uno" in md and "- dos" in md
+    assert "no debe salir" not in md and "color:red" not in md
+    assert "<p>" not in md and "<script>" not in md
+
+
+def test_web_fetch_prompt_is_required_in_schema():
+    """`WebFetchTool.ts:27`: `prompt` es `z.string()` SIN `.optional()`. En B era opcional
+    y además se ignoraba — ese era el corazón de `GAP-WEBFETCH-1`."""
+    from agentic_runtime.tools.native.web_fetch import WebFetchTool
+
+    assert set(WebFetchTool.input_schema["required"]) == {"url", "prompt"}
+
+
+def test_web_fetch_truncates_with_the_canonical_marker():
+    """`utils.ts:492-496`: el truncado lleva marcador explícito; sin él el modelo no
+    puede saber que lo que leyó estaba cortado."""
+    from agentic_runtime.tools.native.web_fetch import (
+        MAX_MARKDOWN_LENGTH,
+        TRUNCATION_MARKER,
+    )
+
+    assert MAX_MARKDOWN_LENGTH == 100_000
+    assert "truncated" in TRUNCATION_MARKER
+
+
+def test_web_fetch_reports_cross_host_redirect_instead_of_following_it():
+    """`WebFetchTool.ts:216-249` E2E sobre servidores HTTP reales: la redirección a OTRO
+    host no se sigue — se informa, con la URL de destino, para que el modelo decida."""
+    import http.server
+    import threading
+
+    from agentic_runtime.context.tool_use import AppState, ToolUseContext
+    from agentic_runtime.contracts.permissions import PermissionContext
+    from agentic_runtime.tools.native import web_fetch as web_fetch_mod
+    from agentic_runtime.tools.native.web_fetch import WebFetchTool
+    from agentic_runtime.tools.pool import ToolPool
+
+    destino = "https://otrohost.example.com/final"
+
+    class _Redirige(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(302)
+            self.send_header("Location", destino)
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Redirige)
+    hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+    hilo.start()
+    try:
+        # El upgrade a https es incondicional en A y su test propio lo cubre; aquí sólo
+        # estorba, porque el servidor de pruebas habla HTTP. Se neutraliza ese
+        # colaborador, no la aserción.
+        original = web_fetch_mod._upgrade_scheme
+        web_fetch_mod._upgrade_scheme = lambda u: u
+        try:
+            tool = WebFetchTool()
+            ctx = ToolUseContext(
+                session_id="s1",
+                app_state=AppState(
+                    permissions=PermissionContext(always_allow_command=[tool.name])
+                ),
+                tool_pool=ToolPool(native_tools=[tool]),
+            )
+            url = f"http://127.0.0.1:{srv.server_address[1]}/"
+            r = asyncio.run(tool.execute({"url": url, "prompt": "qué hay"}, ctx))
+        finally:
+            web_fetch_mod._upgrade_scheme = original
+
+        assert not r.is_error, r.output
+        assert "REDIRECT DETECTED" in r.output
+        assert destino in r.output, f"no llega la URL de destino: {r.output!r}"
+        assert "final" in r.output
+    finally:
+        srv.shutdown()
+
+
+def test_web_fetch_execute_returns_markdown_not_raw_html():
+    """`WebFetchTool.ts:251-278` E2E: no basta con que el conversor exista — hay que
+    probar que `execute` LO USA. El test anterior llamaba a `html_a_markdown` directo y
+    por eso INY-56 (desconectar la conversión) salió VERDE: `L09`, cablear ≠ existir."""
+    import http.server
+    import threading
+
+    from agentic_runtime.context.tool_use import AppState, ToolUseContext
+    from agentic_runtime.contracts.permissions import PermissionContext
+    from agentic_runtime.tools.native import web_fetch as web_fetch_mod
+    from agentic_runtime.tools.native.web_fetch import WebFetchTool
+    from agentic_runtime.tools.pool import ToolPool
+
+    cuerpo = b"<html><body><h1>Hola</h1><p>Un <b>texto</b>.</p></body></html>"
+
+    class _Html(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(cuerpo)))
+            self.end_headers()
+            self.wfile.write(cuerpo)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Html)
+    hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+    hilo.start()
+    try:
+        original = web_fetch_mod._upgrade_scheme
+        web_fetch_mod._upgrade_scheme = lambda u: u
+        try:
+            tool = WebFetchTool()
+            ctx = ToolUseContext(
+                session_id="s1",
+                app_state=AppState(
+                    permissions=PermissionContext(always_allow_command=[tool.name])
+                ),
+                tool_pool=ToolPool(native_tools=[tool]),
+            )
+            url = f"http://127.0.0.1:{srv.server_address[1]}/"
+            r = asyncio.run(tool.execute({"url": url, "prompt": "qué dice"}, ctx))
+        finally:
+            web_fetch_mod._upgrade_scheme = original
+
+        assert not r.is_error, r.output
+        assert "# Hola" in r.output
+        assert "**texto**" in r.output
+        # LA ASERCIÓN QUE IMPORTA: no queda HTML crudo en lo que ve el modelo.
+        assert "<h1>" not in r.output and "<body>" not in r.output
+    finally:
+        srv.shutdown()

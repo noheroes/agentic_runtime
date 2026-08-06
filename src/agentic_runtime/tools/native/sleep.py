@@ -13,7 +13,16 @@ SLEEP_TOOL_NAME = "Sleep"
 
 class SleepTool:
     name = SLEEP_TOOL_NAME
-    description = "Pause execution for a specified number of seconds."
+    # Homologada contra `SLEEP_TOOL_PROMPT` (`SleepTool/prompt.ts:7-17`) — `GAP-PROMPT-1`.
+    # La línea PORTANTE es «prefer this over Bash(sleep ...)»: sin ella el modelo gasta el
+    # slot de shell en una espera. OMITIDAS las de `<tick>` y el coste de caché por wake-up,
+    # que describen el bucle del integrador de A y no el de B.
+    description = """Wait for a specified duration, in seconds (max 60).
+
+Use this when you are waiting for something and have nothing else to do.
+
+Prefer this over running `sleep` through the bash tool — it doesn't hold a shell process.
+Do not use it to poll: if there is a check you can run, run the check instead."""
     input_schema = {
         "type": "object",
         "properties": {

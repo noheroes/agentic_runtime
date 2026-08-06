@@ -21,7 +21,28 @@ _VCS_DIRS = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 
 class GrepTool:
     name = "grep"
-    description = "Search for a pattern in files."
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "search file contents with regex (ripgrep)"
+    # Homologada contra `GrepTool/prompt.ts:7-17` (`GAP-PROMPT-1`). La primera línea de Usage
+    # —«ALWAYS use this tool; NEVER invoke grep/rg as a shell command»— es la pieza que el
+    # canónico usa para DIRIGIR la elección de tool, y es justo la que B no tenía.
+    # DIVERGENCIA DECLARADA: A corre sobre ripgrep; B sobre `re` de Python. La descripción dice
+    # el dialecto REAL en vez de copiar el de A: prometer sintaxis ripgrep sobre un motor `re`
+    # sería peor que no decir nada. Por lo mismo se omiten `type`, `multiline` y los modos de
+    # salida, que B no implementa.
+    description = """A powerful search tool for finding content inside files.
+
+Usage:
+- ALWAYS use this tool for content search. NEVER invoke `grep` or `rg` as a shell command —
+  this tool is optimized for correct permissions and workspace confinement.
+- Supports Python regular expression syntax (e.g. "log.*Error", r"def\\s+\\w+")
+- Filter which files are searched with the `glob` parameter (e.g. "*.py", "**/*.ts")
+- Output is one line per match, formatted `path:line: text`; version-control directories
+  are skipped and very long lines are elided
+- Patterns match within a single line only
+- Results are capped at 250 matching lines by default: use a more specific pattern or path,
+  `offset` to paginate, or `head_limit=0` for everything (sparingly — it costs context)"""
     input_schema = {
         "type": "object",
         "properties": {

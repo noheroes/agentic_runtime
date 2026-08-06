@@ -117,7 +117,7 @@ class AgenticModelsCaller:
         from agentic_models import get_model, register_builtins
         register_builtins()
         caller = AgenticModelsCaller(
-            model=get_model("claude-sonnet-4-6"),
+            model=get_model("<model-id>"),  # el id lo elige el integrador; el runtime es multi-modelo
             api_key="sk-...",
         )
     """

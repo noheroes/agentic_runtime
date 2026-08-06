@@ -32,9 +32,15 @@ class DeferredToolStrategy(Protocol):
     - **Eager** (default base): anuncia TODO el pool; nadie posee search-dispatch.
     - **Simulada** (battery tool-search): filtra por descubrimiento client-side.
     - **Nativa** (`defer_loading` server-side): el provider resuelve el search.
-    A2.3 sólo EJERCITA la eager (1 tool → nada que diferir)."""
+    A2.3 sólo EJERCITA la eager (1 tool → nada que diferir).
 
-    def owns_search_dispatch(self) -> bool: ...  # Simulada True / Nativa False / Eager False
+    ⚠ DESACTUALIZADO respecto a producción (11ª ventana, `FIND-E2G-3`): `owns_search_dispatch`
+    fue RETIRADO de `tools/deferred_strategy.py` por redundante —el hecho ya lo codifica
+    `tool_schemas`— y porque A no tiene contraparte: su ToolSearch es client-side y punto,
+    de modo que el dilema «¿quién despacha?» no existe en el canónico. Este fichero se
+    conserva como artefacto de diseño histórico; NO es fuente de estado."""
+
+    def owns_search_dispatch(self) -> bool: ...  # RETIRADO en producción — ver nota arriba
 
     def filter_announced(
         self, pool: ToolPool, discovered: frozenset[str]

@@ -31,7 +31,26 @@ def _numerar(lineas: list[str], primera: int) -> str:
 
 class ReadFileTool:
     name = "read_file"
-    description = "Read a file and return its contents."
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "read files, images, PDFs, notebooks"
+    # Homologada contra `FileReadTool/prompt.ts:32-48` (`GAP-PROMPT-1`), que es lo que A manda
+    # como `description` a la API (`utils/api.ts:169-178`). Se omiten las líneas de A sobre
+    # imágenes, PDF y notebooks: B no las lee, y anunciarlas provocaría llamadas que fallan.
+    # El límite por defecto de 2000 líneas de A tampoco se anuncia porque B no lo aplica; lo
+    # que sí rige y sí se dice es el cap de tamaño para la lectura sin `limit`.
+    description = """Reads a file from the local filesystem. You can access any file inside the
+workspace directly by using this tool. If the user provides a path to a file, assume that path
+is valid. It is okay to read a file that does not exist; an error will be returned.
+
+Usage:
+- The `path` parameter should be an absolute path
+- Results are returned with line numbers, starting at 1, so you can cite `file:line`
+- You can optionally specify `offset` (1-indexed) and `limit`; when you already know which
+  part of the file you need, read only that part — this matters for large files
+- Reading a whole file without `limit` fails if the file exceeds the size cap; the error
+  tells you to use `offset`/`limit` or to search for the content instead
+- This tool reads files, not directories. Use the glob tool to list files"""
     input_schema = {
         "type": "object",
         "properties": {

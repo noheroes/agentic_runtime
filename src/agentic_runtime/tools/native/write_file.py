@@ -11,7 +11,22 @@ if TYPE_CHECKING:
 
 class WriteFileTool:
     name = "write_file"
-    description = "Write content to a file."
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "create or overwrite files"
+    # Homologada contra `getWriteToolDescription()` (`FileWriteTool/prompt.ts:10-18`).
+    # OMITIDA la línea de lectura previa obligatoria (`:7`): A la puede prometer porque su tool
+    # FALLA si no leíste antes; B no lo comprueba. Anunciar una comprobación inexistente sería
+    # peor que callarla — queda como carencia declarada, no como texto falso.
+    description = """Writes a file to the local filesystem.
+
+Usage:
+- This tool will overwrite the existing file if there is one at the provided path.
+- Prefer the Edit tool for modifying existing files — it only sends the diff. Only use this
+  tool to create new files or for complete rewrites.
+- Parent directories are created as needed.
+- NEVER create documentation files (*.md) or README files unless explicitly requested.
+- Only use emojis if the user explicitly requests it."""
     input_schema = {
         "type": "object",
         "properties": {

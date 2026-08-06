@@ -23,10 +23,31 @@ _MAX_RESULTS_CAP = 20
 
 class WebSearchTool:
     name = WEB_SEARCH_TOOL_NAME
-    description = (
-        "Search the web and return a list of results (title, URL, snippet). "
-        "Use when you need to find current information, documentation, or resources."
-    )
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "search the web for current information"
+    # Homologada contra `getWebSearchPrompt()` (`WebSearchTool/prompt.ts:5-33`) — `GAP-PROMPT-1`.
+    # Se conservan las DOS piezas que en A van en mayúsculas porque gobiernan conducta: la
+    # sección «Sources:» obligatoria y el uso del año en curso en la consulta.
+    # OMITIDO: «web search is only available in the US», que describe al proveedor de A.
+    description = """- Searches the web and returns results as a list of title, URL and snippet
+- Provides up-to-date information for current events and recent data
+- Use this tool for information beyond your knowledge cutoff
+
+CRITICAL REQUIREMENT - You MUST follow this:
+- After answering the user's question, you MUST include a "Sources:" section at the end of
+  your response
+- In that section, list the relevant URLs from the search results as markdown links:
+  [Title](URL)
+- This is MANDATORY - never skip including sources
+
+Usage notes:
+- Domain filtering is supported via allowed_domains and blocked_domains
+- max_results accepts 1-20 and defaults to 5
+
+IMPORTANT - Use the correct year in search queries:
+- When searching for recent information, documentation or current events, include the CURRENT
+  year in the query, not last year's."""
     input_schema = {
         "type": "object",
         "properties": {

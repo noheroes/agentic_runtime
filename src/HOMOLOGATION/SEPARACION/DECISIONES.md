@@ -429,3 +429,38 @@ siguientes — **entra con su caso de efecto y su caso de conducción, o no entr
   **dicha y cuantificada** (0/10), que es literalmente lo que `D-12` manda: *«una tool que funciona pero que
   ningún modelo elige nunca es cobertura que falta, y se dice como carencia, no se tapa»*.
 - **Dónde se aplica:** `test_tramo1_gate.py` (`E11`); ficha `C5`/`C6` de `TRAMO-1.md`; `FUNCIONALIDAD.md §3`.
+
+---
+
+## `D-15` · La validación pasa por un CONSUMIDOR REAL: `agentic_code` ejercita, los `.jsonl` acreditan (2026-08-06)
+
+- **Fecha:** 2026-08-06, 10ª ventana, al cerrar el barrido EOF del encargo de las listas de tools.
+- **Encargo del usuario, verbatim:** *«lo que de ahora en adelante haremos es usar agentic_code para
+  comprobar funcionalidades de agentic_runtime, luego miraras que se ha implementado en agentic_code y
+  conforme vayamos activando mas capacidades de agentic_runtime implementaremos mas capacidades en
+  agentic_code, tu podras luego usar sus archivos jsonl para validar la correcta operacion»*.
+- **Qué la originó.** El listado de 10 problemas confirmados **no lo produjo la suite**: lo produjo el
+  usuario ejercitando `agentic_code` contra el runtime. Y el barrido del canónico que vino después
+  confirmó el patrón —**el runtime tiene el dato cargado y no lo pone en ninguna lista que el modelo
+  vea**— sin que ninguna de esas omisiones enrojeciera un solo test. Una suite prueba lo que su autor
+  pensó probar; un integrador prueba lo que hace falta.
+- **DECISIÓN — el ciclo de cuatro pasos:** (1) ejercitar la capacidad **desde `agentic_code`**;
+  (2) leer **qué está implementado en `agentic_code`**, porque la asimetría entre lo que el integrador
+  debe escribir y lo que el runtime le da ES la medida del hueco; (3) conforme se activan capacidades
+  en `agentic_runtime`, **implementar más capacidades en `agentic_code`** — los dos repos avanzan
+  acoplados; (4) **validar contra los `.jsonl`** de sesión: la traza real de mensajes, tool calls,
+  anuncios y resultados.
+- **Por qué los `.jsonl` mandan.** Una aserción sobre FIRMA acredita en falso (`H-L4`, ocho casos
+  probados). Un `.jsonl` es lo que el modelo **realmente** recibió y **realmente** devolvió, y es lo
+  único que alcanza a lo que ningún unitario ve: si el delta de diferidas converge, si el listado de
+  skills llegó, si el `system-reminder` se repite turno tras turno, si lo anunciado era invocable.
+- **Lo que esta decisión NO deroga.** `D-08` sigue mandando: `agentic_code` **DETECTA**, el canónico
+  **DICTA**. Ante conducta divergente, contraste contra el canónico antes que «arreglar» lo que no
+  sabes si es genuino. Tampoco deroga `D-12` (efecto + conducción) ni `no-debilitar-la-prueba`: una
+  traza verde en `.jsonl` no sustituye a un test negativo, lo complementa.
+- **Consecuencia de orden — el instrumento antes que la medida.** El problema **#10** (el stream
+  público no permite reconstruir el plan de tools del turno: `TurnToolPlan` es interno) deja de ser
+  «el último de la lista»: sin él, el paso 4 es **ciego** para media superficie de tools. Se pagará
+  temprano aunque su número diga otra cosa.
+- **Dónde se aplica:** `SEPARACION/VALIDACION-AGENTIC-CODE.md` (método + listado + cola de ataque),
+  que pasa a ser el guion vivo junto a `TRAMO-1.md`.

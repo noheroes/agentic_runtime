@@ -323,3 +323,73 @@ def test_reconcile_keeps_absent_user_server():
 @pytest.mark.xfail(strict=True, reason="FIND-MCP24: sin campo headers_helper")
 def test_mcp_headers_helper_field():
     assert "headers_helper" in McpServerConfig.model_fields
+
+
+# ── search hint del `_meta` (homólogo de `client.ts:1778-1784`) ─────────────────────────
+# El hint es la ÚNICA pista curada de una tool MCP y puntúa +4 en ToolSearch (vs +2 de la
+# descripción). Para una tool diferida eso es la diferencia entre que el modelo la
+# encuentre por keyword o no la encuentre, así que se mide por CONDUCTA (`H-L4`): que la
+# búsqueda la halle y la ordene, no que el atributo exista.
+
+def _hint_de(spec_meta, **kw):
+    from agentic_runtime.capabilities.mcp.tool_adapter import build_mcp_tool
+
+    async def _call(name, inp):
+        return "ok"
+
+    tool = build_mcp_tool(
+        {"name": "t", "description": "", "inputSchema": {}, "_meta": spec_meta}, _call, **kw
+    )
+    assert tool is not None
+    return tool.search_hint
+
+
+def test_mcp_search_hint_colapsa_espacios():
+    """El colapso no es cosmético: `_meta` lo escribe un server de terceros y un salto de
+    línea ahí inyecta líneas huérfanas en la lista de diferidas, que se une por '\\n'."""
+    assert _hint_de({"searchHint": "  multi\n  line   hint\t"}) == "multi line hint"
+
+
+def test_mcp_search_hint_no_str_degrada_a_vacio():
+    """Tolerancia con terceros, como el resto del adapter: nada de esto revienta."""
+    for basura in (123, None, ["x"], {"a": 1}, "   \n  "):
+        assert _hint_de({"searchHint": basura}) == ""
+    assert _hint_de(None) == ""
+    assert _hint_de("no-soy-un-dict") == ""
+
+
+def test_mcp_search_hint_la_clave_namespaced_la_aporta_el_integrador():
+    """`_meta` es un espacio NAMESPACED por vendor y el runtime es multi-modelo: su default
+    no ancla ninguna marca. Una clave de vendor NO se lee de serie; se lee cuando el
+    integrador la declara (elegir dialecto es su política, igual que elegir modelo)."""
+    meta = {"vendor-x/searchHint": "hint de vendor"}
+    assert _hint_de(meta) == ""
+    assert _hint_de(meta, search_hint_meta_keys=("vendor-x/searchHint",)) == "hint de vendor"
+
+
+def test_mcp_search_hint_hace_que_toolsearch_encuentre_la_tool():
+    """CONDUCTA: dos tools MCP indistinguibles por descripción; sólo la que trae hint en su
+    `_meta` responde a la keyword. Sin el cableado del hint, la búsqueda no devuelve nada."""
+    import json
+
+    from agentic_runtime.capabilities.mcp.tool_adapter import build_mcp_tool
+    from agentic_runtime.context.tool_use import ToolUseContext
+    from agentic_runtime.tools.native.tool_search import ToolSearchTool
+    from agentic_runtime.tools.pool import ToolPool
+
+    async def _call(name, inp):
+        return "ok"
+
+    con_hint = build_mcp_tool(
+        {"name": "srv__alfa", "description": "does things", "inputSchema": {},
+         "_meta": {"searchHint": "convert currency exchange rates"}}, _call)
+    sin_hint = build_mcp_tool(
+        {"name": "srv__beta", "description": "does things", "inputSchema": {}}, _call)
+
+    ctx = ToolUseContext(
+        session_id="s1",
+        stop=AbortController(),
+        tool_pool=ToolPool(capability_tools=[con_hint, sin_hint]),
+    )
+    r = asyncio.run(ToolSearchTool().execute({"query": "currency"}, ctx))
+    assert [m["name"] for m in json.loads(r.output)["matches"]] == ["srv__alfa"]

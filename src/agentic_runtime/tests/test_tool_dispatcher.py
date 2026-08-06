@@ -260,7 +260,7 @@ async def test_una_corrutina_que_no_cede_no_se_puede_acotar_y_esto_esta_medido()
 
 
 @pytest.mark.asyncio
-async def test_las_tools_de_red_no_bloquean_el_event_loop_y_el_cap_las_acota():
+async def test_las_tools_de_red_no_bloquean_el_event_loop_y_el_cap_las_acota(monkeypatch):
     """`FIND-C6-2` PAGADO (parte 2), contra un servidor HTTP REAL que tarda.
 
     Antes, `web_fetch.py`/`web_search.py` hacían `urlopen` síncrono dentro de su `async
@@ -280,6 +280,7 @@ async def test_las_tools_de_red_no_bloquean_el_event_loop_y_el_cap_las_acota():
     import threading
     import time
 
+    from agentic_runtime.tools.native import web_fetch as web_fetch_mod
     from agentic_runtime.tools.native.web_fetch import WebFetchTool
 
     class _Lento(http.server.BaseHTTPRequestHandler):
@@ -319,8 +320,17 @@ async def test_las_tools_de_red_no_bloquean_el_event_loop_y_el_cap_las_acota():
 
         pulso = asyncio.create_task(latir())
         t0 = time.monotonic()
+        # El upgrade http→https (`utils.ts:375-379`, homologado en la 11ª ventana) es
+        # incondicional en A, así que contra un servidor de pruebas que sólo habla HTTP la
+        # petición moriría al instante y no habría red que medir. Se neutraliza SÓLO ese
+        # colaborador: la propiedad bajo prueba es que el event loop sigue latiendo
+        # mientras la tool está en la red, y el upgrade tiene su propio test
+        # (`test_web_fetch_upgrades_http_to_https`). No se relaja ninguna aserción.
+        monkeypatch.setattr(web_fetch_mod, "_upgrade_scheme", lambda u: u)
         result = await ToolDispatcher(timeout_override=0.3).dispatch(
-            tool_name=tool.name, tool_input={"url": url}, ctx=ctx
+            tool_name=tool.name,
+            tool_input={"url": url, "prompt": "qué dice"},  # `prompt` es requerido (A lo exige)
+            ctx=ctx,
         )
         elapsed = time.monotonic() - t0
         pulso.cancel()

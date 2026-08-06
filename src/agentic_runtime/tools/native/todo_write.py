@@ -28,6 +28,9 @@ _TODO_SCHEMA = {
 
 class TodoWriteTool:
     name = TODO_WRITE_TOOL_NAME
+    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "manage the session task checklist"
     description = (
         "Create and manage a structured task checklist for the current session. "
         "Use to track progress on multi-step tasks."

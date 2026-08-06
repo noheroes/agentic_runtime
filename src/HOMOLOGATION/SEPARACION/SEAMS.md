@@ -514,6 +514,30 @@
   `09·E1` anticipaba. Lo que difiere `WebFetch`/`WebSearch` en el canónico es `shouldDefer` dentro de la precedencia de
   `isDeferredTool` (`prompt.ts:62`) = `GAP-TOOL3`/`09·TiR5`, **no implementada** ⇒ `E2e` **configura** el runtime como
   el canónico lo configura y lo declara en su cabecera, en vez de fingir que el sujeto ya existía.
+  **CORRECCIÓN DE TAMAÑO (2026-08-03, `GAP-TOOL4`):** este renglón decía «`WebFetch`/`WebSearch`» y **se quedaba corto por
+  un factor de 7**. El censo real de `shouldDefer: true` en A son **25 directorios** de `claude-code/src/tools` — el conteo
+  previo filtraba `--include=*.ts` y perdía los `.tsx` (`AskUserQuestionTool.tsx:113`, `TaskOutputTool.tsx:148`). Cruzado
+  contra el censo de 25 de B: **difieren en A y B no difiere ninguna (15)** = `AskUserQuestion`, `Config`, `EnterPlanMode`,
+  `ExitPlanMode`, `EnterWorktree`, `ExitWorktree`, `TaskCreate`, `TaskGet`, `TaskList`, `TaskOutput`, `TaskStop`,
+  `TaskUpdate`, `TodoWrite`, `WebFetch`, `WebSearch`; **no difieren en A (10)** = `Agent`, `bash`, `glob`, `grep`,
+  `read_file`, `write_file`, `Edit`, `Sleep`, `clone_repository`, `ToolSearch`. **El reparto de A no es arbitrario: lo que
+  NO difiere es exactamente el núcleo de exploración de ficheros que el modelo necesita en el turno 1.** `GAP-TOOL3` (la
+  *precedencia* de `isDeferredTool`) y `GAP-TOOL4` (los 15 `shouldDefer` que faltan) son deudas DISTINTAS: implementar la
+  precedencia no pone ni una sola nativa a diferir.
+- **✅ la rama nativa es GENUINA — medido contra el proveedor, no razonado (2026-08-03):** la duda era si `defer_loading` es
+  nativo de gpt-5.4 o una implementación para modelos que no lo soportan. Sonda en vivo contra Azure `gpt-5.4-mini` con el
+  SDK crudo (sin `agentic_runtime` ni el parser de `agentic_models` en medio), 3 brazos × 8 rondas = **24/24 sin variación**:
+  con flag + `{"type":"tool_search","execution":"server"}` → **8/8** items `tool_search_call`+`tool_search_output`
+  server-side antes del `function_call`; sin flag → **8/8** cero búsquedas; con flag y **sin** la tool de búsqueda → **8/8**
+  `400 Invalid Value: 'tools.defer_loading'. Deferred tools require tools.tool_search.` **El proveedor NOMBRA la feature en
+  su propio error** ⇒ la valida, no la ignora. `native_tool_search` (`generate_catalog.py:237-241`) es cierta en los hechos y
+  `openai_responses_shared.py:231-232` es portante. **No aplica sólo a MCP:** la sonda usó tools `function` corrientes.
+  **Mecánica exacta:** `tool_search_call.arguments = {"paths":[...]}` ⇒ **el modelo ve los NOMBRES de las diferidas y pide
+  por nombre**; `tool_search_output.tools` devuelve los schemas completos. No es query semántica del servidor.
+- **⚠ `L09` en `agentic_models`:** cero consumidores de `tool_search_call` en producción; el único test que lo cubre
+  (`test_provider_roundtrip_openai_responses.py:132-150`) corre contra un **SSE local cuyo guion escribe el propio test** ⇒
+  acreditaba que el parser los ignora, y **nada** sobre si el proveedor los emite. Ahora se sabe por medición que sí los
+  emite y que ignorarlos es correcto (son infraestructura) — pero eso lo acreditaba un fake, no el proveedor.
 - **acreditación del censo (2026-08-01):** `E2c`×2 congela el censo **en literal** —25 tools en **18 módulos**— y lo asevera contra
   `create_tools()`; el anuncio se prueba en **sus dos ramas** (24 siempre · `ToolSearch` **sii** hay una diferida en el pool, tal como
   `deferred_strategy.py:64-66` espeja al canónico; esta rama puso el test ROJO en su primera corrida y la aserción equivocada era la
