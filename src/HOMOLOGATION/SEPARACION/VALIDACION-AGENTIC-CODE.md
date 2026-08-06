@@ -40,7 +40,7 @@ Producido por el usuario ejercitando `agentic_code` contra el runtime. **Este es
 
 | # | Problema | Clase | Estado |
 |---|---|---|---|
-| 1 | `run_shell` sin `cwd` | defecto de **CONTRATO** | ⛔ abierto — **el primero a pagar** |
+| 1 | `run_shell` sin `cwd` | defecto de **CONTRATO** | ✅ **PAGADO** (11ª ventana) — 6 inyecciones rojas, `preventCwdChanges` incluido |
 | 2 | Fallback de `BashTool` (`TRAMO-1.md:183`) | conducta | ⛔ abierto |
 | 3 | Remediación de `FIND-TS-1` / `TS-3` / `TS-4` | deuda ya declarada | ⛔ abierto |
 | 4 | `GAP-TOOL4` | deuda ya declarada | ⛔ abierto |
@@ -54,6 +54,27 @@ Producido por el usuario ejercitando `agentic_code` contra el runtime. **Este es
 **Detalle del #5** — las 15 descripciones que no están homologadas contra el canónico:
 `Agent` (16.6 KB en A), `TodoWrite` (9.5 KB), `EnterPlanMode` (7.7 KB), `Config`, `ExitPlanMode`,
 los 6 `Task*`, los 2 `Worktree*`, `clone_repository`.
+
+**Detalle del #1 — remediación desarrollada (`L05`, seis campos).** Medido en consumidor: con el
+workspace en `/tmp/repro-cwd-…/workspace`, `bash pwd` devolvió `/home/noheroes/python/agentic_code`
+(el cwd del PROCESO) con `is_error=False`. Es `FIND-C6-1` una capa más arriba: se autoriza una cosa
+—`read_file`/`write_file` confinados, prompt declarando el workspace «autoritativo»— y se ejecuta en
+otra. **Corrección al corpus (`D-08`, leído `Shell.ts` 1→EOF):** `FIND-TOOL8` / `09·F2:155` /
+`10·B2:112` afirman que A mantiene *un shell vivo*; A **spawnea un shell nuevo por comando**
+(`Shell.ts:179`). El env persiste por el snapshot sourceado y el cwd por la relectura de un fichero
+temporal — no por un proceso vivo.
+
+| Campo | Contenido |
+|---|---|
+| **Comportamiento** | El comando corre en el cwd que el integrador declaró, no en el del proceso host; un `cd` persiste **entre comandos del turno** vía relectura de `pwd -P` (A: `bashProvider.ts:186`, `Shell.ts:385-421`), y si el cwd desapareció se recupera al workspace o se falla con mensaje (A: `Shell.ts:220-238`). |
+| **Seam** | `ToolExecEnvironment` (`ctx.exec_env`) + un cable nuevo `ctx.cwd`. **No** se compone estado en el runtime: `ctx.cwd` es cable, y la persistencia ENTRE TURNOS es del integrador por `root_context_modifier` (`_open_session` da `Session` fresca por turno, `S20`). |
+| **Firma** | `run_shell(command, *, cwd: str \| None = None, timeout: float)` — simetría con `run_argv`; `ShellResult` gana `cwd: str \| None = None` (`None` = el backend no lo rastrea). |
+| **Cableado** | `BashTool.execute` resuelve `ctx.cwd or str(ctx.fs.write_root)`, aplica la recuperación de A, pasa `cwd=` y **escribe de vuelta** `ShellResult.cwd` en `ctx.cwd` (el dispatcher entrega el ctx VIVO, `dispatcher.py:79`). `agentic_code` cablea el workspace en `composition.py`. |
+| **Orden** | Contrato (`exec_env`) → cable (`tool_use`) → tool (`bash`) → integrador (`composition`) → detector. |
+| **Prueba** | Detector en `agentic_code` que nace ROJO: `bash pwd` == workspace declarado, con el proceso corriendo FUERA de él. Más el par host/sandbox en la suite del runtime. |
+| **Acreditación** | 6 inyecciones, 6 rojas y cada una donde tocaba: `INY-45` `BashTool` no pasa `cwd` (2 rojas) · `INY-46` el spawn ignora `cwd=` (2) · `INY-47` sin escritura de vuelta (1, sólo la del `cd`) · `INY-48` el integrador no transporta (1, sólo la de entre-turnos) · `INY-49` sin `eval` (1, sólo la de precedencia) · `INY-50` el escape `!` no publica su `cd` (1). Además el xfail `test_bash_persistent_shell` se puso ROJO por **XPASS(strict)** al pagar la deuda —la señal funcionando— y se reescribió a conducta. |
+| **Efecto lateral pagado, no declarado** | Hacer persistir el `cwd` activó `preventCwdChanges` (B11): A gatea la escritura para no-main-thread, y sin esa guarda el arreglo habría abierto un agujero que el canónico cierra. Implementado (`ctx.is_subagent`) y con test propio. |
+| **Carencia declarada** | `BwrapExecEnvironment` honra el `cwd` pero **no lo rastrea** (`ShellResult.cwd=None`): el fichero temporal del host no existe dentro del sandbox y el `pwd` de dentro es un path INTERNO (`/workspace/…`) que no es asignable a `ctx.cwd`. Bajo bwrap un `cd` no persiste entre comandos. Declarado, no oculto. |
 
 **Detalle del #10** — es el que engancha con el barrido: el runtime **no emite el plan de tools del
 turno**. `TurnToolPlan` (`deferred_strategy.py:34-39`) es interno, no viaja al stream público, y lo
@@ -78,6 +99,7 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 | `FIND-SKILL9/17` | Reclasificado: al modelo **no le llega ningún listado de skills**, por ninguna de las **dos** vías de A (description de `Skill` + attachment `skill_listing` incremental) | ⛔ abierto — **primero de la pata de skills** |
 | `FIND-SKILL-20` | El frontmatter PISA la identidad de la skill (A: siempre el nombre del directorio) | ⛔ abierto |
 | `FIND-SKILL-21` | Sin dimensión de fuente ni precedencia; `last-wins` donde A tiene `first-wins` por identidad de fichero real | ⛔ abierto |
+| `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0` en todo `ToolResultEvent` medido. El `result` sí viaja. Con `seq`/`ts` a cero no se puede ordenar ni fechar una traza, y sin `task_id`/`agent_id` no se puede separar lo del agente de lo de un subagente — el paso 4 del método queda cojo justo donde más falta hace. Entra con el **#10** | ⛔ abierto — **NUEVO, 11ª ventana** |
 | `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ⛔ abierto |
 
 **Dos `H-L4` a saldar al pagar lo anterior** — suites que acreditan la divergencia en vez de

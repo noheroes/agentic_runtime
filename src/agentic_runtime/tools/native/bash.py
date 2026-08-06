@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from ..exec_env import LocalExecEnvironment
@@ -69,11 +70,61 @@ the workspace, return structured results, and are easier to review.
     safe_for_background = True
     timeout_seconds = 30.0
 
+    @staticmethod
+    def _workspace_root(ctx: ToolUseContext) -> str | None:
+        """Raíz declarada por el integrador — el análogo de `getOriginalCwd()` de A.
+
+        Es el `write_root` del confinamiento y no una constante: el workspace al que ya
+        están confinadas `read_file`/`write_file`. Que `bash` corriera en otro sitio es
+        justo el defecto #1.
+        """
+        root = getattr(getattr(ctx, "fs", None), "write_root", None)
+        return str(root) if root is not None else None
+
+    def _resolve_cwd(self, ctx: ToolUseContext) -> tuple[str | None, str | None]:
+        """`(cwd, error)` — recuperación calcada de `Shell.ts:220-238`.
+
+        Si el cwd vigente desapareció del disco (un comando puede borrar su propio
+        directorio), A **no** deja que el spawn reviente: cae al cwd original y, si ese
+        tampoco existe, falla con un mensaje accionable en vez de con un errno.
+        """
+        fallback = self._workspace_root(ctx)
+        cwd = getattr(ctx, "cwd", None) or fallback
+        if cwd is None:
+            return None, None  # sin workspace declarado: comportamiento previo (cwd del proceso)
+        if os.path.isdir(cwd):
+            return cwd, None
+        if fallback is not None and fallback != cwd and os.path.isdir(fallback):
+            return fallback, None
+        return None, (
+            f'Working directory "{cwd}" no longer exists. '
+            "Please restart from an existing directory."
+        )
+
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         command = input.get("command", "")
         exec_env = getattr(ctx, "exec_env", None) or LocalExecEnvironment()
+        cwd, cwd_error = self._resolve_cwd(ctx)
+        if cwd_error is not None:
+            return ToolResult.error(self.name, cwd_error)
         try:
-            result = await exec_env.run_shell(command, timeout=self.timeout_seconds)
+            result = await exec_env.run_shell(command, cwd=cwd, timeout=self.timeout_seconds)
+            # Escritura de vuelta del cwd releído (A: `setCwd(newCwd)`, `Shell.ts:385-421`):
+            # así un `cd` persiste entre comandos DEL TURNO. `None` = el backend no lo
+            # rastrea (bwrap) y entonces no se toca nada: adoptar un path no verificado
+            # sería peor que no persistir.
+            tracked = getattr(result, "cwd", None)
+            # `preventCwdChanges = !isMainThread` (`Shell.ts:385`, ítem B11 de `10-tools-native`):
+            # A gatea justo esta escritura para los no-main-thread. Un subagente puede hacer
+            # `cd` dentro de SU comando, pero no mover el cwd que comparte con quien lo lanzó.
+            # Sin esta guarda, hacer persistir el cwd habría abierto un agujero que A cierra.
+            if getattr(ctx, "is_subagent", False):
+                tracked = None
+            if tracked:
+                try:
+                    ctx.cwd = tracked
+                except (AttributeError, ValueError):
+                    pass  # ctx sin el cable (fake de test): el comando ya corrió, no se rompe
             return ToolResult(
                 tool_name=self.name,
                 output=result.output,

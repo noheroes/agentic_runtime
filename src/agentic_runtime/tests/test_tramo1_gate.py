@@ -1138,7 +1138,7 @@ async def test_e7e_worktree_goes_through_the_seams_instead_of_around_them(tmp_pa
         def __init__(self) -> None:
             self._inner = LocalExecEnvironment()
 
-        async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
+        async def run_shell(self, command: str, *, cwd: str | None = None, timeout: float) -> ShellResult:
             raise AssertionError("worktree no debe pasar por `sh -c`: el nombre viene del modelo")
 
         async def run_argv(self, argv, *, cwd=None, timeout: float) -> ShellResult:
@@ -1187,7 +1187,7 @@ async def test_e7b_bash_goes_through_the_injected_exec_env_not_the_host(tmp_path
     seen: list[str] = []
 
     class _FakeExecEnv:
-        async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
+        async def run_shell(self, command: str, *, cwd: str | None = None, timeout: float) -> ShellResult:
             seen.append(command)
             return ShellResult(output=token, returncode=0)
 
@@ -1605,7 +1605,7 @@ async def test_e7f_no_native_tool_escapes_the_exec_or_network_seam(tmp_path, mon
     class _SpyExecEnv:
         """No delega: el barrido mide POR DÓNDE sale, no qué devuelve."""
 
-        async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
+        async def run_shell(self, command: str, *, cwd: str | None = None, timeout: float) -> ShellResult:
             seen_argv.append(["sh", "-c", command])
             return ShellResult(output="", returncode=0)
 

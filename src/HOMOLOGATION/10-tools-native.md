@@ -109,7 +109,7 @@ output". **Es incorrecto**: el loop SÍ aplica `context_modifier` y `ends_turn` 
 | # | Feature canónica (`BashTool.tsx`) | Estado | Nota |
 |---|---|---|---|
 | B1 | Schema: `command` + **`timeout`** (semanticNumber, max configurable) + **`run_in_background`** (semanticBoolean) + `description` | 🟡 | Runtime `bash.py`: **sólo `command`**. Sin `timeout` por-input (usa `timeout_seconds=30` de clase, envuelto por el dispatcher 09·D5), sin `run_in_background`, sin `description`. |
-| B2 | **Shell persistente** (`exec(command, signal, 'bash', …)` vía `utils/Shell.ts`, UN shell vivo: `cwd`/env persisten entre llamadas) | ❌ | **FIND-TOOL8 aterriza CONFIRMADO.** `bash.py` → `ctx.exec_env.run_shell` → `LocalExecEnvironment` = `create_subprocess_shell` **fresco cada vez** (09·F2). Un `cd`/`export` en una llamada NO afecta a la siguiente. Divergencia de comportamiento observable. Ajuste ARQUITECTURAL: backend con shell persistente (seam `ToolExecEnvironment` ya existe, falta la impl viva). |
+| B2 | **cwd persistente entre comandos** (`exec()` vía `utils/Shell.ts`) | 🟡 | **PREMISA CORREGIDA (`D-08`).** La fila decía «UN shell vivo»; A **crea un shell nuevo por comando** (`Shell.ts:179`) y hace persistir el cwd releyendo `pwd -P >| <tmp>` y reinyectándolo. El «fresco cada vez» de B nunca fue la divergencia. **`cd` PAGADO** (problema #1): `run_shell(cwd=…)` + `ShellResult.cwd` + cable `ctx.cwd` + escritura de vuelta en `BashTool`; entre TURNOS lo transporta el integrador. **Sigue abierto** el `export`/alias, que en A viene del snapshot de arranque sourceado, no de un proceso vivo. |
 | B3 | **Background tasks**: `run_in_background`→`backgroundTaskId`, auto-backgrounding en timeout, `ASSISTANT_BLOCKING_BUDGET_MS` (15s), Kairos force-async, sugerencia de `Monitor`/`sleep`-bloqueante, output a `getTaskOutputPath` | ❌ | Runtime `bash.py`: bloqueante puro, sin background, sin auto-bg, sin task-id. `ShellResult` no tiene dónde colgar un `backgroundTaskId` (09·F4). Liga 05·EXEC9/10 (promoción fg→bg, force-async kairos) y `Monitor`/`Sleep` (no portados). |
 | B4 | `isConcurrencySafe(input)=isReadOnly(input)`, `isReadOnly`=`checkReadOnlyConstraints`, `checkPermissions`=`bashToolHasPermission` (la torre `bashPermissions`/`bashSecurity`/`readOnlyValidation`, ~9K LOC) | ❌ | Runtime: `requires_permission=True` grueso; sin readonly-derivation ni la torre de seguridad. **GAP-02** (parseo AST del comando, prefix-rules, wildcard, compound-command splitting). El runtime confía todo al gate deny-por-nombre + `ctx.exec_env` (bwrap). Divergencia mayor de seguridad, delegada al integrador. |
 | B5 | `maxResultSizeChars` 30K (persist a disco), `outputSchema` (stdout/stderr/`returnCodeInterpretation`/`backgroundTaskId`), `interpretCommandResult`, image-output, sed-in-place-edit render, git-op tracking (`trackGitOperations`) | 🔀 | Runtime: `ShellResult` combina stdout+stderr, sólo `returncode` (09·F4); sin persistencia, sin interpretación, sin git-tracking (`gitOperationTracking.ts` declarado 05/10, no portado). `is_error = returncode != 0`. |
@@ -659,25 +659,24 @@ El resto es independiente. Orden sugerido: **R0 → R1 → {R2,R3,R4,R5,R6} → 
   no perder el cabo.
 - **Test**: — (sin xfail; se añadiría al implementar).
 
-## R8 · FIND-NATIVE-BASH = FIND-TOOL8 — shell persistente
+## R8 · FIND-NATIVE-BASH = FIND-TOOL8 — cwd persistente ✅ PAGADO (con la prescripción corregida)
 
-- **Comportamiento**: `cd`/`export` persisten entre llamadas `bash` de la MISMA sesión (homólogo del
-  único `exec`/`Shell.ts` vivo del canónico). `preventCwdChanges` para subagentes (B11): un worker no
-  mueve el cwd del shell compartido.
-- **Seam**: `tools/exec_env.py`. El `ToolExecEnvironment` (Protocol `run_shell`) ya existe; falta una
-  **impl viva**: `PersistentShellExecEnvironment` que mantiene UN subproceso `bash` de larga vida y por
-  cada `run_shell` escribe `command; printf "\n<sentinel>$?\n"` al stdin, lee stdout hasta el centinela y
-  parsea el rc. `cwd`/env viven en ESE shell → persisten. Ciclo de vida (`aclose()`) para reaping (liga
-  05·EXEC11).
-- **Firma**: `class PersistentShellExecEnvironment: async def run_shell(command, *, timeout) -> ShellResult`
-  (misma firma; intercambiable con `LocalExecEnvironment`). Estado interno: el proceso + un lock async
-  (serializa comandos sobre el shell compartido).
-- **Cableado**: el default de `ToolUseContext.exec_env` pasa a ser una instancia **por-ctx** de
-  `PersistentShellExecEnvironment` (hoy `bash.py` cae a `LocalExecEnvironment()` fresco por llamada —
-  ese es exactamente el bug). Como el test corre dos `bash` sobre el MISMO `ctx`, la persistencia debe
-  colgar de `ctx.exec_env`. `preventCwdChanges = ctx.is_subagent` (B11): si subagente, rechazar/neutralizar `cd`.
-- **Orden**: tras el bloque fs; prerrequisito de B9/B11.
-- **Test**: `test_bash_persistent_shell` (`cd tmp` luego `pwd` → `tmp` en output).
+> **Esta remediación estaba MAL prescrita** y se reescribe (`D-08`, `Shell.ts` leído 1→EOF). Pedía un
+> `PersistentShellExecEnvironment` con UN `bash` vivo y un centinela por comando — porque daba por
+> hecho que A mantiene un shell vivo. **A no lo mantiene**: crea un shell nuevo por comando
+> (`Shell.ts:179`). Implementar aquel diseño habría sido divergir del canónico *añadiendo* un proceso
+> de larga vida que A no tiene, con su lock, su reaping y su superficie de fallo.
+
+- **Comportamiento**: el cwd persiste entre llamadas `bash` del turno; el estado de shell NO (igual que
+  en A y que su propia descripción de tool). `preventCwdChanges` para subagentes (B11): un subagente
+  hace `cd` dentro de su comando pero no mueve el cwd compartido.
+- **Seam**: `tools/exec_env.py` (contrato) + `ctx.cwd` (cable) — sin proceso de larga vida.
+- **Firma**: `run_shell(command, *, cwd: str | None = None, timeout: float)`; `ShellResult.cwd`.
+- **Cableado**: `LocalExecEnvironment` spawnea con `cwd=` y arma `eval <cmd> && pwd -P >| <tmp>`;
+  `BashTool` resuelve `ctx.cwd or ctx.fs.write_root`, recupera si el directorio desapareció, y escribe
+  de vuelta `ShellResult.cwd` salvo `ctx.is_subagent` (B11). Entre TURNOS lo transporta el integrador.
+- **Test**: `test_bash_persistent_cwd`, `test_a_subagent_cannot_move_the_shared_cwd`, el bloque de
+  `test_exec_env.py` y los detectores de consumidor en `agentic_code`.
 
 ## R9 · B12 — `interpretCommandResult` (exit-codes semánticos) + schema Bash (B1)
 

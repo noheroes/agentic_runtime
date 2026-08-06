@@ -13,24 +13,59 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
+import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
+def _read_tracked_cwd(path: str | None) -> str | None:
+    """Relee el cwd que el propio shell escribió; `None` si no lo escribió."""
+    if path is None:
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            tracked = handle.read().strip()
+    except OSError:
+        return None
+    return tracked or None
+
+
 @dataclass
 class ShellResult:
-    """Salida de un comando shell: stdout+stderr combinados y código de retorno."""
+    """Salida de un comando shell: stdout+stderr combinados y código de retorno.
+
+    `cwd` es el directorio de trabajo **con el que terminó** el comando, releído del
+    propio shell (A: `pwd -P >| <tmp>`, `bashProvider.ts:186`), no supuesto. `None` =
+    el backend no lo rastrea, y entonces el llamante NO debe actualizar su estado.
+    """
 
     output: str
     returncode: int
+    cwd: str | None = None
 
 
 @runtime_checkable
 class ToolExecEnvironment(Protocol):
     """Ejecuta un comando shell en algún entorno (host / sandbox / remoto)."""
 
-    async def run_shell(self, command: str, *, timeout: float) -> ShellResult: ...
+    async def run_shell(
+        self, command: str, *, cwd: str | None = None, timeout: float
+    ) -> ShellResult:
+        """Ejecuta un comando de shell, opcionalmente en `cwd`.
+
+        **`cwd` es defecto de CONTRATO saldado** (problema #1 del listado de
+        `VALIDACION-AGENTIC-CODE.md`): sin él, el comando heredaba el cwd del PROCESO
+        host mientras el integrador confinaba `read_file`/`write_file` a un workspace
+        distinto y se lo declaraba al modelo como autoritativo. Autorizar una cosa y
+        ejecutar otra es exactamente el modo de fallo de `FIND-C6-1`.
+
+        `None` = «no lo fijes», que preserva el comportamiento previo para todo llamante
+        que aún no lo pase; el cwd efectivo lo decide `BashTool`, no este backend.
+        """
+        ...
 
     async def run_argv(
         self, argv: list[str], *, cwd: str | None = None, timeout: float
@@ -53,17 +88,42 @@ class ToolExecEnvironment(Protocol):
 class LocalExecEnvironment:
     """Default: corre el comando como subproceso del host, in-process."""
 
-    async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return ShellResult(
-            output=stdout.decode(errors="replace"),
-            returncode=proc.returncode if proc.returncode is not None else -1,
-        )
+    async def run_shell(
+        self, command: str, *, cwd: str | None = None, timeout: float
+    ) -> ShellResult:
+        # Rastreo del cwd calcado de A (`bashProvider.ts:180-186`): `eval <comando> &&
+        # pwd -P >| <tmp>`. Los dos detalles son portantes:
+        #   · `eval` con el comando ENTERO citado — sin él, `&& pwd` se ata sólo al
+        #     último tramo de un `a; b` o `a || b` y el rastreo mentiría.
+        #   · `&&` — si el comando falla NO se escribe nada, así que el llamante
+        #     conserva el cwd anterior en vez de adoptar uno a medias. El código de
+        #     salida sigue siendo el del comando, porque `&&` cortocircuita.
+        # `pwd -P` (físico) por consistencia con lo que ve el proceso, igual que A.
+        track_path: str | None = None
+        command_string = command
+        if cwd is not None:
+            fd, track_path = tempfile.mkstemp(prefix="agentic-cwd-")
+            os.close(fd)
+            command_string = (
+                f"eval {shlex.quote(command)} && pwd -P >| {shlex.quote(track_path)}"
+            )
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command_string,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return ShellResult(
+                output=stdout.decode(errors="replace"),
+                returncode=proc.returncode if proc.returncode is not None else -1,
+                cwd=_read_tracked_cwd(track_path),
+            )
+        finally:
+            if track_path is not None:
+                with suppress(OSError):
+                    os.unlink(track_path)
 
     async def run_argv(
         self, argv: list[str], *, cwd: str | None = None, timeout: float
@@ -116,8 +176,8 @@ class BwrapExecEnvironment:
         ]
         return argv
 
-    def _build_argv(self, command: str) -> list[str]:
-        return self._sandbox_prefix("/workspace") + ["/bin/sh", "-c", command]
+    def _build_argv(self, command: str, cwd: str | None = None) -> list[str]:
+        return self._sandbox_prefix(self._inner_cwd(cwd)) + ["/bin/sh", "-c", command]
 
     def _inner_cwd(self, cwd: str | None) -> str:
         """Traduce un `cwd` del HOST al path que ese directorio tiene DENTRO del sandbox.
@@ -139,8 +199,19 @@ class BwrapExecEnvironment:
             "no hay forma de honrarlo dentro del sandbox"
         )
 
-    async def run_shell(self, command: str, *, timeout: float) -> ShellResult:
-        return await self._spawn(self._build_argv(command), timeout)
+    async def run_shell(
+        self, command: str, *, cwd: str | None = None, timeout: float
+    ) -> ShellResult:
+        """Honra `cwd` traduciéndolo al path de DENTRO del sandbox (`_inner_cwd`).
+
+        **Carencia declarada:** no rastrea el cwd de salida (`ShellResult.cwd` = `None`),
+        así que bajo bwrap un `cd` no persiste entre comandos. Dos razones materiales, no
+        pereza: el fichero temporal del host no existe dentro del sandbox, y el `pwd` de
+        dentro es un path INTERNO (`/workspace/…`) que no es asignable a un `ctx.cwd` del
+        host sin traducción inversa. Declararlo es preferible a devolver un path que el
+        llamante adoptaría como si fuera del host.
+        """
+        return await self._spawn(self._build_argv(command, cwd), timeout)
 
     async def run_argv(
         self, argv: list[str], *, cwd: str | None = None, timeout: float

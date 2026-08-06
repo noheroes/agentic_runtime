@@ -294,12 +294,21 @@ def test_task_update_transitions_status_observably(tmp_path):
     assert json.loads(leida.output)["status"] == "completed", leida.output
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-NATIVE-BASH=FIND-TOOL8/F2: bash sin shell persistente — cd no persiste entre llamadas")
-def test_bash_persistent_shell(tmp_path):
-    ctx = _ctx()
-    await_(BashTool().execute({"command": f"cd {tmp_path}"}, ctx))
+def test_bash_persistent_cwd(tmp_path):
+    """`FIND-TOOL8`/`F2` PAGADO, y con la premisa corregida (`D-08`).
+
+    El xfail que vivía aquí decía «bash sin shell persistente». A **tampoco** tiene shell
+    persistente —spawnea uno nuevo por comando (`Shell.ts:179`)—: lo que persiste es el
+    **cwd**, releído con `pwd -P >| <tmp>` (`bashProvider.ts:186`) y reinyectado en el
+    spawn siguiente. Eso es lo que se homologó; el estado de shell sigue sin persistir,
+    igual que en A y como su propia descripción de tool declara.
+    """
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    ctx = _ctx(tmp_path)
+    await_(BashTool().execute({"command": "cd sub"}, ctx))
     r = await_(BashTool().execute({"command": "pwd"}, ctx))
-    assert str(tmp_path) in r.output
+    assert str(sub.resolve()) in r.output, r.output
 
 
 def test_read_adds_line_numbers(tmp_path):

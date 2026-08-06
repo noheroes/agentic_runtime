@@ -82,6 +82,15 @@ class ToolUseContext(BaseModel):
     presentation: Any = Field(default_factory=_default_presentation)
     exec_env: Any = None
     fs: Any = Field(default_factory=_default_fs)
+    # Directorio de trabajo de los comandos de shell. Es un CABLE, no estado compuesto
+    # por el runtime (`D-11`): `None` = el integrador no lo declaró, y entonces `BashTool`
+    # cae al `write_root` del confinamiento en vez de heredar el cwd del PROCESO host
+    # —que era el defecto de contrato #1—. A lo lleva en estado de sesión (`pwd()` /
+    # `getCwdState()`, `cwd.ts`); aquí viaja por turno y `BashTool` lo reescribe con el
+    # `pwd -P` releído, de modo que un `cd` persiste ENTRE COMANDOS DEL TURNO. La
+    # persistencia ENTRE TURNOS es del integrador (`root_context_modifier`): el runtime
+    # abre `Session` fresca por turno (`S20`) y no compone identidad ni sesión.
+    cwd: str | None = None
     # Seam de credenciales git (clone_repository): el integrador lo cablea al token del
     # MCP per-tenant. None → clones sin auth (repos públicos). GitCredentialProvider.
     git_credentials: Any = None
