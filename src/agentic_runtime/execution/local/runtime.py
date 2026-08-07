@@ -166,6 +166,18 @@ class LocalAgentRuntime:
         if self._capability_manager is not None:
             await self._capability_manager.shutdown()
 
+    @property
+    def capabilities(self) -> Any:
+        """`CapabilityManager` del despliegue (o `None`) — lectura, no mutación.
+
+        Quien integra tiene que poder RENDIR el estado de lo que compuso: qué servers MCP
+        conectaron y cuáles fallaron es información del usuario, no del runtime (en A vive
+        en `/mcp`). Sin este accessor el integrador sólo podía llegar por
+        `runtime._capability_manager`, o sea rompiendo el encapsulado del núcleo para
+        cumplir una responsabilidad que es suya. La costura es genérica: devuelve el
+        manager, no MCP."""
+        return self._capability_manager
+
     # ------------------------------------------------------------------
     # AgentRuntime
     # ------------------------------------------------------------------

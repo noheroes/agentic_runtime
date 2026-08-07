@@ -4,6 +4,8 @@ Foco: connect/discover/call/aclose, estado de conexión (pending/failed/connecte
 aislamiento por ítem (un server caído no tumba al resto) y mapeo de isError.
 El transporte se inyecta vía `client_factory` (cliente fake) — sin server real.
 """
+from types import SimpleNamespace
+
 import httpx
 import mcp
 import mcp.client.streamable_http as _shttp
@@ -213,6 +215,92 @@ async def test_streamable_http_defaults_timeout_above_httpx_5s(monkeypatch):
     # sin config explícita, debe usar el default operativo del provider (30s), nunca
     # quedarse con el default de httpx (5s) que regresa el bug.
     assert captured["timeout"] == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Grafía del SDK: los modelos de `mcp.types` son pydantic con alias camelCase, y cuál de
+# las dos grafías es el ATRIBUTO de Python cambió entre 1.x (`inputSchema`) y 2.x
+# (`input_schema`). El runtime declara `mcp>=1.26.0`, así que las dos están soportadas.
+# Detectado por el consumidor real (`D-15`): `agentic_code` resolvió 2.0.0 y ahí el
+# runtime degradaba EN SILENCIO. Esta suite corre con 1.27.2 y estaba verde y ciega, así
+# que lo que se fija aquí no es «la versión X», es que la LECTURA sea por lista.
+# ---------------------------------------------------------------------------
+
+
+class _SessionWith:
+    """Sesión MCP fake que devuelve los objetos tal cual se le den (sin transporte)."""
+
+    def __init__(self, *, tools=(), resources=(), call_result=None) -> None:
+        self._tools = list(tools)
+        self._resources = list(resources)
+        self._call_result = call_result
+
+    async def list_tools(self):
+        return SimpleNamespace(tools=self._tools)
+
+    async def list_resources(self):
+        return SimpleNamespace(resources=self._resources)
+
+    async def call_tool(self, name, arguments):
+        return self._call_result
+
+
+def _client_with(session) -> McpClient:
+    client = McpClient(McpServerConfig(name="s", command="run"))
+    client._session = session
+    return client
+
+
+@pytest.mark.parametrize("field", ["inputSchema", "input_schema"])
+async def test_the_tool_schema_survives_either_sdk_spelling(field):
+    """Sin esto el modelo recibe la tool SIN parámetros y no puede invocarla bien.
+
+    Medido contra un server real bajo SDK 2.x: las tres tools llegaban con `{}`.
+    """
+    schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+    tool = SimpleNamespace(name="echo", description="d", annotations=None, **{field: schema})
+
+    specs = await _client_with(_SessionWith(tools=[tool])).list_tools()
+
+    assert specs[0]["inputSchema"] == schema, specs
+
+
+async def test_a_failing_tool_is_not_delivered_to_the_model_as_a_correct_answer():
+    """`isError` con la grafía nueva: el fallo del server llegaba en el hueco del ÉXITO."""
+    result = SimpleNamespace(
+        content=[SimpleNamespace(text="el server rechaza 'x'")], is_error=True
+    )
+
+    with pytest.raises(McpToolError):
+        await _client_with(_SessionWith(call_result=result)).call("always_fails", {})
+
+
+@pytest.mark.parametrize("field", ["mimeType", "mime_type"])
+async def test_the_resource_mime_type_survives_either_sdk_spelling(field):
+    resource = SimpleNamespace(uri="mcp://r", name="r", description="", **{field: "text/plain"})
+
+    resources = await _client_with(_SessionWith(resources=[resource])).list_resources()
+
+    assert resources[0]["mimeType"] == "text/plain", resources
+
+
+async def test_the_server_meta_reaches_the_adapter_so_the_search_hint_is_not_dead():
+    """`searchHint` era un cable MUERTO: el adapter lo leía y el client no lo ponía nunca.
+
+    Ningún test lo veía porque todos fabrican el spec a mano. Es la única pista curada de
+    una tool MCP y puntúa +4 en ToolSearch — para una tool DIFERIDA, la diferencia entre
+    que el modelo la encuentre por keyword o no la encuentre (`services/mcp/client.ts:1778-1784`).
+    """
+    tool = SimpleNamespace(
+        name="echo", description="d", annotations=None, input_schema={},
+        meta={"searchHint": "shout text loudly"},
+    )
+
+    specs = await _client_with(_SessionWith(tools=[tool])).list_tools()
+    adapted = build_mcp_tool(specs[0], _SessionWith().call_tool)
+
+    assert specs[0]["_meta"] == {"searchHint": "shout text loudly"}, specs
+    assert adapted is not None and adapted.search_hint == "shout text loudly"
 
 
 async def test_shutdown_closes_all_clients():

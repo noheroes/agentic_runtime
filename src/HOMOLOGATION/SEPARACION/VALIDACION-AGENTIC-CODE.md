@@ -155,6 +155,52 @@ generated MCP servers have been observed dumping 15-60KB of endpoint docs into t
 
 ---
 
+## 2 bis · El cable MCP de `agentic_code` (15ª ventana) — pago del límite declarado del método
+
+La 14ª ventana cerró `FIND-DEFER-2` diciendo un límite y no disfrazándolo: **«no hay detector en
+`agentic_code` porque el integrador no tiene cableado MCP alguno»** (`:154`). Ese límite no es una nota
+al pie: mientras exista, toda la pata MCP sólo puede acreditarse con la suite propia del runtime, que
+es exactamente lo que `D-15` declara insuficiente. El encargo de esta ventana, fijado por el usuario
+antes del siguiente enunciado, fue cerrarlo.
+
+**Reparto dictado por el propio contrato del runtime, no por gusto.** `McpConfigStore` dice con todas
+las letras «el runtime define este contrato; el integrador provee la implementación»: el runtime trae
+precedencia por scope, exclusividad de `enterprise`, gate de mutabilidad, conexión y `reconcile()`;
+*de dónde salen* los servers es del integrador. Se respeta el encuadre vinculante — el núcleo se
+mantiene GENÉRICO y el integrador se adapta a él —: en `agentic_runtime` sólo entran dos cosas, y
+ninguna es MCP-específica de producto.
+
+| Campo | Contenido |
+|---|---|
+| **Comportamiento** | `agentic_code` produce los cuatro scopes de A: `project` (`.mcp.json` recorrido desde la RAÍZ hacia el cwd, el más cercano gana, `config.ts:917-955`) **filtrado por aprobación** (`config.ts:1167`), `user`, `local` (+ `disabledMcpServers`) y `enterprise` (`managed-mcp.json`, sólo lectura, `config.ts:705-709`). Variables expandidas como `envExpansion.ts:16-32`. El runtime conecta, publica las tools como DIFERIDAS y el modelo llega a ellas por `ToolSearch`. |
+| **Seam** | `CapabilitiesConfig(mcp_config_store=…)` en `composition.py` — la costura pública que ya existía y que nadie cableaba. Sin esa línea el `McpProvider` **ni se construye** (`factory.py:177`) y todo el MCP del runtime queda inalcanzable desde el producto: `cablear ≠ existir` (`L09`) en su forma más literal. |
+| **Firma** | Integrador: `agentic_code/mcp_config.py` (nuevo) — `build_mcp_config_store(settings, identity, *, approvals)`, `ProjectServerStore`, `JsonFileServerStore`, `ServerApprovals`, `expand_env_vars*`, `discover_project_files`. Runtime: **una** propiedad pública nueva, `LocalRuntime.capabilities` — devuelve el `CapabilityManager`, no MCP; genérica por construcción. |
+| **Cableado** | `cli.py` construye UN `ServerApprovals` y lo comparte entre el store y el REPL (si fueran dos objetos, aprobar en el REPL no cambiaría lo que el store lee). `repl.py` gana `/mcp`, `/mcp approve <n>`, `/mcp deny <n>`, que tras decidir llama a `provider.reconcile()`: el server se conecta **sin reiniciar**. El gate de aprobación no es un cable muerto: tiene superficie humana. |
+| **Orden** | contrato leído → sourcing del integrador (`mcp_config.py`) → cable (`composition.py`) → superficie (`cli.py`, `repl.py`) → accessor genérico en el runtime → detectores. |
+| **Prueba** | 6 detectores E2E con un server MCP **real** de terceros por stdio (`tests/_mcp_echo_server.py`, SDK `mcp` 2.0.0 instalado en el venv del integrador) + 9 tests de sourcing. Ninguno usa dobles del runtime. |
+| **Acreditación** | **13 inyecciones, 13 rojas, 0 falsos positivos.** Runtime `INY-73..76`; integrador `INY-77..85`: sin `capabilities=` en `composition` · gate de aprobación quitado · recorrido de `.mcp.json` invertido · `headers` sin expandir · `_apply_disabled` neutralizado · validación de nombre quitada · productor `PROJECT` quitado · `/mcp approve` sin `reconcile` · accessor del runtime quitado. Anunciadas ANTES de tocar fuente; revertidas desde copia propia verificada por `sha256 -c` en `mktemp -d`; jamás `git checkout`. |
+| **Lo que NO se cableó, dicho** | (a) El **watcher** de config (`mcp_config_watcher`): el runtime lo soporta, el integrador no lo pasa — hoy la reconciliación es explícita por `/mcp`, no por inotify. (b) Los handlers **OAuth** interactivos para servers remotos: sólo se cablearon stdio/HTTP sin flujo de autorización. Ninguna de las dos se disfraza de cableado. |
+
+### Cosecha del cable: tres defectos del RUNTIME que su propia suite no podía ver
+
+Este es el rendimiento de `D-15` y la razón de haberlo hecho antes del siguiente enunciado. Los tres se
+midieron **por conducta contra el server real, antes de escribir una línea de arreglo**.
+
+| ID | Hallazgo | Estado |
+|---|---|---|
+| `FIND-MCP-SDK-1` | El cliente lee los campos del SDK **por una sola grafía**. `mcp.types` genera alias camelCase, pero el atributo Python cambió de major: 1.x expone `inputSchema`/`isError`/`mimeType`, 2.x expone `input_schema`/`is_error`/`mime_type`. Con el SDK 2.x, **toda** tool MCP llegaba al modelo con `inputSchema` VACÍO: el modelo ve la tool y no puede llamarla con argumentos. La suite del runtime corría con 1.27.2 y estaba **verde y ciega** — sólo un consumidor con otro venv podía verlo | ✅ **PAGADO** — helper `_read(obj, *names)` tolerante a ambas grafías, aplicado a los tres campos |
+| `FIND-MCP-ERR-1` | Un resultado con `isError=True` se entregaba al modelo **como respuesta correcta**: `call` sólo miraba la grafía 1.x, así que bajo 2.x el fallo del server remoto se convertía en output válido. Es la familia de `L10` invertida: no es divergencia de forma, es un error silencioso que el modelo consume como dato bueno | ✅ **PAGADO** — `McpToolError`, con detector que exige el mensaje del PROPIO server, no un genérico |
+| `FIND-MCP-META-1` | El `_meta` del server **nunca salía del cliente**: el adaptador leía `searchHint` de un campo que el cliente no poblaba jamás. Cable muerto con las dos grafías del SDK, no un problema de versión — el `searchHint` que A usa para que `ToolSearch` encuentre la tool no existía en producción | ✅ **PAGADO** — `_meta` reenviado desde `list_tools` |
+
+**Error de método mío, dicho.** Dos detectores fallaron en la primera corrida y **uno de ellos venía
+pasando por la razón equivocada**: `dangerously_skip_permissions=True` en `Settings` no hace nada sin
+un `PermissionPolicy` —el bypass lo implementa la política—, así que toda tool MCP moría en el hook de
+permisos y el `"✗ always_fails"` que yo leía como «el server falló» era **permiso denegado**. Corregido
+el arnés (`permission_policy=` en el helper) y **reforzada** la aserción para exigir el texto del
+server. Un verde por el motivo equivocado es exactamente lo que `L03` llama ledger deshonesto.
+
+---
+
 ## 3 · Cosecha del barrido EOF (10ª ventana) — entra en la misma cola
 
 Hallazgos del barrido del canónico sobre las LISTAS de tools (nativas, MCP diferidas, skills). No los

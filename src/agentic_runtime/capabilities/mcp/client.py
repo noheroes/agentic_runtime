@@ -43,6 +43,25 @@ def _http_client_factory(ssl_verify: bool):
     return factory
 
 
+def _read(obj: Any, *names: str, default: Any = None) -> Any:
+    """Lee el PRIMER atributo presente de `names` — tolerante a la grafía del SDK.
+
+    Los modelos de `mcp.types` son pydantic con `alias_generator=to_camel`: el campo se
+    llama `input_schema` y su alias de protocolo `inputSchema`. Cuál de los dos es el
+    ATRIBUTO de Python ha cambiado entre versiones del SDK (1.x expone `inputSchema`;
+    2.x expone `input_schema`), y el runtime declara `mcp>=1.26.0`, o sea que ambas caen
+    dentro de lo soportado. Leer una sola grafía no rompe ruidosamente: degrada EN
+    SILENCIO —schema vacío, `isError` que se pierde— y por eso se lee por lista.
+    Detectado por el consumidor real (`D-15`): la suite del runtime corre con 1.27.2 y
+    estaba verde y ciega.
+    """
+    for name in names:
+        value = getattr(obj, name, None)
+        if value is not None:
+            return value
+    return default
+
+
 def _text_from_content(content: Any) -> str:
     """Extrae texto de los content blocks de un `CallToolResult`/`ReadResourceResult`.
 
@@ -149,8 +168,14 @@ class McpClient:
             {
                 "name": t.name,
                 "description": t.description or "",
-                "inputSchema": getattr(t, "inputSchema", None) or {},
+                "inputSchema": _read(t, "inputSchema", "input_schema", default={}) or {},
                 "annotations": _annotations_dict(t),
+                # `_meta` del server: es de donde `build_mcp_tool` saca el `searchHint`
+                # (`services/mcp/client.ts:1778-1784`), la única pista curada de una tool
+                # MCP y +4 en el ranking de ToolSearch. El adapter llevaba leyéndolo desde
+                # que existe, pero NADIE se lo ponía en el spec: el cable estaba muerto en
+                # producción y ningún test lo veía porque todos fabrican el spec a mano.
+                "_meta": _read(t, "meta", "_meta", default={}) or {},
             }
             for t in result.tools
         ]
@@ -166,7 +191,7 @@ class McpClient:
                 "uri": str(r.uri),
                 "name": r.name or "",
                 "description": r.description or "",
-                "mimeType": getattr(r, "mimeType", None) or "",
+                "mimeType": _read(r, "mimeType", "mime_type", default="") or "",
             }
             for r in result.resources
         ]
@@ -175,7 +200,11 @@ class McpClient:
         """Implementa el contrato `McpCall`. `isError` → `McpToolError` (sin re-llamar)."""
         result = await self._session.call_tool(tool_name, tool_input)
         text = _text_from_content(getattr(result, "content", None))
-        if getattr(result, "isError", False):
+        # Leer una sola grafía aquí es peor que un fallo: con la que no existe, un error
+        # del server se le entrega al modelo como SALIDA CORRECTA («Error executing
+        # tool …» en el hueco del resultado), que es exactamente lo que `isError` existe
+        # para impedir. Medido contra un server real bajo SDK 2.x.
+        if _read(result, "isError", "is_error", default=False):
             raise McpToolError(text or f"mcp tool {tool_name!r} returned isError")
         return text
 
