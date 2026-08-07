@@ -71,7 +71,48 @@ async def _run(
 
 class EnterWorktreeTool:
     name = ENTER_WORKTREE_TOOL_NAME
-    description = "Create an isolated git worktree and switch the session into it."
+    # Homologada contra `EnterWorktreeTool/prompt.ts:2-26` (`getEnterWorktreeToolPrompt()`),
+    # `GAP-PROMPT-1`.
+    # OMITIDO Y DECLARADO:
+    #   · los hooks `WorktreeCreate`/`WorktreeRemove` y la rama «fuera de un repo git»
+    #     (`:19`, `:23`) — B no tiene esa costura: sin repo git, falla.
+    #   · «prompted to keep or remove it on session exit» (`:25`) — es conducta de la CLI
+    #     de A, no del runtime.
+    # ADAPTADO a la divergencia YA declarada en la cabecera de este módulo: el worktree
+    # se crea en `.worktrees/<name>` DENTRO del write-root, no en `.claude/worktrees/`
+    # como dice `:23`. Decirlo aquí es obligatorio: si la descripción mintiera sobre la
+    # ubicación, el modelo buscaría los ficheros donde no están.
+    description = """Use this tool ONLY when the user explicitly asks to work in a worktree. \
+This tool creates an isolated git worktree and switches the current session into it.
+
+## When to Use
+
+- The user explicitly says "worktree" (e.g., "start a worktree", "work in a worktree", "create a \
+worktree", "use a worktree")
+
+## When NOT to Use
+
+- The user asks to create a branch, switch branches, or work on a different branch — use git \
+commands instead
+- The user asks to fix a bug or work on a feature — use normal git workflow unless they \
+specifically mention worktrees
+- Never use this tool unless the user explicitly mentions "worktree"
+
+## Requirements
+
+- Must be in a git repository
+- Must not already be in a worktree
+
+## Behavior
+
+- Creates a new git worktree inside `.worktrees/` with a new branch based on HEAD
+- Switches the session's working directory to the new worktree
+- Use ExitWorktree to leave the worktree mid-session (keep or remove)
+
+## Parameters
+
+- `name` (optional): A name for the worktree. If not provided, a random name is generated.
+"""
     input_schema = {
         "type": "object",
         "properties": {
@@ -150,7 +191,47 @@ class EnterWorktreeTool:
 
 class ExitWorktreeTool:
     name = EXIT_WORKTREE_TOOL_NAME
-    description = "Exit the current git worktree session, keeping or removing it."
+    # Homologada contra `ExitWorktreeTool/prompt.ts:2-31` (`getExitWorktreeToolPrompt()`),
+    # `GAP-PROMPT-1`.
+    # OMITIDO Y DECLARADO: la sesión tmux (`:29`) — B no la tiene. El resto se porta,
+    # incluida la sección `## Scope`, que es la que impide que el modelo crea que esta
+    # tool borra worktrees creados a mano.
+    description = """Exit a worktree session created by EnterWorktree and return the session to \
+the original working directory.
+
+## Scope
+
+This tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:
+- Worktrees you created manually with `git worktree add`
+- Worktrees from a previous session (even if created by EnterWorktree then)
+- The directory you're in if EnterWorktree was never called
+
+If called outside an EnterWorktree session, the tool is a **no-op**: it reports that no worktree \
+session is active and takes no action. Filesystem state is unchanged.
+
+## When to Use
+
+- The user explicitly asks to "exit the worktree", "leave the worktree", "go back", or otherwise \
+end the worktree session
+- Do NOT call this proactively — only when the user asks
+
+## Parameters
+
+- `action` (required): `"keep"` or `"remove"`
+  - `"keep"` — leave the worktree directory and branch intact on disk. Use this if the user wants \
+to come back to the work later, or if there are changes to preserve.
+  - `"remove"` — delete the worktree directory and its branch. Use this for a clean exit when the \
+work is done or abandoned.
+- `discard_changes` (optional, default false): only meaningful with `action: "remove"`. If the \
+worktree has uncommitted files or commits not on the original branch, the tool will REFUSE to \
+remove it unless this is set to `true`. If the tool returns an error listing changes, confirm \
+with the user before re-invoking with `discard_changes: true`.
+
+## Behavior
+
+- Restores the session's working directory to where it was before EnterWorktree
+- Once exited, EnterWorktree can be called again to create a fresh worktree
+"""
     input_schema = {
         "type": "object",
         "properties": {

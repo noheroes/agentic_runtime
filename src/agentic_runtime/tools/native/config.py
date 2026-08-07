@@ -17,10 +17,32 @@ class ConfigTool:
     # `searchHint` del canónico, grafía literal. Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "get or set runtime settings (theme, model)"
-    description = (
-        "Read or write runtime configuration settings stored in the session. "
-        "Omit value to read the current value."
-    )
+    # Homologada contra `ConfigTool/prompt.ts:50-76` (`generatePrompt()`), `GAP-PROMPT-1`.
+    #
+    # ⚠ OMITIDO Y DECLARADO — y esta omisión es la mitad del prompt canónico: A enumera
+    # los ajustes configurables (`## Configurable settings list`, `:59-66`, generados
+    # recorriendo `SUPPORTED_SETTINGS`, `:18-46`) y las opciones de modelo (`:79-93`).
+    # **B no tiene registro de ajustes**: su `execute` acepta cualquier clave y la guarda
+    # en `app_state.native["config"]`, así que no hay nada que enumerar. No se inventa
+    # una lista: sería fabricar un dominio que la tool no valida. Queda registrado como
+    # `FIND-CFG-2` (el modelo no puede saber qué claves existen ni qué valores admiten),
+    # que es carencia ESTRUCTURAL y no se paga con una descripción.
+    # Los ejemplos de A (`:69-75`) se conservan sólo en los dos casos genéricos; los que
+    # citan ajustes concretos de Claude Code (`editorMode`, `permissions.defaultMode`)
+    # se retiran porque en B nombrarían claves inexistentes.
+    description = """Get or set runtime configuration settings.
+
+View or change settings. Use when the user requests configuration changes, asks about current \
+settings, or when adjusting a setting would benefit them.
+
+## Usage
+- **Get current value:** Omit the "value" parameter
+- **Set new value:** Include the "value" parameter
+
+## Examples
+- Get theme: { "setting": "theme" }
+- Set dark theme: { "setting": "theme", "value": "dark" }
+"""
     input_schema = {
         "type": "object",
         "properties": {

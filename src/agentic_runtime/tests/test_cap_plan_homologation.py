@@ -137,12 +137,39 @@ def test_provider_silent_without_plan_mode():
 # Gaps (xfail strict) — su fallo ES la evidencia del gap
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="FIND-PLAN1: prompt() de EnterPlanMode no portado")
 def test_enter_has_when_to_use_prompt():
+    """`FIND-PLAN1` PAGADO (`GAP-PROMPT-1`): el `prompt()` de `EnterPlanMode` está portado.
+
+    Era un `xfail(strict=True)` y se puso ROJO por XPASS al pagarse la deuda, que es
+    exactamente para lo que estaba el `strict`. Al convertirlo en aserción dura se
+    aprovecha para subir el listón (`H-L4`): la versión anterior se conformaba con
+    `"When to Use" in text`, y eso lo cumple casi cualquier texto con secciones. Lo
+    que hay que acreditar es que se portó **la rama que le toca a B**.
+    """
     tool = EnterPlanModeTool()
     prompt = getattr(tool, "prompt", None)
     text = prompt() if callable(prompt) else (tool.description or "")
-    assert "When to Use" in text and ("GOOD" in text or "BAD" in text)
+
+    # Estructura del canónico (`EnterPlanModeTool/prompt.ts:25-97`).
+    assert "## When to Use This Tool" in text
+    assert "## When NOT to Use This Tool" in text
+    assert "### GOOD - Use EnterPlanMode:" in text
+    assert "### BAD - Don't use EnterPlanMode:" in text
+
+    # Discriminador de RAMA, que es lo que el test viejo no miraba: B no es un build
+    # interno (`:166-170`, `USER_TYPE === 'ant'`), así que le corresponde la EXTERNAL.
+    # Las dos aperturas son mutuamente excluyentes y distinguen las ramas sin ambigüedad.
+    assert "**Prefer using EnterPlanMode** for implementation tasks unless they're simple" in text
+    assert "genuine ambiguity about the right approach" not in text, (
+        "se portó la rama Ant (`:108`), que es más restrictiva y no le corresponde a B"
+    )
+
+    # `WHAT_HAPPENS_SECTION` (`:4-14`): en A se omite sólo cuando el `plan_mode`
+    # attachment la trae por otra vía (`:19-21`); en B no existe esa vía, así que va.
+    assert "## What Happens in Plan Mode" in text
+    # …y con los nombres de tool de B, no los de A: anunciar `Glob`/`Read` mandaría al
+    # modelo a tools que en B no se llaman así.
+    assert "using glob, grep, and read_file tools" in text
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-PLAN2: ExitPlanMode sin guard de plan_mode activo")

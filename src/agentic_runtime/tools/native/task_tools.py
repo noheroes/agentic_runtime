@@ -51,7 +51,51 @@ def _scoped_get(task_id: str, ctx: "ToolUseContext | None"):
 
 class TaskCreateTool:
     name = "TaskCreate"
-    description = "Create a task in the task registry to track background or async work."
+    # Homologada contra `TaskCreateTool/prompt.ts:16-56` (`getPrompt()`), `GAP-PROMPT-1`.
+    # OMITIDO Y DECLARADO, porque el esquema de B no lo acepta y anunciarlo repetiría
+    # `FIND-E11-3` (el modelo llama con un campo que la tool se traga en silencio):
+    #   · `activeForm` (`:47`) — B no tiene spinner ni campo donde guardarlo.
+    #   · «use TaskUpdate to set up dependencies (blocks/blockedBy)» (`:54`) — el
+    #     `TaskUpdate` de B sólo reescribe `description`; no hay grafo de dependencias.
+    #   · rama `isAgentSwarmsEnabled()` (`:6-14`) — apagada también en A por defecto.
+    description = """Use this tool to create a structured task list for your current coding session. \
+This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
+
+## When to Use This Tool
+
+Use this tool proactively in these scenarios:
+
+- Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
+- Plan mode - When using plan mode, create a task list to track the work
+- User explicitly requests todo list - When the user directly asks you to use the todo list
+- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+- After receiving new instructions - Immediately capture user requirements as tasks
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+- There is only a single, straightforward task
+- The task is trivial and tracking it provides no organizational benefit
+- The task can be completed in less than 3 trivial steps
+- The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you \
+are better off just doing the task directly.
+
+## Task Fields
+
+- **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
+- **description**: What needs to be done
+
+All tasks are created with status `pending`.
+
+## Tips
+
+- Create tasks with clear, specific subjects that describe the outcome
+- Check TaskList first to avoid creating duplicate tasks
+"""
     input_schema = {
         "type": "object",
         "properties": {
@@ -82,7 +126,30 @@ class TaskCreateTool:
 
 class TaskGetTool:
     name = "TaskGet"
-    description = "Get the current status and result of a task."
+    # Homologada contra `TaskGetTool/prompt.ts:3-22` (`PROMPT`), `GAP-PROMPT-1`.
+    # OMITIDO Y DECLARADO: `blocks` / `blockedBy` (`:8`, `:16-17`, `:21`) — B no tiene
+    # grafo de dependencias, así que anunciarlos prometería una salida inexistente.
+    # AÑADIDO por conducta REAL de B, no por invención: `result`, que el `execute`
+    # sí devuelve (`:105-110`); callarlo dejaría al modelo sin saber dónde mirar.
+    description = """Use this tool to retrieve a task by its ID from the task list.
+
+## When to Use This Tool
+
+- When you need the full description and context before starting work on a task
+- After being assigned a task, to get complete requirements
+
+## Output
+
+Returns full task details:
+- **task_id**: Task identifier
+- **description**: Detailed requirements and context
+- **status**: task status, e.g. 'pending', 'running', 'completed'
+- **result**: the task's result once it has one, otherwise null
+
+## Tips
+
+- Use TaskList to see all tasks in summary form.
+"""
     input_schema = {
         "type": "object",
         "properties": {
@@ -113,7 +180,29 @@ class TaskGetTool:
 
 class TaskListTool:
     name = "TaskList"
-    description = "List all tasks currently tracked by the registry."
+    # Homologada contra `TaskListTool/prompt.ts:24-49` (`getPrompt()`), `GAP-PROMPT-1`.
+    # OMITIDO Y DECLARADO: `owner` y `blockedBy` (`:44-46`) y todo el criterio de
+    # «disponible» que se apoya en ellos (`:31`, `:36`) — B no los tiene. También la
+    # rama `isAgentSwarmsEnabled()` (`:7-36`), apagada por defecto en A.
+    description = """Use this tool to list all tasks in the task list.
+
+## When to Use This Tool
+
+- To see what tasks are available to work on
+- To check overall progress on the project
+- After completing a task, to check for the next available task
+- **Prefer working on tasks in ID order** (lowest ID first) when multiple tasks are available, \
+as earlier tasks often set up context for later ones
+
+## Output
+
+Returns a summary of each task:
+- **task_id**: Task identifier (use with TaskGet, TaskUpdate)
+- **description**: Brief description of the task
+- **status**: task status, e.g. 'pending', 'running', 'completed'
+
+Use TaskGet with a specific task ID to view full details including its result.
+"""
     #: **Sin parámetros, como el canónico** (`TaskListTool.ts:13`:
     #: `inputSchema = z.strictObject({})`).
     #:
@@ -156,7 +245,42 @@ class TaskListTool:
 
 class TaskUpdateTool:
     name = "TaskUpdate"
-    description = "Update the description of an existing task."
+    # Homologada contra `TaskUpdateTool/prompt.ts:3-84` (`PROMPT`), `GAP-PROMPT-1`.
+    #
+    # ⚠ Ésta es la más recortada de la familia, y el recorte NO es cosmético: de los
+    # 8 campos actualizables de A (`:35-43`) B acepta UNO, `description`. Todo el
+    # cuerpo del canónico —flujo de estados `pending → in_progress → completed`, el
+    # `deleted`, `owner`, `metadata`, `addBlocks`/`addBlockedBy` y sus 5 ejemplos
+    # (`:60-84`)— habla de parámetros que el esquema de B **no tiene**. Portarlo
+    # literal sería la trampa exacta de `FIND-E11-3`: el modelo lee el campo, lo
+    # manda, y B lo descarta en silencio.
+    #
+    # La carencia de fondo queda registrada aparte como `FIND-TASK-1` (en B no hay
+    # forma de que el modelo marque una tarea como completada; el `status` lo mueve
+    # sólo el registry por la ejecución en background). Eso NO se paga con una
+    # descripción y no se disimula con una.
+    description = """Use this tool to update a task in the task list.
+
+## When to Use This Tool
+
+**Update task details:**
+- When requirements change or become clearer
+
+## Fields You Can Update
+
+- **description**: Change the task description
+
+## Staleness
+
+Make sure to read a task's latest state using `TaskGet` before updating it.
+
+## Examples
+
+Rewrite a task's description:
+```json
+{"task_id": "1", "description": "Run the integration tests, not just the unit tests"}
+```
+"""
     input_schema = {
         "type": "object",
         "properties": {
@@ -188,7 +312,15 @@ class TaskUpdateTool:
 
 class TaskStopTool:
     name = "TaskStop"
-    description = "Stop (kill) a running background task."
+    # Homologada contra `TaskStopTool/prompt.ts:3-8` (`DESCRIPTION`), `GAP-PROMPT-1`.
+    # Portada LITERAL: es la única de la familia donde la conducta de A y la de B
+    # coinciden campo a campo, así que no hay nada que omitir ni que adaptar.
+    description = """
+- Stops a running background task by its ID
+- Takes a task_id parameter identifying the task to stop
+- Returns a success or failure status
+- Use this tool when you need to terminate a long-running task
+"""
     input_schema = {
         "type": "object",
         "properties": {
@@ -220,7 +352,26 @@ class TaskStopTool:
 
 class TaskOutputTool:
     name = "TaskOutput"
-    description = "Get the output/result of a completed or failed task."
+    # `searchHint` del canónico, grafía literal (`TaskOutputTool.tsx:146`). Fuera del
+    # contrato T1 (`contracts/tools.py:5`); lo lee ToolSearch para rankear.
+    search_hint = "read output/logs from a background task"
+    # Homologada contra `TaskOutputTool.tsx:172-182` (prompt inline en `async prompt()`),
+    # `GAP-PROMPT-1`.
+    # OMITIDO Y DECLARADO:
+    #   · El encabezado `DEPRECATED: Prefer using the Read tool on the task's output
+    #     file path` (`:173`) — en B las tareas NO devuelven un `output_file`; el
+    #     resultado vive en `record.result` y `TaskOutput` es la ÚNICA vía. Portar el
+    #     «usa Read en su lugar» mandaría al modelo a un fichero que no existe.
+    #   · `block=true/false` (`:178-179`) — B no tiene ese parámetro; su lectura no
+    #     bloquea nunca y devuelve el estado si aún no hay resultado (`:241-245`).
+    #   · «Task IDs can be found using the /tasks command» (`:180`) — superficie de
+    #     CLI del integrador, no del runtime.
+    description = """\
+- Retrieves output from a running or completed task (background shell, agent, or remote session)
+- Takes a task_id parameter identifying the task
+- Returns the task output along with status information
+- Works with all task types: background shells, async agents, and remote sessions
+"""
     input_schema = {
         "type": "object",
         "properties": {
