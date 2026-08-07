@@ -26,13 +26,20 @@ from .token_storage import StorageBackedTokenStorage
 from .provider import McpProvider
 from .resource_tools import ListMcpResourcesTool, ReadMcpResourceTool
 from .state import McpState, ServerStatus
-from .tool_adapter import McpCall, McpTool, build_mcp_tool
+from .tool_adapter import (
+    MAX_MCP_DESCRIPTION_LENGTH,
+    McpCall,
+    McpTool,
+    build_mcp_tool,
+    cap_mcp_description,
+)
 
 __all__ = [
     "AuthArtifacts",
     "AuthDeps",
     "EXCLUSIVE_SCOPES",
     "ListMcpResourcesTool",
+    "MAX_MCP_DESCRIPTION_LENGTH",
     "MUTABLE_SCOPES",
     "McpCall",
     "McpClient",
@@ -55,6 +62,7 @@ __all__ = [
     "available_auth_strategies",
     "build_auth",
     "build_mcp_tool",
+    "cap_mcp_description",
     "is_mutable",
     "load_server_configs",
     "merge_scoped",

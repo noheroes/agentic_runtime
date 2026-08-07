@@ -33,10 +33,33 @@ DEFAULT_SEARCH_HINT_META_KEYS: tuple[str, ...] = ("searchHint",)
 #: convergía nunca**: se re-anunciaba en cada iteración del turno.
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 
+#: Cap de la descripción de una tool de TERCEROS que se expone al modelo, calcado de
+#: `MAX_MCP_DESCRIPTION_LENGTH` (`services/mcp/client.ts:218`). El canónico razona el
+#: número en su propio comentario (`:213-217`): «OpenAPI-generated MCP servers have been
+#: observed dumping 15-60KB of endpoint docs into tool.description; this caps the p95 tail
+#: without losing the intent». Es presupuesto de contexto Y superficie de inyección: el
+#: texto lo escribe un tercero y viaja entero al prompt.
+#: NO se aplica a las tools NATIVAS: en A el cap vive en el `prompt()` de la tool MCP
+#: (`client.ts:1789-1794`), no en el serializador común (`api.ts:171`), y por eso una
+#: descripción nativa larga —`Agent`, 16.6 KB en A— pasa sin tocar. Un cap en el
+#: constructor de schemas truncaría esas también, que es divergencia por exceso.
+MAX_MCP_DESCRIPTION_LENGTH = 2048
+
+#: Sufijo literal del canónico (`client.ts:1792`): el modelo tiene que poder distinguir
+#: «la tool se describe así» de «esto está cortado».
+_TRUNCATION_SUFFIX = "… [truncated]"
+
 
 def normalize_mcp_tool_name(name: str) -> str:
     """Nombre saneado para exponer al modelo. El del server se conserva aparte."""
     return _UNSAFE_NAME_CHARS.sub("_", name)
+
+
+def cap_mcp_description(text: str) -> str:
+    """Trunca al cap del canónico, con su mismo sufijo. Por debajo del cap, identidad."""
+    if len(text) <= MAX_MCP_DESCRIPTION_LENGTH:
+        return text
+    return text[:MAX_MCP_DESCRIPTION_LENGTH] + _TRUNCATION_SUFFIX
 
 
 class McpTool:
@@ -72,7 +95,21 @@ class McpTool:
         # nombre rompería la invocación real de la tool.
         self.name = name
         self.remote_name = remote_name if remote_name is not None else name
-        self.description = description
+        # El cap se aplica AQUÍ, en el constructor, y no en `build_mcp_tool`: en A vive
+        # dentro del `prompt()` de la propia tool MCP (`client.ts:1789-1794`), o sea en el
+        # accessor, y por eso NINGÚN consumidor puede saltárselo — ni el schema que va a la
+        # API (`api.ts:171`), ni el scoring de ToolSearch (`ToolSearchTool.ts:72`), ni la
+        # contabilidad de presupuesto de diferidas (`toolSearch.ts:350`). B no tiene
+        # accessor —`description` es un atributo que cada consumidor lee directo— así que
+        # el único punto equivalente por el que pasa TODO es el constructor. Ponerlo en
+        # `build_mcp_tool` dejaría fuera a quien instancie `McpTool` a mano.
+        self.description = cap_mcp_description(description)
+        # El texto ÍNTEGRO del server, como el `description()` de A (`client.ts:1786-1788`),
+        # que devuelve `tool.description` SIN capar mientras `prompt()` sí capa. Truncar es
+        # una decisión sobre la superficie del MODELO, no sobre el dato: quien integra
+        # (inventarios, diagnóstico, UI) sigue teniendo el original. Sin consumidor dentro
+        # de `src/` hoy — se dice, no se disfraza de cableado.
+        self.raw_description = description
         self.input_schema = input_schema
         # `searchHint` del `_meta` del server (`services/mcp/client.ts:1778-1784`). Es la
         # única pista curada que tiene una tool MCP y puntúa +4 en ToolSearch, por encima
@@ -159,4 +196,11 @@ def build_mcp_tool(
     )
 
 
-__all__ = ["McpCall", "McpTool", "build_mcp_tool", "normalize_mcp_tool_name"]
+__all__ = [
+    "MAX_MCP_DESCRIPTION_LENGTH",
+    "McpCall",
+    "McpTool",
+    "build_mcp_tool",
+    "cap_mcp_description",
+    "normalize_mcp_tool_name",
+]

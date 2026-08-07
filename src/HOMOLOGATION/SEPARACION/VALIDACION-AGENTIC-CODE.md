@@ -135,6 +135,24 @@ el texto. **6 tests nacidos rojos.** Sigue en pie que el mecanismo de B (re-pars
 diverge del attachment estructurado de A: eso es forma, y se paga —si se paga— con el `MessageEvent`
 del #10, no aquí.
 
+**Detalle de `FIND-DEFER-2` — remediación desarrollada (`L05`, seis campos).** El canónico capa en
+**dos** sitios, y sólo uno tiene homólogo en B: las `instructions` del server (`client.ts:1160-1171`) y
+la descripción de cada tool MCP (`:1789-1794`). Lo DICTA su propio comentario (`:213-217`): «OpenAPI-
+generated MCP servers have been observed dumping 15-60KB of endpoint docs into tool.description».
+
+| Campo | Contenido |
+|---|---|
+| **Comportamiento** | El texto que un tercero escribe y que llega al MODELO está acotado a 2048 ch + sufijo, por **todas** las vías: schema anunciado, resultado de `ToolSearch` y schema del resolver. El original no se pierde. |
+| **Seam** | El constructor de `McpTool`. A capa dentro de un **accessor** (`prompt()`), y por eso ningún consumidor lo esquiva; B no tiene accessor —`description` es un atributo que cada consumidor lee directo—, así que el único punto equivalente por el que pasa TODO es el constructor. En `build_mcp_tool` sería esquivable instanciando a mano (`INY-71`, roja). |
+| **Firma** | `MAX_MCP_DESCRIPTION_LENGTH = 2048` y `cap_mcp_description(text) -> str` en `capabilities/mcp/tool_adapter.py`, reexportados. Nuevo atributo `McpTool.raw_description` = el texto íntegro, homólogo del `description()` de A (`:1786-1788`). |
+| **Cableado** | `self.description = cap_mcp_description(description)`; `raw_description` guarda el original. Sufijo literal del canónico, `… [truncated]`. |
+| **Orden** | canónico (los dos sitios de cap) → medida por conducta de las 3 vías → constante+función → constructor → server de prueba → detector. |
+| **Prueba** | El volumen entra por un **transporte real**: `dump_docs` declara 60 005 ch en el propio `_mcp_echo_server.py` (FastMCP, Streamable HTTP) y el E2E asevera que lo registrado está capado y marcado, con `raw_description` intacta — sin esa segunda aserción el test pasaría por no haber dump. Más 6 de conducta por vía y por borde. |
+| **Acreditación** | **8 inyecciones, 8 rojas, 0 falsos positivos** (`INY-65..72`): `65` sin cap (5 unit + E2E) · `66` sin sufijo · `67` el cap movido al serializador común — la que caza la divergencia **por exceso** · `68` sufijo siempre · `69` `raw_description` pisada · `70` off-by-one en el borde exacto · `71` cap en `build_mcp_tool` (esquivable) · `72` `ToolSearch` devolviendo la cruda. Revertido desde copia propia verificada por `sha256`; jamás `git checkout`. |
+| **Contraprueba, no relleno (`L10`)** | Las descripciones **nativas** NO se capan, y hay un test que se pone rojo si alguien lo cambia (`INY-67`). En A el cap vive en el `prompt()` de la tool MCP y no en el serializador común (`api.ts:171`), y por eso `Agent` pasa con sus 16,6 KB. Capar las nativas sería divergencia por exceso. Tampoco se capa `searchHint`: A tampoco lo capa. |
+| **Lo que NO se pagó, dicho** | El **segundo** sitio de cap del canónico, las `instructions` del server, no tiene homólogo porque B **no las ingiere en absoluto**. No es un olvido de esta ficha: ya está declarado como `FIND-MCP12` con un `xfail(strict)` vivo (`test_cap_mcp_homologation.py:266-269`) y destino en `11-cap-mcp.md`. Se dice, no se disfraza. |
+| **Límite del método `D-15`, dicho** | Aquí **no hay detector en `agentic_code`**: el integrador no tiene cableado MCP alguno (sólo `permissions.py` lo menciona). La evidencia más fuerte disponible no es el consumidor sino un server MCP **real** emitiendo el volumen extremo de punta a punta. No se fabricó un consumidor de coartada para poder decir que lo hay. |
+
 ---
 
 ## 3 · Cosecha del barrido EOF (10ª ventana) — entra en la misma cola
@@ -145,7 +163,7 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 | ID | Hallazgo | Estado |
 |---|---|---|
 | `FIND-DEFER-1` | El delta de diferidas se reconstruye RE-PARSEANDO el texto rendido; un `\n` en el nombre anuncia una tool inexistente, pierde la real y **el delta no converge nunca** | ✅ **PAGADO** (13ª ventana) — saneado en el INGRESO como A, `remote_name` para el transporte; 6 tests nacidos rojos |
-| `FIND-DEFER-2` | Sin cap de descripción de terceros (60 000 ch medidos vs `MAX_MCP_DESCRIPTION_LENGTH = 2048` de A) | ⛔ abierto |
+| `FIND-DEFER-2` | Sin cap de descripción de terceros (60 000 ch medidos vs `MAX_MCP_DESCRIPTION_LENGTH = 2048` de A) | ✅ **PAGADO** (14ª ventana) — cap en el constructor de `McpTool`, el único punto que ningún consumidor esquiva; 7 tests nacidos rojos, `INY-65..72` |
 | `FIND-AGENT-LIST-1` | Al modelo no le llega **ningún listado de subagentes**; `AgentDefinition.description` es campo muerto y `AgentDefinitionResolver` **no tiene enumeración** | ⛔ abierto |
 | `FIND-SKILL9/17` | Reclasificado: al modelo **no le llega ningún listado de skills**, por ninguna de las **dos** vías de A (description de `Skill` + attachment `skill_listing` incremental) | ⛔ abierto — **primero de la pata de skills** |
 | `FIND-SKILL-20` | El frontmatter PISA la identidad de la skill (A: siempre el nombre del directorio) | ⛔ abierto |

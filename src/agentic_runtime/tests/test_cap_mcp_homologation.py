@@ -12,6 +12,7 @@ señal de reclasificar el estado en 11-cap-mcp.md.
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 
 import pytest
 
@@ -365,6 +366,126 @@ def test_mcp_search_hint_la_clave_namespaced_la_aporta_el_integrador():
     meta = {"vendor-x/searchHint": "hint de vendor"}
     assert _hint_de(meta) == ""
     assert _hint_de(meta, search_hint_meta_keys=("vendor-x/searchHint",)) == "hint de vendor"
+
+
+# ── cap de la descripción de terceros (`FIND-DEFER-2`) ────────────────────────────────
+# `MAX_MCP_DESCRIPTION_LENGTH = 2048` (`client.ts:218`), aplicado en A dentro del `prompt()`
+# de la tool MCP (`:1789-1794`), que es el accessor por el que pasan TODOS los consumidores
+# que gastan contexto: el schema de la API (`api.ts:171`), el scoring de ToolSearch
+# (`ToolSearchTool.ts:72`) y la contabilidad de presupuesto (`toolSearch.ts:350`).
+# Se mide por CONDUCTA (`H-L4`): cuánto texto de un tercero llega a cada superficie que el
+# modelo ve — no que exista la constante.
+
+def _tool_con_descripcion(texto: str):
+    return build_mcp_tool({"name": "srv__dump", "description": texto, "inputSchema": {}}, _call_ok)
+
+
+def _pool_ctx(*tools):
+    from agentic_runtime.tools.pool import ToolPool
+
+    return _ctx(tool_pool=ToolPool(capability_tools=list(tools)))
+
+
+def test_mcp_description_desmedida_no_llega_entera_a_ninguna_via_del_modelo():
+    """Las TRES vías por las que el texto del tercero llega al modelo quedan acotadas:
+    el schema anunciado, el resultado de ToolSearch y el resolver de capabilities."""
+    import json
+
+    from agentic_runtime.capabilities.mcp.tool_adapter import MAX_MCP_DESCRIPTION_LENGTH
+    from agentic_runtime.capabilities.resolver import CapabilitiesResolver
+    from agentic_runtime.tools.deferred_strategy import NativeDeferredStrategy
+    from agentic_runtime.tools.native.tool_search import ToolSearchTool
+    from agentic_runtime.tools.registry import ToolRegistry
+
+    tope = MAX_MCP_DESCRIPTION_LENGTH + 64  # cap + sufijo, con holgura para el sufijo
+    tool = _tool_con_descripcion("X" * 60_000)
+    ctx = _pool_ctx(tool, ToolSearchTool())
+    pool = ctx.tool_pool.assemble(ctx.permission_context)
+
+    anunciado = {s["name"]: s for s in NativeDeferredStrategy().prepare_turn(ctx, pool).tool_schemas}
+    assert len(anunciado["srv__dump"]["description"]) <= tope
+
+    r = asyncio.run(ToolSearchTool().execute({"query": "select:srv__dump"}, ctx))
+    devuelto = json.loads(r.output)["matches"][0]
+    assert len(devuelto["description"]) <= tope
+
+    reg = ToolRegistry()
+    reg.register(tool)
+    resuelto = asyncio.run(CapabilitiesResolver(tool_registry=reg).resolve(ctx))
+    assert all(len(s["description"]) <= tope for s in resuelto.tool_schemas)
+
+
+def test_mcp_description_truncada_lo_dice():
+    """El modelo tiene que poder distinguir «se describe así» de «está cortado»: el sufijo
+    literal del canónico (`client.ts:1792`), y el prefijo intacto hasta el corte."""
+    from agentic_runtime.capabilities.mcp.tool_adapter import MAX_MCP_DESCRIPTION_LENGTH
+
+    original = "ABC" + "x" * 60_000
+    tool = _tool_con_descripcion(original)
+    assert tool.description.endswith("… [truncated]")
+    assert tool.description.startswith("ABC")
+    assert tool.description[:MAX_MCP_DESCRIPTION_LENGTH] == original[:MAX_MCP_DESCRIPTION_LENGTH]
+
+
+def test_mcp_description_por_debajo_del_cap_es_identidad():
+    """El cap recorta la cola p95, no reescribe lo normal: por debajo, byte a byte igual,
+    y sin sufijo que el modelo pudiera leer como «hay más»."""
+    from agentic_runtime.capabilities.mcp.tool_adapter import MAX_MCP_DESCRIPTION_LENGTH
+
+    for largo in (0, 1, 500, MAX_MCP_DESCRIPTION_LENGTH - 1, MAX_MCP_DESCRIPTION_LENGTH):
+        texto = "d" * largo
+        assert _tool_con_descripcion(texto).description == texto
+
+    justo_encima = "d" * (MAX_MCP_DESCRIPTION_LENGTH + 1)
+    capada = _tool_con_descripcion(justo_encima).description
+    assert capada != justo_encima and capada.endswith("… [truncated]")
+
+
+def test_mcp_description_cruda_se_conserva_para_quien_integra():
+    """Truncar es una decisión sobre la superficie del MODELO, no sobre el dato: A conserva
+    el texto íntegro en `description()` mientras capa `prompt()` (`client.ts:1786-1794`)."""
+    original = "y" * 60_000
+    tool = _tool_con_descripcion(original)
+    assert tool.raw_description == original
+    assert len(tool.description) < len(tool.raw_description)
+
+
+def test_mcp_description_el_cap_no_se_puede_esquivar_instanciando_a_mano():
+    """En A el cap vive en el accessor, así que ningún consumidor lo esquiva. En B el punto
+    equivalente es el constructor: `build_mcp_tool` no es la única puerta."""
+    from agentic_runtime.capabilities.mcp.tool_adapter import McpTool
+
+    tool = McpTool(
+        name="t", description="z" * 60_000, input_schema={}, call=_call_ok,
+    )
+    assert len(tool.description) < 60_000
+
+
+def test_native_tool_description_no_se_capa():
+    """Contraprueba y borde del hallazgo: el cap es de TERCEROS. En A vive en el `prompt()`
+    de la tool MCP y no en el serializador común, y por eso una descripción nativa larga
+    (`Agent`, 16.6 KB) pasa intacta. Un cap puesto en `_base_schema` la truncaría: eso sería
+    divergencia por exceso, y este test se pone rojo si alguien lo mueve ahí."""
+    from agentic_runtime.tools.deferred_strategy import NativeDeferredStrategy
+    from agentic_runtime.tools.protocol import ToolCategory, ToolResult
+
+    class _NativaLarga:
+        name = "Agent"
+        description = "N" * 60_000
+        input_schema: ClassVar[dict] = {}
+        category = ToolCategory.UTILITY
+        requires_permission = False
+        safe_for_background = True
+        timeout_seconds = 5.0
+
+        async def execute(self, input, ctx):
+            return ToolResult(tool_name=self.name, output="ok")
+
+    nativa = _NativaLarga()
+    ctx = _pool_ctx(nativa)
+    pool = ctx.tool_pool.assemble(ctx.permission_context)
+    anunciado = {s["name"]: s for s in NativeDeferredStrategy().prepare_turn(ctx, pool).tool_schemas}
+    assert len(anunciado["Agent"]["description"]) == 60_000
 
 
 def test_mcp_search_hint_hace_que_toolsearch_encuentre_la_tool():

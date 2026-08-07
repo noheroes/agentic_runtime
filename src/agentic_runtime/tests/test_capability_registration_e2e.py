@@ -58,6 +58,14 @@ def _self_signed_cert(dirpath: Path) -> tuple[str, str]:
     return str(cert), str(key)
 
 
+def _start_http_server(port: int) -> subprocess.Popen:
+    proc = subprocess.Popen([sys.executable, _SERVER, "--http", str(port)])
+    if not _wait_port(port):
+        proc.terminate()
+        raise RuntimeError("el server MCP HTTP no levantó a tiempo")
+    return proc
+
+
 def _start_https_server(port: int, cert: str, key: str) -> subprocess.Popen:
     proc = subprocess.Popen([sys.executable, _SERVER, "--https", str(port), cert, key])
     if not _wait_port(port):
@@ -174,6 +182,38 @@ async def test_register_and_operate_mcp_and_skill_end_to_end(tmp_path):
     # operó con normalidad: el server MCP REAL (Streamable HTTP/TLS) devolvió mayúsculas
     contents = " ".join(str(m.get("content", "")) for m in caller.last_messages)
     assert "HOLA MUNDO" in contents
+
+
+async def test_mcp_description_desmedida_de_un_server_real_llega_capada(tmp_path):
+    """`FIND-DEFER-2` medido POR TRANSPORTE, no fabricado en el test: `dump_docs` declara
+    60 005 ch de descripción en el propio server FastMCP —el tamaño que el canónico dice
+    haber observado en servers generados desde OpenAPI (`services/mcp/client.ts:213-217`)—
+    y lo que queda registrado para el modelo está capado a
+    `MAX_MCP_DESCRIPTION_LENGTH` (`:218`). El texto íntegro sigue disponible aparte, como
+    el `description()` de A frente a su `prompt()` (`:1786-1794`).
+    """
+    from agentic_runtime.capabilities.mcp import MAX_MCP_DESCRIPTION_LENGTH, McpProvider
+
+    from ._mcp_echo_server import HUGE_DESCRIPTION
+
+    port = _free_port()
+    server = _start_http_server(port)
+    try:
+        provider = McpProvider()
+        provider.add_server("dump", {"type": "http", "url": f"http://127.0.0.1:{port}/mcp"})
+        assert await provider.connect_server("dump") is True
+        tool = next(t for t in provider.state.all_tools() if t.name.endswith("dump_docs"))
+        # lo que el modelo puede llegar a ver: acotado, y marcado como cortado
+        assert len(tool.description) <= MAX_MCP_DESCRIPTION_LENGTH + 64
+        assert tool.description.endswith("… [truncated]")
+        assert tool.description.startswith("DUMP ")  # el prefijo real del server, intacto
+        # y el server SÍ mandó el volumen entero: sin esto el test pasaría por no haber dump
+        assert tool.raw_description == HUGE_DESCRIPTION
+        assert len(tool.raw_description) > 60_000
+        await provider.shutdown()
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
 
 
 async def test_ssl_verify_true_rejects_self_signed(tmp_path):
