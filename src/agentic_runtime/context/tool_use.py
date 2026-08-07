@@ -87,6 +87,14 @@ class ToolUseContext(BaseModel):
     # emisión (forward, exacto) + `sanitize_output` en el choke del dispatcher (red de
     # seguridad, regex y por tanto perdible — `FIND-VOICE1` probó que la red se escapa).
     presentation: Any = Field(default_factory=_default_presentation)
+    # `S15`: backend de ejecución de comandos (host / bwrap / remoto). `None` = costura sin
+    # poblar y entonces las tools que corren comandos **no ejecutan**: devuelven `is_error`
+    # (`require_exec_env`), igual que `runner=None` y que `scope=None`. NO lleva
+    # `default_factory` a propósito, a diferencia de `fs` y `presentation`: el default de
+    # esos dos es SEGURO (confinado / identidad) y un `LocalExecEnvironment` por defecto
+    # sería lo contrario —ejecución sin confinar—, degradando en silencio un sandbox
+    # inyectado a host si el cable se rompiera (problema `#2`). El default de composición
+    # vive en el ensamblador: `factory.py:256`.
     exec_env: Any = None
     fs: Any = Field(default_factory=_default_fs)
     # Directorio de trabajo de los comandos de shell. Es un CABLE, no estado compuesto

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from ..exec_env import LocalExecEnvironment
+from ..exec_env import ExecEnvironmentUnavailable, require_exec_env
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -103,7 +103,15 @@ the workspace, return structured results, and are easier to review.
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         command = input.get("command", "")
-        exec_env = getattr(ctx, "exec_env", None) or LocalExecEnvironment()
+        # Sin costura de ejecución NO se ejecuta (problema `#2`). El default vive en el
+        # ensamblador (`factory.py:256`), no aquí: un `or LocalExecEnvironment()` local
+        # degradaba en silencio de «sandbox inyectado» a «host», que es el footgun que A
+        # cerró en #34044 (`sandbox-adapter.ts:549-560`). Se comprueba ANTES del cwd para
+        # que el motivo que sale sea el real y no el del directorio.
+        try:
+            exec_env = require_exec_env(ctx)
+        except ExecEnvironmentUnavailable as exc:
+            return ToolResult.error(self.name, str(exc))
         cwd, cwd_error = self._resolve_cwd(ctx)
         if cwd_error is not None:
             return ToolResult.error(self.name, cwd_error)

@@ -41,7 +41,7 @@ Producido por el usuario ejercitando `agentic_code` contra el runtime. **Este es
 | # | Problema | Clase | Estado |
 |---|---|---|---|
 | 1 | `run_shell` sin `cwd` | defecto de **CONTRATO** | ✅ **PAGADO** (11ª ventana) — 6 inyecciones rojas, `preventCwdChanges` incluido |
-| 2 | Fallback de `BashTool` (`TRAMO-1.md:183`) | conducta | ⛔ abierto |
+| 2 | Fallback de `BashTool` (`TRAMO-1.md:183`) | conducta | ✅ **PAGADO** (13ª ventana) — más ancho que la ficha: el fallback estaba en **dos** sitios de producción |
 | 3 | Remediación de `FIND-TS-1` / `TS-3` / `TS-4` | deuda ya declarada | ⛔ abierto |
 | 4 | `GAP-TOOL4` | deuda ya declarada | ⛔ abierto |
 | 5 | `GAP-PROMPT-1` — 15 de 25 descripciones sin homologar | superficie del modelo | ⛔ abierto |
@@ -105,6 +105,36 @@ canal aparte para el plan». Se implementa esa propiedad, no la formulación vie
 | **Cable nuevo** | `ToolUseContext.task_id` (`""` por defecto), poblado en `_run_loop` con el handle que acuña el registry. Es TRANSPORTE, no composición (`D-11`): el loop lo copia, no lo deriva. `extra="forbid"` hace que una grafía vieja reviente en vez de descartarse en silencio. |
 | **Lo que NO emite `MessageEvent`, dicho** | Los dos `ctx.messages.append` de resultado de tool (dispatch real y denegación del gate). No es un hueco: ya viajan como `ToolResultEvent`, que además lleva `call_id` e `is_error`. Duplicarlos sería ruido. Está aseverado en el orden total exacto del canal, no narrado. |
 
+**Detalle del #2 — remediación desarrollada (`L05`, seis campos).** La ficha nombraba `bash.py:27`; el
+fallback vivía en **dos** sitios de producción, y el segundo (`worktree.py:64`) en un módulo cuya
+cabecera declara haber cerrado justo este bypass un nivel más abajo (`S15`: git por `run_argv` y no por
+`create_subprocess_exec`). Lo DICTA el canónico (`D-08`, `sandbox-adapter.ts` 1→EOF): `wrapWithSandbox`
+**lanza** en vez de degradar (`:704-717`), `isSandboxRequired` lee `failIfUnavailable` (`:479-485`) y el
+fix de #34044 (`:549-560`) llama a la degradación silenciosa **«a security footgun»**.
+
+| Campo | Contenido |
+|---|---|
+| **Comportamiento** | Con `ctx.exec_env` sin poblar, las tools que corren comandos **no ejecutan**: devuelven `is_error` limpio diciendo por qué. El default sigue existiendo, pero sólo en el ensamblador. |
+| **Seam** | `S15 ToolExecEnvironment`. `None` = costura sin poblar, igual que `runner=None` (`S18`) y `scope=None` — precedentes del propio B, no invención. |
+| **Firma** | `require_exec_env(ctx) -> ToolExecEnvironment` + `ExecEnvironmentUnavailable(RuntimeError)` en `tools/exec_env.py`. Punto único: una tool nueva que corra comandos pasa por ahí o revienta. |
+| **Cableado** | `bash.py` comprueba ANTES de resolver el cwd (para que el motivo que sale sea el real); `worktree.py::_run` **lanza** y las dos tools guardan arriba —`ExitWorktree` **sólo** en la rama `remove`, porque `keep` no ejecuta nada—. `exec_env` sigue SIN `default_factory` en `tool_use.py`, a diferencia de `fs`/`presentation`, cuyos defaults sí son seguros. |
+| **Orden** | contrato (`exec_env`) → choke (`require_exec_env`) → tools (`bash`, `worktree`) → comentario de contrato (`tool_use`) → detector en consumidor. |
+| **Prueba** | Detector en `agentic_code` que nace ROJO (`test_a_broken_exec_cable_stops_the_command_instead_of_running_it_on_the_host`): con el cable roto tras componer, el `touch` **no deja fichero**. Medido por EFECTO, no por mensaje. |
+| **Acreditación** | `INY-59..64`. **Dos salieron VERDES y ESO fue el hallazgo**: `60` (fallback dentro de `_run`) y `62` (guarda de `ExitWorktree(remove)`) no ponían roja ninguna prueba ⇒ dos tests que faltaban, escritos y nacidos rojos. El resto: `59` fallback en `bash` (2 rojas: runtime + consumidor) · `61` sin guarda en `EnterWorktree` (1) · `63` `default_factory` en el contrato (4) · `64` sin default en el ensamblador (1, el control positivo). |
+| **`H-L4` saldadas de paso** | `test_bash_defaults_to_local_when_no_env` aseveraba `is_error is False` — **consagraba** la divergencia; reescrito. Y `_ctx()` de `test_tools_native_homologation.py` corría bash/worktree **en el host** por el fallback, es decir acreditaba conducta por un camino que producción nunca toma: ahora inyecta `LocalExecEnvironment()` explícito. |
+| **Descartado por lectura, no por grep (`L10`)** | El `create_subprocess_exec` directo de `clone_repository.py:131` es **divergencia declarada** en su propia cabecera (`:11-13`: el clone corre FUERA del sandbox, con red). No se toca. |
+
+**Detalle de `FIND-DEFER-1` — pagado en la misma ventana** (era la deuda que destapaban los
+adversariales del fichero de test reescrito, y dejarlo abierto habría dejado 6 tests rojos o, peor, 6
+tests debilitados). La defensa va donde A la pone: el **INGRESO**. `buildMcpToolName` sanea el nombre de
+la tool con `normalizeNameForMCP` (`mcpStringUtils.ts:70-72`, `normalization.ts:17-23`) y conserva el
+original en `mcpInfo.toolName` para la llamada real (`client.ts:1767-1773`). B ahora hace lo mismo:
+`build_mcp_tool` expone `name` saneado y guarda `remote_name` crudo, con el que `execute` llama al
+server. La propiedad que se mide es la **CONVERGENCIA** del delta (anunciar y recomputar ⇒ `None`), no
+el texto. **6 tests nacidos rojos.** Sigue en pie que el mecanismo de B (re-parsear el texto rendido)
+diverge del attachment estructurado de A: eso es forma, y se paga —si se paga— con el `MessageEvent`
+del #10, no aquí.
+
 ---
 
 ## 3 · Cosecha del barrido EOF (10ª ventana) — entra en la misma cola
@@ -114,7 +144,7 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 
 | ID | Hallazgo | Estado |
 |---|---|---|
-| `FIND-DEFER-1` | El delta de diferidas se reconstruye RE-PARSEANDO el texto rendido; un `\n` en el nombre anuncia una tool inexistente, pierde la real y **el delta no converge nunca** | ⛔ abierto |
+| `FIND-DEFER-1` | El delta de diferidas se reconstruye RE-PARSEANDO el texto rendido; un `\n` en el nombre anuncia una tool inexistente, pierde la real y **el delta no converge nunca** | ✅ **PAGADO** (13ª ventana) — saneado en el INGRESO como A, `remote_name` para el transporte; 6 tests nacidos rojos |
 | `FIND-DEFER-2` | Sin cap de descripción de terceros (60 000 ch medidos vs `MAX_MCP_DESCRIPTION_LENGTH = 2048` de A) | ⛔ abierto |
 | `FIND-AGENT-LIST-1` | Al modelo no le llega **ningún listado de subagentes**; `AgentDefinition.description` es campo muerto y `AgentDefinitionResolver` **no tiene enumeración** | ⛔ abierto |
 | `FIND-SKILL9/17` | Reclasificado: al modelo **no le llega ningún listado de skills**, por ninguna de las **dos** vías de A (description de `Skill` + attachment `skill_listing` incremental) | ⛔ abierto — **primero de la pata de skills** |
@@ -123,9 +153,11 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 | `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0`. **Ampliado en la 12ª ventana: es UNIVERSAL** (medido en `ToolCallEvent`, `DoneEvent` y `ToolResultEvent`), no sólo el último; ningún sitio de producción de `src/` poblaba identidad. Sin `seq`/`ts` no se ordena ni se fecha una traza, y sin `task_id`/`agent_id` no se separa agente de subagente. Se pagó con el **#10** (mismo seam) | ✅ **PAGADO** (12ª ventana) |
 | `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ⛔ abierto |
 
-**Dos `H-L4` a saldar al pagar lo anterior** — suites que acreditan la divergencia en vez de
-detectarla: `test_deferred_delta.py:43-47` (consagra el reparseo de texto como mecanismo homologado) y
-`test_deferred_delta.py` entero (190 L, **cero casos adversariales**). Se **reescriben**, no se amplían.
+**Dos `H-L4` — ✅ SALDADAS (13ª ventana).** `test_deferred_delta.py` se **reescribió** entero: el test que
+consagraba el reparseo (`:43-47`) pasó a medir la conducta («la misma tool no se anuncia dos veces») y
+el fichero ganó 6 casos adversariales sobre nombres escritos por terceros, más un test que ata el
+helper de los tests puros a lo que el loop escribe de verdad —para que el fichero no pueda quedarse
+verde midiendo un formato que ya nadie produce—. 15 tests, de 9 que había.
 
 **Orden 2 arrastrado** (hallazgos de ventanas previas, sin tocar): `FIND-READ-1`, `FIND-READ-2`,
 `FIND-GLOB-1`, `FIND-CFG-1`, `FIND-LOOP-1`, `FIND-E11-1`, `FIND-C10-1`, `FIND-SEQ-1`, `FIND-E2G-1`,

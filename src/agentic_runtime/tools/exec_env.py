@@ -21,6 +21,61 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
+class ExecEnvironmentUnavailable(RuntimeError):
+    """La costura de ejecución no está poblada y por tanto NO se ejecuta nada.
+
+    Es el problema **#2** del listado de `VALIDACION-AGENTIC-CODE.md`. Antes, cada tool
+    que corría comandos hacía ``getattr(ctx, "exec_env", None) or LocalExecEnvironment()``:
+    un default **silencioso y sin confinar**, en el punto equivocado. En producción el
+    cable va siempre poblado (`runtime.py:415`, sin condición), así que ese fallback
+    estaba muerto — pero es exactamente la forma que enmascaraba `FIND-EXEC1`: si el
+    cable se rompiera, `bash` seguiría corriendo **en el host** con un
+    `BwrapExecEnvironment` inyectado y nadie lo notaría.
+
+    Lo DICTA el canónico (`D-08`), que trata esa degradación como fallo, no como default:
+
+    - `sandbox-adapter.ts:704-717` — `wrapWithSandbox` **lanza** (`'Sandbox failed to
+      initialize.'`) si el sandbox está habilitado y no hay inicialización. No cae a
+      ejecutar sin sandbox.
+    - `sandbox-adapter.ts:549-560` — el fix de #34044, con su razón escrita: antes
+      `isSandboxingEnabled()` devolvía `false` en silencio al faltar dependencias, «giving
+      users zero feedback that their explicit security setting was being ignored. **This is
+      a security footgun**». La corrección fue hacerlo VISIBLE.
+    - `sandbox-adapter.ts:479-485` — `failIfUnavailable` es una política explícita de
+      «si no puedo confinar, no ejecuto».
+
+    Y lo dicta también la propia costura de B, que ya resuelve así sus seams sin poblar:
+    `runner=None` ⇒ la tool `Agent` devuelve `is_error` limpio (`tool_use.py:104-108`);
+    `scope=None` ⇒ los repos que necesiten clave **fallan**, no inventan una (`:69`);
+    `BwrapExecEnvironment._inner_cwd` **rechaza** un cwd que no puede honrar en vez de
+    ignorarlo (`:197`). El default sigue existiendo y sigue siendo `LocalExecEnvironment`,
+    pero en **un solo sitio**: el ensamblador (`factory.py:256`), que es donde `C10` dice
+    que viven las decisiones de composición.
+
+    Por qué `exec_env` NO recibe un `default_factory` como `fs` y `presentation`: aquellos
+    dos tienen un default **seguro** (confinado a cwd / identidad). Un `LocalExecEnvironment`
+    por defecto es lo contrario — ejecución sin confinar—, así que el default seguro aquí
+    es no ejecutar.
+    """
+
+
+def require_exec_env(ctx: object) -> ToolExecEnvironment:
+    """Devuelve el backend inyectado, o **lanza**. Nunca sustituye por uno propio.
+
+    Punto único: una tool nueva que corra comandos pasa por aquí, y si alguien añade un
+    camino que se lo salta, revienta (el dispatcher lo convierte en `ToolResult.error`,
+    `dispatcher.py:85-86`) en vez de correr en el host en silencio.
+    """
+    env: ToolExecEnvironment | None = getattr(ctx, "exec_env", None)
+    if env is None:
+        raise ExecEnvironmentUnavailable(
+            "no execution environment is wired for this session "
+            "(ctx.exec_env is None): refusing to run the command on the host. "
+            "Inject a ToolExecEnvironment — create_runtime() does it by default."
+        )
+    return env
+
+
 def _read_tracked_cwd(path: str | None) -> str | None:
     """Relee el cwd que el propio shell escribió; `None` si no lo escribió."""
     if path is None:
@@ -234,7 +289,9 @@ class BwrapExecEnvironment:
 
 __all__ = [
     "BwrapExecEnvironment",
+    "ExecEnvironmentUnavailable",
     "LocalExecEnvironment",
     "ShellResult",
     "ToolExecEnvironment",
+    "require_exec_env",
 ]

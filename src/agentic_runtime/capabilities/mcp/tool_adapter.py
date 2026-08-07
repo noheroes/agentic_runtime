@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from ...tools.protocol import ToolCategory, ToolResult
@@ -21,6 +22,21 @@ McpCall = Callable[[str, dict], Awaitable[str]]
 # `search_hint_meta_keys` — elegir dialecto es política del integrador (Filosofía B),
 # igual que elegir modelo.
 DEFAULT_SEARCH_HINT_META_KEYS: tuple[str, ...] = ("searchHint",)
+
+#: Todo lo que no sea `[A-Za-z0-9_-]` en un nombre de tool MCP pasa a `_`, calcado de
+#: `normalizeNameForMCP` (`services/mcp/normalization.ts:17-23`), que A aplica al nombre de
+#: la tool en el propio ingreso (`buildMcpToolName`, `mcpStringUtils.ts:70-72`).
+#: No es cosmético: el nombre lo escribe un server de terceros y viaja a DOS sitios donde
+#: un salto de línea cambia el significado — el schema que ve el modelo y la lista de
+#: diferidas, que se une por '\n' y se reconstruye leyéndola (`FIND-DEFER-1`). Con el
+#: nombre crudo, un '\n' anunciaba dos tools inexistentes, perdía la real y el delta **no
+#: convergía nunca**: se re-anunciaba en cada iteración del turno.
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def normalize_mcp_tool_name(name: str) -> str:
+    """Nombre saneado para exponer al modelo. El del server se conserva aparte."""
+    return _UNSAFE_NAME_CHARS.sub("_", name)
 
 
 class McpTool:
@@ -48,8 +64,14 @@ class McpTool:
         timeout_seconds: float = 30.0,
         server_name: str = "",
         search_hint: str = "",
+        remote_name: str | None = None,
     ) -> None:
+        # `name` es lo que ve el MODELO (saneado); `remote_name` lo que se le dice al
+        # SERVER. A mantiene la misma separación: `name` = `fullyQualifiedName` saneado y
+        # `mcpInfo.toolName` = el original (`client.ts:1767-1773`). Sin ella, sanear el
+        # nombre rompería la invocación real de la tool.
         self.name = name
+        self.remote_name = remote_name if remote_name is not None else name
         self.description = description
         self.input_schema = input_schema
         # `searchHint` del `_meta` del server (`services/mcp/client.ts:1778-1784`). Es la
@@ -69,7 +91,7 @@ class McpTool:
         from .client import McpToolError
 
         try:
-            output = await self._call(self.name, input)  # una sola llamada al server
+            output = await self._call(self.remote_name, input)  # una sola llamada al server
         except McpToolError as exc:
             # El server respondió isError=True: error de la tool, no del transporte.
             return ToolResult.error(self.name, str(exc))
@@ -125,7 +147,8 @@ def build_mcp_tool(
         read_only = annotations.get("readOnlyHint") is True
 
     return McpTool(
-        name=name,
+        name=normalize_mcp_tool_name(name),
+        remote_name=name,
         description=description,
         input_schema=input_schema,
         call=call,
@@ -136,4 +159,4 @@ def build_mcp_tool(
     )
 
 
-__all__ = ["McpCall", "McpTool", "build_mcp_tool"]
+__all__ = ["McpCall", "McpTool", "build_mcp_tool", "normalize_mcp_tool_name"]

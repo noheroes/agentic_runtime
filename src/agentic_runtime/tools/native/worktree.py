@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..exec_env import LocalExecEnvironment
+from ..exec_env import ExecEnvironmentUnavailable, require_exec_env
 from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
 
@@ -61,7 +61,10 @@ async def _run(
     `run_argv` combina stdout y stderr (es lo que `ShellResult` modela), así que las tools
     ya no discriminan una de otra: el mensaje de error usa la salida entera.
     """
-    exec_env = getattr(ctx, "exec_env", None) or LocalExecEnvironment()
+    # Sin costura poblada **lanza** (problema `#2`): el fallback silencioso corría git en
+    # el host con un `BwrapExecEnvironment` inyectado, que es el mismo bypass que la
+    # cabecera de este módulo dice haber cerrado, un nivel más abajo.
+    exec_env = require_exec_env(ctx)
     result = await exec_env.run_argv(argv, cwd=cwd, timeout=timeout)
     return result.returncode, result.output
 
@@ -88,6 +91,11 @@ class EnterWorktreeTool:
     timeout_seconds = 30.0
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+        # Esta tool SIEMPRE lanza git; sin costura de ejecución no hay nada que hacer.
+        try:
+            require_exec_env(ctx)
+        except ExecEnvironmentUnavailable as exc:
+            return ToolResult.error(self.name, str(exc))
         if ctx.app_state.native.get(_WORKTREE_KEY):
             return ToolResult.error(self.name, "Already in a worktree session.")
 
@@ -181,6 +189,13 @@ class ExitWorktreeTool:
         branch = session.get("branch", "")
 
         if action == "remove":
+            # Sólo esta rama lanza git: con `action="keep"` la tool no ejecuta nada y no
+            # tiene por qué exigir la costura. Exigirla arriba habría convertido un camino
+            # legítimo sin comandos en un error.
+            try:
+                require_exec_env(ctx)
+            except ExecEnvironmentUnavailable as exc:
+                return ToolResult.error(self.name, str(exc))
             rc, out = await _run(
                 ctx, ["git", "status", "--porcelain"], cwd=path, timeout=self.timeout_seconds
             )

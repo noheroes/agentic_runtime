@@ -1,7 +1,8 @@
 """B2 — ToolExecEnvironment inyectable: BashTool despacha al backend, no al host.
 
 - default in-process (`LocalExecEnvironment`) sin cambio de comportamiento;
-- BashTool usa `ctx.exec_env` cuando se inyecta (D5c) y cae al local cuando es None;
+- BashTool usa `ctx.exec_env` cuando se inyecta (D5c) y **rehúsa ejecutar** cuando es
+  None (problema `#2`): el default vive en el ensamblador, no en la tool;
 - `BwrapExecEnvironment` monta workspace→/workspace y pasa el comando verbatim
   (build-side; bwrap no instalado en CI → el run real se skipea, no se finge — Regla 3).
 """
@@ -177,11 +178,135 @@ def test_local_without_cwd_keeps_previous_behaviour():
     assert res.cwd is None
 
 
-def test_bash_defaults_to_local_when_no_env():
+def test_bash_refuses_to_run_on_the_host_when_no_exec_env_is_wired(tmp_path):
+    """Problema `#2`: sin costura de ejecución **no se ejecuta**, y se dice por qué.
+
+    Este test sustituye a `test_bash_defaults_to_local_when_no_env`, que aseveraba lo
+    contrario y por tanto **consagraba la divergencia** (`H-L4`): el fallback
+    `or LocalExecEnvironment()` degradaba en silencio de «sandbox inyectado» a «host»,
+    que es el footgun que A cerró en #34044 (`sandbox-adapter.ts:549-560`) y lo que
+    `wrapWithSandbox` (`:704-717`) resuelve **lanzando**.
+
+    Se asevera por EFECTO, no por el mensaje: el comando dejaría un fichero en disco si
+    llegara a correr, y no lo deja.
+    """
+    marcador = tmp_path / "corrio-en-el-host.txt"
     ctx = ToolUseContext(session_id="s1")  # exec_env=None
-    result = asyncio.run(BashTool().execute({"command": "echo inprocess"}, ctx))
-    assert "inprocess" in result.output
-    assert result.is_error is False
+    result = asyncio.run(
+        BashTool().execute({"command": f"touch {marcador}"}, ctx)
+    )
+    assert result.is_error is True
+    assert not marcador.exists(), "el comando corrió en el host sin costura de ejecución"
+    assert "exec_env" in result.output
+
+
+def test_worktree_refuses_to_run_git_on_the_host_when_no_exec_env_is_wired(tmp_path):
+    """El mismo fallback vivía en `worktree.py:64`, y la ficha del `#2` sólo nombraba `bash`.
+
+    Ahí es peor de leer: la cabecera del módulo declara haber cerrado justo este bypass
+    (`S15`, git por `run_argv` y no por `create_subprocess_exec` directo) un nivel más
+    abajo, mientras el resolutor del backend lo reabría.
+    """
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+    from agentic_runtime.tools.native.worktree import EnterWorktreeTool
+
+    ctx = ToolUseContext(
+        session_id="s1",
+        fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+    )
+    result = asyncio.run(EnterWorktreeTool().execute({"name": "demo"}, ctx))
+    assert result.is_error is True
+    assert "exec_env" in result.output
+    assert "not a git repository" not in result.output.lower(), (
+        "llegó a lanzar git: la guarda no se consultó"
+    )
+
+
+def test_the_worktree_command_launcher_itself_refuses_not_just_its_two_callers(tmp_path):
+    """`INY-60` salió VERDE y eso es el hallazgo: nadie medía el choke de `worktree._run`.
+
+    Las dos guardas de tool (`EnterWorktree` arriba, `ExitWorktree` en la rama `remove`)
+    tapan hoy todos los caminos, así que reintroducir el fallback DENTRO de `_run` no
+    ponía roja ninguna prueba — y `_run` es justo el sitio que una tercera rama futura
+    usaría sin guarda. Se acredita por EFECTO: el `argv` tocaría un fichero y no lo toca.
+
+    Límite dicho: se llama a `_run`, que es privado del módulo. Es el único camino para
+    medir el choke; las guardas de arriba ya están medidas por sus propios tests.
+    """
+    import pytest
+
+    from agentic_runtime.tools.exec_env import ExecEnvironmentUnavailable
+    from agentic_runtime.tools.native.worktree import _run
+
+    marcador = tmp_path / "git-corrio-en-el-host.txt"
+    ctx = ToolUseContext(session_id="s1")  # exec_env=None
+    with pytest.raises(ExecEnvironmentUnavailable):
+        asyncio.run(_run(ctx, ["touch", str(marcador)], cwd=str(tmp_path), timeout=5.0))
+    assert not marcador.exists(), "el argv corrió en el host sin costura de ejecución"
+
+
+def test_exit_worktree_keeps_working_without_exec_env_because_it_runs_no_command(tmp_path):
+    """CONTROL NEGATIVO de la guarda: `action="keep"` no lanza git, luego no la exige.
+
+    Sin este control, «pedir la costura arriba del método» pasaría por correcto y
+    rompería un camino legítimo que nunca ejecuta nada.
+    """
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+    from agentic_runtime.tools.native.worktree import _WORKTREE_KEY, ExitWorktreeTool
+
+    ctx = ToolUseContext(
+        session_id="s1",
+        fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+    )
+    ctx.app_state.native[_WORKTREE_KEY] = {"path": str(tmp_path), "branch": "worktree/x"}
+    result = asyncio.run(ExitWorktreeTool().execute({"action": "keep"}, ctx))
+    assert result.is_error is False, result.output
+
+
+def test_exit_worktree_remove_refuses_cleanly_instead_of_propagating(tmp_path):
+    """`INY-62` salió VERDE: el control negativo de `action="keep"` no medía la rama `remove`.
+
+    Sin este test, retirar la guarda de la rama que SÍ lanza git pasaba inadvertido: la
+    tool dejaba subir `ExecEnvironmentUnavailable` cruda desde `_run`. La conducta
+    homologada es la misma que la de `EnterWorktree` —error de tool limpio, no excepción—
+    porque quien lo lee es el modelo, no un traceback.
+    """
+    from agentic_runtime.tools.fs_env import ConfinedFilesystem
+    from agentic_runtime.tools.native.worktree import _WORKTREE_KEY, ExitWorktreeTool
+
+    ctx = ToolUseContext(
+        session_id="s1",
+        fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
+    )
+    ctx.app_state.native[_WORKTREE_KEY] = {"path": str(tmp_path), "branch": "worktree/x"}
+    result = asyncio.run(ExitWorktreeTool().execute({"action": "remove"}, ctx))
+    assert result.is_error is True
+    assert "exec_env" in result.output
+    assert ctx.app_state.native.get(_WORKTREE_KEY), (
+        "cerró la sesión de worktree sin haber podido ejecutar el remove"
+    )
+
+
+def test_the_assembler_is_the_one_place_that_defaults_the_exec_environment(tmp_path):
+    """CONTROL POSITIVO: quitar el fallback de la tool NO deja al integrador degenerado sin `bash`.
+
+    El default sigue existiendo —`LocalExecEnvironment`— pero en el ensamblador
+    (`factory.py:256`), que es donde `C10` dice que viven las decisiones de composición.
+
+    Límite dicho: se llega al backend por `_exec_env` (privado) porque el runtime no
+    publica accesor; lo que se asevera **no** es el atributo sino que ese backend
+    EJECUTA.
+    """
+    from agentic_runtime.factory import RuntimeConfig, StorageConfig, create_runtime
+
+    # sin `exec_env` en la config: lo único que se le da es el root del storage
+    runtime = create_runtime(
+        config=RuntimeConfig(storage=StorageConfig(backend="filesystem", root=tmp_path))
+    )
+    env = runtime._exec_env
+    assert isinstance(env, LocalExecEnvironment)
+    res = asyncio.run(env.run_shell("echo ensamblado", cwd=str(tmp_path), timeout=5.0))
+    assert res.returncode == 0 and "ensamblado" in res.output
 
 
 def test_bwrap_argv_mounts_workspace_and_passes_command_verbatim():
