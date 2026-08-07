@@ -25,6 +25,7 @@ from agentic_runtime.contracts.abort import AbortController
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.user_input import ProcessedInput
 from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
+from agentic_runtime.events.event_types import MessageEvent, TurnStartEvent
 from agentic_runtime.loop.outcome import LoopEndReason
 from agentic_runtime.hooks import HookEvent
 from agentic_runtime.hooks.protocol import HookDecision
@@ -700,6 +701,162 @@ async def test_e2e_loop_stream_surfaces_tool_and_done_events(tmp_path):
     types = [type(e).__name__ for e in events]
     assert "ToolCallEvent" in types
     assert "ToolResultEvent" in types
-    assert types[-1] == "DoneEvent"
+    # El último es el turno del asistente ya ensamblado, no el `DoneEvent` del stream
+    # crudo: A rinde el `Message` DESPUÉS de consumir los deltas (`query.ts:1610`).
+    assert types[-1] == "MessageEvent"
     call_ids = {e.call_id for e in events if isinstance(e, ToolCallEvent)}
     assert all(e.call_id in call_ids for e in events if isinstance(e, ToolResultEvent))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PARTE D · costura pública: el stream lleva lo mismo que la historia (`#10`)
+#
+# Propiedad canónica medida en `query.ts` 1→EOF: A **no tiene un canal aparte** para
+# lo que el runtime le inyecta al modelo — rinde los mismos `Message` que persiste
+# (`:1588`, `:1610`, `:1624`) y marca cada iteración con `stream_request_start`
+# (`:337`). Antes de pagar esto, todo lo que B inyectaba (delta de diferidas, recall,
+# prompt) entraba a `ctx.messages` y no salía por ninguna parte: el patrón de fallo
+# dominante del barrido —B tiene el dato y no lo pone en ninguna lista que se vea—.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _DeferredTool(RecordingTool):
+    """Tool diferida: no se anuncia al modelo hasta que ToolSearch la descubre."""
+    deferred = True
+
+
+async def _collect(ctx: ToolUseContext, prompt: str, **loop_kw) -> list:
+    """Corre un turno con un sink suscrito a TODO el canal y devuelve lo que salió."""
+    from agentic_runtime.events.bus import EventBus
+
+    seen: list = []
+
+    async def _sink(ev) -> None:
+        seen.append(ev)
+
+    bus = EventBus()
+    bus.subscribe_all(_sink)
+    await AgentLoop(event_bus=bus, **loop_kw).run(prompt, ctx)
+    return seen
+
+
+async def test_public_stream_carries_every_message_the_runtime_injects():
+    """Lo que entra a `ctx.messages` sale por el stream — con su procedencia rotulada.
+
+    Se afirma sobre la HISTORIA y sobre el CANAL a la vez: es la única forma de que un
+    append nuevo que nadie rinda haga fallar el test en vez de pasar inadvertido.
+    """
+    caller = ScriptedCaller([[TokenEvent(content="hola"), DoneEvent(stop_reason="stop")]])
+    ctx = _ctx()
+    seen = await _collect(ctx, "saluda", model_caller=caller)
+
+    mensajes = [e for e in seen if isinstance(e, MessageEvent)]
+    assert [(m.role, m.content, m.origin) for m in mensajes] == [
+        ("user", "saluda", "user"),
+        ("assistant", "hola", "assistant"),
+    ], [(m.role, m.content, m.origin) for m in mensajes]
+    # Y coincide con lo que el modelo verá: mismo contenido, mismo orden.
+    assert [(m["role"], m["content"]) for m in ctx.messages] == [
+        (m.role, m.content) for m in mensajes
+    ]
+
+
+async def test_turn_start_carries_the_tool_plan_as_data_not_as_text():
+    """`TurnStartEvent` lleva el plan que `TurnToolPlan` decidía y se tiraba.
+
+    Los nombres van como DATO. Si fueran sólo el texto del anuncio, el consumidor
+    tendría que re-parsearlo para saber qué se ofreció — que es la enfermedad
+    diagnosticada en `FIND-DEFER-1`, no su remedio.
+    """
+    visible, oculta = RecordingTool("echo"), _DeferredTool("mcp_lejos")
+    caller = ScriptedCaller([[DoneEvent(stop_reason="stop")]])
+    seen = await _collect(
+        _ctx(), "x",
+        model_caller=caller,
+        tool_registry=_registry(visible, oculta),
+        tool_dispatcher=ToolDispatcher(),
+    )
+
+    inicios = [e for e in seen if isinstance(e, TurnStartEvent)]
+    assert len(inicios) == 1 and inicios[0].turn == 1
+    # La diferida NO se anuncia al modelo…
+    assert "mcp_lejos" not in inicios[0].tool_names
+    assert "echo" in inicios[0].tool_names
+    # …pero el consumidor SÍ sabe que existe y que está oculta: ése es el dato que
+    # antes no salía de `prepare_turn`.
+    assert inicios[0].deferred_names == ("mcp_lejos",)
+
+
+async def test_deferred_announcement_reaches_the_consumer_not_only_the_model():
+    """El delta de diferidas se le inyecta al modelo Y se rinde por el stream.
+
+    Antes salía sólo hacia el modelo: el consumidor no tenía forma de saber qué se le
+    había dicho, ni de auditarlo.
+    """
+    caller = ScriptedCaller([[DoneEvent(stop_reason="stop")]])
+    seen = await _collect(
+        _ctx(), "x",
+        model_caller=caller,
+        tool_registry=_registry(RecordingTool("echo"), _DeferredTool("mcp_lejos")),
+        tool_dispatcher=ToolDispatcher(),
+    )
+
+    anuncios = [e for e in seen if isinstance(e, MessageEvent) and e.origin == "deferred_delta"]
+    assert len(anuncios) == 1, [type(e).__name__ for e in seen]
+    assert "mcp_lejos" in anuncios[0].content
+    assert anuncios[0].role == "user"
+
+
+async def test_recall_injected_by_the_runtime_is_visible_on_the_stream():
+    """El recall (`active_context`) también es inyección del runtime — también se rinde."""
+    caller = ScriptedCaller([[DoneEvent(stop_reason="stop")]])
+    seen = await _collect(
+        _ctx(), "x",
+        model_caller=caller,
+        capability_manager=FakeCapabilityManager(recall=[{"content": "recuerda X"}]),
+    )
+
+    recalls = [e for e in seen if isinstance(e, MessageEvent) and e.origin == "recall"]
+    assert len(recalls) == 1 and "recuerda X" in recalls[0].content
+
+
+async def test_sink_stamps_identity_on_events_it_did_not_build():
+    """`FIND-STREAM-1`: el sellado ocurre en el sumidero, no en el emisor.
+
+    Los `TokenEvent`/`DoneEvent` los construye el CALLER (aquí, un doble que no sabe
+    nada de sesiones) y salen igualmente atribuidos. Es la propiedad que distingue un
+    sumidero de «que cada emisor se acuerde»: un emisor de terceros no puede olvidarlo.
+    """
+    caller = ScriptedCaller([[TokenEvent(content="a"), DoneEvent(stop_reason="stop")]])
+    ctx = _ctx(agent_id="agente-7")
+    ctx.task_id = "tarea-3"
+    seen = await _collect(ctx, "x", model_caller=caller)
+
+    ajenos = [e for e in seen if isinstance(e, (TokenEvent, DoneEvent))]
+    assert ajenos, [type(e).__name__ for e in seen]
+    for ev in ajenos:
+        assert (ev.session_id, ev.agent_id, ev.task_id) == ("loop-homolog", "agente-7", "tarea-3")
+        assert ev.ts > 0
+    # Orden total del canal: monótono, sin huecos, arrancando en 1.
+    assert [e.seq for e in seen] == list(range(1, len(seen) + 1))
+
+
+async def test_sink_restamps_identity_instead_of_respecting_what_came_in():
+    """Sellado **incondicional**, no «sólo si está vacío».
+
+    No es gusto: `sessionStorage.ts:1049-1056` documenta que sellar condicionalmente
+    reintroduce la identidad CRUZADA — un evento reemitido llevaría la sesión del
+    emisor original en vez de la de este turno. Aquí el caller emite un evento ya
+    sellado con OTRA sesión y el sumidero debe pisarla.
+    """
+    caller = ScriptedCaller([[
+        TokenEvent(content="a", session_id="sesion-de-otro", task_id="tarea-de-otro", seq=99),
+        DoneEvent(stop_reason="stop"),
+    ]])
+    ctx = _ctx()
+    ctx.task_id = "tarea-mia"
+    seen = await _collect(ctx, "x", model_caller=caller)
+
+    tokens = [e for e in seen if isinstance(e, TokenEvent)]
+    assert len(tokens) == 1
+    assert tokens[0].session_id == "loop-homolog" and tokens[0].task_id == "tarea-mia"
+    assert tokens[0].seq != 99

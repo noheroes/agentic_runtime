@@ -406,6 +406,10 @@ class LocalAgentRuntime:
         try:
             ctx, parent_session_id, subagent_depth = self._build_child(task, parent_snapshot)
             ctx.is_subagent = parent_snapshot is not None
+            # `FIND-STREAM-1`: el handle de la ejecución llega al ctx para que el
+            # sumidero del loop pueda sellarlo en cada evento. Aquí es donde existe —
+            # lo acaba de acuñar el registry en `dispatch`.
+            ctx.task_id = task_id
             ctx.subagent_depth = subagent_depth  # visible a la tool Agent para topar el anidamiento
             ctx.presentation = self._presentation
             ctx.exec_env = self._exec_env

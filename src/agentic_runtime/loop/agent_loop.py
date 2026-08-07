@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from ..capabilities.resolver import CapabilitiesResolver
@@ -9,7 +11,16 @@ from ..context.tool_use import ToolUseContext
 from ..contracts.notifications import NotificationSink, apply_notification
 from ..contracts.user_input import NoopUserInputProcessor, UserInputProcessor
 from ..events.bus import EventBus
-from ..events.event_types import DoneEvent, ErrorEvent, Event, TokenEvent, ToolCallEvent, ToolResultEvent
+from ..events.event_types import (
+    DoneEvent,
+    ErrorEvent,
+    Event,
+    MessageEvent,
+    TokenEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    TurnStartEvent,
+)
 from ..hooks import HookEvent
 from ..models.protocol import ModelCallerProtocol, ModelOptions
 from ..tools.dispatcher import ToolDispatcher
@@ -119,6 +130,9 @@ class AgentLoop:
         self._deferred_strategy_override = deferred_strategy
         self._deferred_strategy_cached: "Optional[DeferredToolStrategy]" = None
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
+        # Contador del sumidero (`_emit`). Divergencia declarada frente a A, que no
+        # tiene `seq` porque ordena por cadena `parentUuid` + timestamp ISO.
+        self._event_seq = 0
         # `S11` (`C4`/`GAP-01`): el preproceso de entrada deja de ser superficie
         # exportada sin consumidor. Default = passthrough, para que un runtime que no
         # inyecte nada se comporte exactamente como antes de existir la costura.
@@ -203,7 +217,7 @@ class AgentLoop:
             )
         return devuelto
 
-    def _inject_recall(self, ctx: ToolUseContext) -> None:
+    async def _inject_recall(self, ctx: ToolUseContext) -> None:
         """Inyecta el recall del manager como `<system-reminder>` (role:"user").
 
         Dedup: no reinyecta un contenido ya presente en `ctx.messages` (espejo de
@@ -220,7 +234,7 @@ class AgentLoop:
             rendered = _as_reminder(content)
             if rendered in existing:
                 continue
-            ctx.messages.append({"role": "user", "content": rendered})
+            await self._append(ctx, {"role": "user", "content": rendered}, origin="recall")
             existing.add(rendered)
 
     def _resolve_deferred_strategy(self) -> "DeferredToolStrategy":
@@ -243,9 +257,65 @@ class AgentLoop:
             )
         return self._deferred_strategy_cached
 
-    async def _emit(self, event: Event) -> None:
-        if self._event_bus is not None:
-            await self._event_bus.emit(event)
+    async def _emit(self, event: Event, ctx: ToolUseContext) -> None:
+        """**Sumidero único** de la costura pública — espejo de `insertMessageChain`
+        (`sessionStorage.ts:993-1083`).
+
+        `FIND-STREAM-1`: los cinco campos de identidad del `Event` llegaban SIEMPRE
+        vacíos (`seq=0`, `ts=0.0`) porque ningún sitio de producción los poblaba, y el
+        docstring del contrato afirmaba lo contrario. El canónico no le pide a cada
+        factoría que recuerde los campos de sesión: los estampa en un solo choke point
+        por el que pasa todo mensaje de salida. Éste es ese punto.
+
+        El sellado es **incondicional**, no «sólo si está vacío». No es gusto: el
+        comentario portante de `sessionStorage.ts:1049-1056` documenta que sellar
+        condicionalmente reintroduce la identidad CRUZADA en cuanto un mensaje se
+        reemite — llevaría la sesión del emisor original, no la de este turno.
+
+        `ctx` es **obligatorio y posicional a propósito**: con default, un emisor que lo
+        olvidara emitiría identidad vacía en silencio, que es exactamente el defecto
+        que este sumidero paga.
+
+        Divergencia declarada, no deuda (`L10`): A **no tiene `seq`** —ordena por la
+        cadena `parentUuid` más el timestamp ISO, lexicográficamente ordenable
+        (`sessionStorage.ts:4647-4650`)—. Aquí el bus entrega objetos, no una cadena
+        enlazada persistida, así que el orden lo porta un contador del sumidero. Y `ts`
+        se sella aquí, no en una factoría como en A (`messages.ts`), porque B no tiene
+        capa de factorías que interponer.
+        """
+        if self._event_bus is None:
+            return
+        self._event_seq += 1
+        await self._event_bus.emit(replace(
+            event,
+            task_id=ctx.task_id,
+            agent_id=ctx.agent_id or "",
+            session_id=ctx.session_id,
+            seq=self._event_seq,
+            ts=time.time(),
+        ))
+
+    async def _append(
+        self, ctx: ToolUseContext, message: dict[str, Any], origin: str
+    ) -> None:
+        """Añade a la historia del turno **y** lo rinde por el stream público (`#10`).
+
+        Espejo de la propiedad canónica que `query.ts` cumple 1→EOF: lo que se persiste
+        es lo que se yieldea (`:1588`, `:1610`, `:1624`). Antes, todo lo que el runtime
+        le INYECTA al modelo —anuncios de diferidas, recall, resultados de tools— entraba
+        a `ctx.messages` y no salía por ninguna parte, así que el consumidor no veía nada
+        de ello: justo donde vive el patrón de fallo dominante del barrido (B tiene el
+        dato y no lo pone en ninguna lista que se vea).
+        """
+        ctx.messages.append(message)
+        await self._emit(
+            MessageEvent(
+                role=str(message.get("role", "")),
+                content=str(message.get("content", "")),
+                origin=origin,
+            ),
+            ctx,
+        )
 
     # ------------------------------------------------------------------
     # DrainableLoopProtocol
@@ -315,7 +385,7 @@ class AgentLoop:
         # el canónico empuja `messagesFromUserInput` siempre (`QueryEngine.ts:431`) y sólo
         # después mira `shouldQuery` (`:556`). Un slash-command resuelto no borra de la
         # conversación que el usuario lo escribió.
-        ctx.messages.append({"role": "user", "content": processed.prompt})
+        await self._append(ctx, {"role": "user", "content": processed.prompt}, origin="user")
 
         if processed.short_circuit:
             # Turno resuelto localmente: NO se llama al modelo. Lo ya resuelto se
@@ -323,7 +393,9 @@ class AgentLoop:
             # mismo camino que cualquier otra respuesta (`_last_assistant_text`).
             text = processed.result_text or ""
             if text:
-                ctx.messages.append({"role": "assistant", "content": text})
+                await self._append(
+                    ctx, {"role": "assistant", "content": text}, origin="short_circuit"
+                )
             logger.debug("AgentLoop: `S11` cortó el turno sin ir al modelo")
             return LoopOutcome(LoopEndReason.SHORT_CIRCUIT, ctx.turn_count, text or None)
 
@@ -346,13 +418,15 @@ class AgentLoop:
             # Resuelve tools del turno. Modelo alineado al canónico: se ensambla un
             # único pool (native + capability) en ctx.tool_pool y los schemas se
             # derivan de él; la ejecución (dispatcher) resuelve del MISMO pool.
+            deferred_names: tuple[str, ...] = ()
+            announcements: list[str] = []
             if self._tool_registry is not None or self._capability_manager is not None:
                 ctx.tool_pool = self._build_tool_pool(ctx)
                 pool = ctx.tool_pool.assemble(ctx.permission_context)
                 plan = self._resolve_deferred_strategy().prepare_turn(ctx, pool)
-                for announcement in plan.announcements:
-                    ctx.messages.append({"role": "user", "content": _as_reminder(announcement)})
                 tool_schemas = plan.tool_schemas
+                deferred_names = plan.deferred_names
+                announcements = plan.announcements
             elif self._capabilities_resolver is not None:
                 # Path legacy (solo schemas): el dispatcher resuelve de ctx.tool_pool,
                 # así que NO ejecuta tools por esta vía — solo las anuncia.
@@ -360,6 +434,26 @@ class AgentLoop:
                 tool_schemas = resolved.tool_schemas
             else:
                 tool_schemas = []
+
+            # Frontera de turno, y el plan de tools como DATO (`#10`). Va ANTES de los
+            # anuncios y por los TRES caminos: el consumidor sabe a qué turno pertenece
+            # lo que viene después, igual que A rinde `{type:'stream_request_start'}` una
+            # vez por iteración (`query.ts:337`). El `TurnToolPlan` se construía y se
+            # tiraba: nada de lo que decidía salía de esta función.
+            await self._emit(
+                TurnStartEvent(
+                    turn=ctx.turn_count,
+                    tool_names=tuple(str(s.get("name", "")) for s in tool_schemas),
+                    deferred_names=deferred_names,
+                ),
+                ctx,
+            )
+            for announcement in announcements:
+                await self._append(
+                    ctx,
+                    {"role": "user", "content": _as_reminder(announcement)},
+                    origin="deferred_delta",
+                )
 
             # Secciones de system prompt aportadas por los providers (memoria, etc.):
             # el runtime las ensambla; el caller las concatena al system prompt base.
@@ -370,7 +464,7 @@ class AgentLoop:
                 # como `role:"user"` envuelto en `<system-reminder>`, con dedup contra
                 # la historia ya presente (la compactación, al recortar, rehabilita el
                 # re-surface). Activa también Skills S3 sin tocar su provider.
-                self._inject_recall(ctx)
+                await self._inject_recall(ctx)
 
             logger.debug(
                 "AgentLoop turno %d: invocando modelo (%d tools, %d mensajes)",
@@ -410,7 +504,7 @@ class AgentLoop:
                 if _aborted(ctx):
                     aborted_mid_stream = True
                     break
-                await self._emit(event)  # observación en vivo
+                await self._emit(event, ctx)  # observación en vivo
                 if isinstance(event, TokenEvent):
                     token_buffer.append(event.content)
                 elif isinstance(event, ToolCallEvent):
@@ -446,7 +540,11 @@ class AgentLoop:
             # Maneja error
             if error is not None:
                 logger.error("AgentLoop: error del modelo — %s", error.message)
-                ctx.messages.append({"role": "assistant", "content": f"[error: {error.message}]"})
+                await self._append(
+                    ctx,
+                    {"role": "assistant", "content": f"[error: {error.message}]"},
+                    origin="model_error",
+                )
                 reason = LoopEndReason.MODEL_ERROR
                 detail = error.message
                 break
@@ -460,7 +558,7 @@ class AgentLoop:
                         {"id": tc.call_id, "function": {"name": tc.tool_name, "arguments": json.dumps(tc.tool_input)}}
                         for tc in tool_calls
                     ]
-                ctx.messages.append(msg)
+                await self._append(ctx, msg, origin="assistant")
 
             # Ejecuta tool calls y acumula resultados. `_ends_turn`: una tool puede señalar que el
             # turno debe CERRAR tras ejecutarla (HITL multi-turno; p. ej. AskUserQuestion emite las
@@ -468,7 +566,11 @@ class AgentLoop:
             _ends_turn = False
             for tc in tool_calls:
                 if self._tool_dispatcher is None:
-                    ctx.messages.append({"role": "tool", "tool_call_id": tc.call_id, "content": "[no dispatcher]"})
+                    await self._append(
+                        ctx,
+                        {"role": "tool", "tool_call_id": tc.call_id, "content": "[no dispatcher]"},
+                        origin="tool",
+                    )
                     continue
                 # PreToolUse — gate inyectado por el consumidor (espejo de `canUseTool`
                 # del canónico). El runtime dispara el punto; la POLÍTICA vive en el
@@ -490,8 +592,14 @@ class AgentLoop:
                         tool_input = decision.modified_input
                     if decision.block:
                         content = decision.message or f"permiso denegado para '{tc.tool_name}'"
+                        # Este append y el del resultado real NO emiten `MessageEvent`:
+                        # ya viajan por el stream como `ToolResultEvent`, que además
+                        # lleva `call_id` e `is_error`. Duplicarlos sería ruido, no
+                        # cobertura.
                         ctx.messages.append({"role": "tool", "tool_call_id": tc.call_id, "content": content})
-                        await self._emit(ToolResultEvent(call_id=tc.call_id, result=content, is_error=True))
+                        await self._emit(
+                            ToolResultEvent(call_id=tc.call_id, result=content, is_error=True), ctx
+                        )
                         continue
                 result = await self._tool_dispatcher.dispatch(
                     tool_name=tc.tool_name,
@@ -503,11 +611,14 @@ class AgentLoop:
                     "tool_call_id": tc.call_id,
                     "content": result.output,
                 })
-                await self._emit(ToolResultEvent(
-                    call_id=tc.call_id,
-                    result=result.output,
-                    is_error=getattr(result, "is_error", False),
-                ))
+                await self._emit(
+                    ToolResultEvent(
+                        call_id=tc.call_id,
+                        result=result.output,
+                        is_error=getattr(result, "is_error", False),
+                    ),
+                    ctx,
+                )
                 # Aplica el context_modifier que la tool haya producido (skills →
                 # allowed-tools/skill activa; worktree/plan_mode → estado nativo).
                 # La convención es mutar in-place y retornar, pero forkar está soportado

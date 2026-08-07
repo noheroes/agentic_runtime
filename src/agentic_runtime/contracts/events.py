@@ -42,6 +42,13 @@ class Event:
     Los cinco campos de identidad son **atribución opaca** (`ID-6`/`K4`): el
     runtime los puebla y no los lee; el consumidor filtra por ellos.
 
+    **Dónde se pueblan (`FIND-STREAM-1`).** En un **sumidero único**, `AgentLoop._emit`,
+    espejo de `insertMessageChain` del canónico (`sessionStorage.ts:993-1083`), que
+    decora todo mensaje de salida en un solo choke point en vez de pedirle a cada
+    emisor que recuerde los campos. El sellado es **incondicional**, no «sólo si está
+    vacío»: el comentario portante de `sessionStorage.ts:1049-1056` documenta que
+    sellar condicionalmente reintroduce la identidad cruzada al reemitir.
+
     **`kw_only` no es cosmético — corrige la forma de `K4`.** `A3.DB §7.2` acreditó
     la viabilidad de añadir campos con default al base contra *los cinco subtipos
     propios*, que ya tenían todos sus campos con default. Pero el bus es una
@@ -94,6 +101,42 @@ class ErrorEvent(Event):
     message: str = ""
 
 
+@dataclass(frozen=True)
+class MessageEvent(Event):
+    """Un mensaje añadido a la historia del turno, visible en el stream público.
+
+    Propiedad canónica que reproduce (`#10`): **el stream lleva lo mismo que la
+    historia**. `query.ts` no tiene un canal aparte para anuncios — rinde los mismos
+    `Message` que persiste, y cada anuncio (delta de diferidas, listado de skills,
+    recall, memoria) es un `AttachmentMessage` yieldado al stream (`:1588`, `:1610`,
+    `:1624`). Sin esto un consumidor no ve NADA de lo que el runtime le inyecta al
+    modelo, que es justo donde vive el patrón de fallo dominante del barrido.
+
+    `origin` clasifica la procedencia sin interpretarla: el runtime la rotula, el
+    consumidor filtra por ella.
+    """
+
+    role: str = ""
+    content: str = ""
+    origin: str = ""
+
+
+@dataclass(frozen=True)
+class TurnStartEvent(Event):
+    """Frontera de turno y **plan de tools como DATO**.
+
+    Espejo de `{type:'stream_request_start'}` (`query.ts:337`), que A rinde una vez
+    por iteración. Lleva además los nombres anunciados y cuáles iban diferidos: A los
+    contabiliza (`analyzeContext.ts`) y sin ellos el consumidor tendría que
+    re-parsear el texto del anuncio — que es exactamente la enfermedad diagnosticada
+    en `FIND-DEFER-1`, no su remedio.
+    """
+
+    turn: int = 0
+    tool_names: tuple[str, ...] = ()
+    deferred_names: tuple[str, ...] = ()
+
+
 class EventBusProtocol(Protocol):
     # Genérico en el subtipo: un handler puede declarar el evento concreto que
     # consume (p.ej. `Callable[[TokenEvent], ...]`) sin romper el tipado.
@@ -108,8 +151,10 @@ __all__ = [
     "Event",
     "EventBusProtocol",
     "EventHandler",
+    "MessageEvent",
     "TokenEvent",
     "ToolCallEvent",
     "ToolResultEvent",
+    "TurnStartEvent",
     "Usage",
 ]

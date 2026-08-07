@@ -9,9 +9,11 @@ from ..contracts.events import (
     DoneEvent,
     ErrorEvent,
     Event,
+    MessageEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
+    TurnStartEvent,
     Usage,
 )
 
@@ -19,8 +21,10 @@ __all__ = [
     "DoneEvent",
     "ErrorEvent",
     "Event",
+    "MessageEvent",
     "TokenEvent",
     "ToolCallEvent",
     "ToolResultEvent",
+    "TurnStartEvent",
     "Usage",
 ]

@@ -37,6 +37,11 @@ class TurnToolPlan:
     y mensajes `<system-reminder>` a insertar (el loop los envuelve y añade a `ctx.messages`)."""
     tool_schemas: list[dict]
     announcements: list[str] = field(default_factory=list)
+    # Nombres de las tools que este turno trata como DIFERIDAS. Lo sabe la estrategia
+    # —es quien lo decide— y el loop lo transporta al `TurnStartEvent` (`#10`). Sin este
+    # campo el consumidor tendría que re-parsear el texto del anuncio para saberlo, que
+    # es exactamente la enfermedad de `FIND-DEFER-1`, no su remedio.
+    deferred_names: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -68,7 +73,11 @@ class SimulatedDeferredStrategy:
         if delta is not None:
             added, removed = delta
             announcements.append(render_deferred_tools_delta(added, removed))
-        return TurnToolPlan(tool_schemas=schemas, announcements=announcements)
+        return TurnToolPlan(
+            tool_schemas=schemas,
+            announcements=announcements,
+            deferred_names=tuple(t.name for t in pool if is_deferred_tool(t)),
+        )
 
 
 class NativeDeferredStrategy:
@@ -83,7 +92,11 @@ class NativeDeferredStrategy:
             if is_deferred_tool(tool):
                 schema["defer_loading"] = True
             schemas.append(schema)
-        return TurnToolPlan(tool_schemas=schemas, announcements=[])
+        return TurnToolPlan(
+            tool_schemas=schemas,
+            announcements=[],
+            deferred_names=tuple(t.name for t in pool if is_deferred_tool(t)),
+        )
 
 
 __all__ = [

@@ -49,7 +49,7 @@ Producido por el usuario ejercitando `agentic_code` contra el runtime. **Este es
 | 7 | Abort de `WebFetch` no esperable | conducta | ⛔ abierto |
 | 8 | `RuntimeFactory._modes` singleton (`factory.py:152`) | estructural | ⛔ abierto |
 | 9 | Motor de permisos parcial | capacidad | ⛔ abierto |
-| 10 | Stream público insuficiente para reproducir la observabilidad canónica | **observabilidad** | ⛔ abierto |
+| 10 | Stream público insuficiente para reproducir la observabilidad canónica | **observabilidad** | ✅ **PAGADO** (12ª ventana) junto con `FIND-STREAM-1` — 8 inyecciones rojas |
 
 **Detalle del #5** — las 15 descripciones que no están homologadas contra el canónico:
 `Agent` (16.6 KB en A), `TodoWrite` (9.5 KB), `EnterPlanMode` (7.7 KB), `Config`, `ExitPlanMode`,
@@ -76,13 +76,34 @@ temporal — no por un proceso vivo.
 | **Efecto lateral pagado, no declarado** | Hacer persistir el `cwd` activó `preventCwdChanges` (B11): A gatea la escritura para no-main-thread, y sin esa guarda el arreglo habría abierto un agujero que el canónico cierra. Implementado (`ctx.is_subagent`) y con test propio. |
 | **Carencia declarada** | `BwrapExecEnvironment` honra el `cwd` pero **no lo rastrea** (`ShellResult.cwd=None`): el fichero temporal del host no existe dentro del sandbox y el `pwd` de dentro es un path INTERNO (`/workspace/…`) que no es asignable a `ctx.cwd`. Bajo bwrap un `cd` no persiste entre comandos. Declarado, no oculto. |
 
-**Detalle del #10** — es el que engancha con el barrido: el runtime **no emite el plan de tools del
-turno**. `TurnToolPlan` (`deferred_strategy.py:34-39`) es interno, no viaja al stream público, y lo
-único observable es `app_state.capabilities['discovered_tools']`. Un integrador **no puede
-reconstruir** cuántas tools se anunciaron, cuáles iban diferidas ni cuántas quedaron fuera por
-presupuesto — todo lo cual A sí contabiliza y expone (`analyzeContext.ts`). Sin esto, el paso 4 del
-método (validar por `.jsonl`) es ciego para media superficie de tools: **conviene pagarlo temprano
-aunque esté el último de la lista**, porque es el instrumento de medida del propio método.
+**Detalle del #10 + `FIND-STREAM-1` — remediación desarrollada (`L05`, seis campos).** Se pagan
+JUNTOS: son el mismo seam, el stream público. Medido en consumidor sobre `.jsonl` real: los 5 campos
+de identidad llegan vacíos en **`ToolCallEvent`, `DoneEvent` y `ToolResultEvent`** — universal, no
+sólo el último; y `agentic_code` se ve obligado a fabricarse `seq`/`timestamp`/`session_id` propios
+(`capture.py:116-124`) más un segundo contador `_source_sequence` (`:39`, `:75`), que es la asimetría
+del paso 2 del método hecha código. Agravante de rótulo: `contracts/events.py:41-43` afirma «el
+runtime los puebla y no los lee» — la primera mitad es falsa.
+
+**Corrección al enunciado del #10 (`D-08`, leído el canónico 1→EOF).** El enunciado previo pedía
+«emitir el `TurnToolPlan`». El canónico **no tiene evento de plan**: `query.ts` rinde los MISMOS
+`Message` que se persisten, y cada anuncio (`deferred_tools_delta`, `skill_listing`,
+`agent_listing_delta`, memoria, recall) es un `AttachmentMessage` **yieldado al stream público**
+(`:1588`, `:1610`, `:1624`), con un marcador de turno `{type:'stream_request_start'}` por iteración
+(`:337`). La propiedad canónica es **el stream público lleva lo mismo que la historia**, no «hay un
+canal aparte para el plan». Se implementa esa propiedad, no la formulación vieja.
+
+| Campo | Contenido |
+|---|---|
+| **Comportamiento** | (a) Todo evento sale del runtime con sus 5 campos poblados; (b) todo mensaje que el loop añade a `ctx.messages` viaja también por el stream; (c) el turno tiene frontera observable y el plan de tools viaja como DATO (nombres anunciados / diferidos), no como texto a re-parsear — `FIND-DEFER-1` demuestra que re-parsear el texto rendido es la enfermedad, no el remedio. |
+| **Seam** | **Sumidero único**, espejo de `insertMessageChain`: `AgentLoop._emit` (`agent_loop.py:246-248`) es el choke point por el que pasa TODO evento sin excepción. Sella ahí, no en cada emisor — A no le pide a ninguna factoría que recuerde los campos de sesión. |
+| **Firma** | `Event` no cambia (los 5 campos ya existen). Añade `contracts/events.py`: `MessageEvent(role, content)` y `TurnStartEvent(turn, tool_names, deferred_names)`. Nombres genéricos de framework, no conveniencias del integrador. |
+| **Cableado** | `_emit` reemplaza por `dataclasses.replace(...)` **incondicionalmente** (`ts`, `seq` del contador del sumidero, y `task_id`/`agent_id`/`session_id` de `ctx`). El re-sellado incondicional es dictado, no gusto: `sessionStorage.ts:1049-1056` documenta que sellar «sólo si falta» reintroduce el bug de identidad cruzada. El loop emite `TurnStartEvent` en `:352` y un `MessageEvent` por cada `ctx.messages.append` (anuncios `:354`, asistente `:463`, tool `:501`, recall). |
+| **Orden** | contrato (`events.py`) → sumidero (`_emit`) → emisiones del loop → integrador (`capture.py` deja de fabricar identidad) → detector. |
+| **Prueba** | Detector en `agentic_code` que nace ROJO: en un `.jsonl` real, `seq` estrictamente creciente, `ts` no nulo, `session_id` == el de la sesión, y el anuncio de diferidas presente como evento (no sólo dentro del prompt). Más el par en la suite del runtime. |
+| **Divergencia declarada, no deuda (`L10`)** | A **no tiene `seq`** en 5105 L: ordena por lista enlazada `parentUuid` con desempate `timestamp` ISO. B declara `seq` y es primitiva legítima de un bus de eventos; lo que se paga no es la forma sino la propiedad —que el consumidor ordene y atribuya sin contabilidad propia—. Segunda divergencia declarada: A sella `timestamp` en la FÁBRICA y B lo sella en el SUMIDERO, porque B no tiene capa de factorías y exigirlo a cada provider es justo lo que A evita. |
+| **Acreditación** | **8 inyecciones, 8 rojas, 0 falsos positivos** (`INY-51..58`), cada una donde tocaba: `51` sellado condicional en vez de incondicional (1 roja — la del re-sellado, la única que puede verlo) · `52` sin `ts` (2 rt + 1 ac) · `53` sin incrementar `seq` (2 rt + 1 ac) · `54` `_append` que añade a la historia y no emite (8 rt + 2 ac — la más ancha, que es lo esperable: es la propiedad central) · `55` sin `TurnStartEvent` (4 rt + 2 ac) · `56` `deferred_names=()` (1 rt) · `57` anuncios por `ctx.messages.append` crudo (1 rt) · `58` el integrador vuelve a fabricarse el contador (2 ac). Revertido desde copia propia verificada por `sha256` entre inyección e inyección; jamás `git checkout`. |
+| **Cable nuevo** | `ToolUseContext.task_id` (`""` por defecto), poblado en `_run_loop` con el handle que acuña el registry. Es TRANSPORTE, no composición (`D-11`): el loop lo copia, no lo deriva. `extra="forbid"` hace que una grafía vieja reviente en vez de descartarse en silencio. |
+| **Lo que NO emite `MessageEvent`, dicho** | Los dos `ctx.messages.append` de resultado de tool (dispatch real y denegación del gate). No es un hueco: ya viajan como `ToolResultEvent`, que además lleva `call_id` e `is_error`. Duplicarlos sería ruido. Está aseverado en el orden total exacto del canal, no narrado. |
 
 ---
 
@@ -99,7 +120,7 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 | `FIND-SKILL9/17` | Reclasificado: al modelo **no le llega ningún listado de skills**, por ninguna de las **dos** vías de A (description de `Skill` + attachment `skill_listing` incremental) | ⛔ abierto — **primero de la pata de skills** |
 | `FIND-SKILL-20` | El frontmatter PISA la identidad de la skill (A: siempre el nombre del directorio) | ⛔ abierto |
 | `FIND-SKILL-21` | Sin dimensión de fuente ni precedencia; `last-wins` donde A tiene `first-wins` por identidad de fichero real | ⛔ abierto |
-| `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0` en todo `ToolResultEvent` medido. El `result` sí viaja. Con `seq`/`ts` a cero no se puede ordenar ni fechar una traza, y sin `task_id`/`agent_id` no se puede separar lo del agente de lo de un subagente — el paso 4 del método queda cojo justo donde más falta hace. Entra con el **#10** | ⛔ abierto — **NUEVO, 11ª ventana** |
+| `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0`. **Ampliado en la 12ª ventana: es UNIVERSAL** (medido en `ToolCallEvent`, `DoneEvent` y `ToolResultEvent`), no sólo el último; ningún sitio de producción de `src/` poblaba identidad. Sin `seq`/`ts` no se ordena ni se fecha una traza, y sin `task_id`/`agent_id` no se separa agente de subagente. Se pagó con el **#10** (mismo seam) | ✅ **PAGADO** (12ª ventana) |
 | `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ⛔ abierto |
 
 **Dos `H-L4` a saldar al pagar lo anterior** — suites que acreditan la divergencia en vez de

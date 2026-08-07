@@ -181,7 +181,18 @@ async def test_e2e_stream_surfaces_full_event_sequence(tmp_path):
     assert "ToolCallEvent" in types
     assert "ToolResultEvent" in types
     assert "TokenEvent" in types
-    assert types[-1] == "DoneEvent"
+    # El turno del asistente cierra el stream, después de sus deltas (`query.ts:1610`).
+    assert types[-1] == "MessageEvent"
+    # `FIND-STREAM-1`: los cinco campos de identidad llegaban SIEMPRE vacíos porque
+    # ningún sitio de producción los poblaba. Se aseveran aquí, sobre el camino REAL
+    # (`LocalRuntime.stream`), no sobre un loop con dobles: es donde existen el
+    # `task_id` que acuña el registry y el `agent_id` que acuña `_build_child`.
+    assert all(e.session_id == "sess-test" for e in events), \
+        [(type(e).__name__, e.session_id) for e in events]
+    assert all(e.task_id for e in events) and all(e.agent_id for e in events)
+    assert all(e.ts > 0 for e in events)
+    # Orden total sellado por el sumidero: monótono, sin huecos y arrancando en 1.
+    assert [e.seq for e in events] == list(range(1, len(events) + 1))
     # Los TokenEvent (que rec.events NO captura) llegan por el stream y reconstruyen el texto.
     streamed = "".join(e.content for e in events if isinstance(e, TokenEvent))
     assert streamed == "listo"

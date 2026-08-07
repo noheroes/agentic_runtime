@@ -57,6 +57,13 @@ class ToolUseContext(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     session_id: str
+    # Handle de ESTA ejecución (`FIND-STREAM-1`): lo produce el registry de tasks del
+    # propio runtime, igual que `agent_id`, y viaja para que el sumidero de eventos
+    # (`AgentLoop._emit`) pueda atribuir sin recibir el contexto entero (`ID-6`). Es un
+    # CABLE, no identidad compuesta (`D-11`): el loop lo copia, no lo deriva ni lo
+    # inventa. `""` = el ejecutor no lo declaró; el evento sale con el campo vacío, que
+    # es lo que el consumidor ve y puede medir.
+    task_id: str = ""
     # Frontera de aislamiento de los repos (memoria, tokens MCP, skills, transcript).
     # `None` = sin scope: los repos que necesiten clave **fallan**, no inventan una.
     scope: Scope | None = None

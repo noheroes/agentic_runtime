@@ -198,7 +198,9 @@ async def test_loop_emits_execution_events_onto_bus():
     )
 
     assert "ToolResultEvent" in seen  # el loop lo sintetiza tras el dispatch
-    assert seen[0] == "TokenEvent"
+    # `#10`: el canal abre por lo que el runtime le mete al modelo (el prompt del
+    # usuario) y por la frontera de turno, no por el primer token del modelo.
+    assert seen[:3] == ["MessageEvent", "TurnStartEvent", "TokenEvent"], seen
 
 
 # ========================================================================== #
@@ -356,9 +358,17 @@ async def test_c3_bus_channel_is_totally_ordered_across_the_three_emitters():
     # 1. el turno corrió de verdad (si no, el orden de abajo sería el de la nada)
     assert tool.calls == [{"text": "hola"}]
 
-    # 2. orden total, exacto y completo del canal — no «contiene», no «al menos»
+    # 2. orden total, exacto y completo del canal — no «contiene», no «al menos».
+    #    Ampliado al pagar `#10`/`FIND-STREAM-1`: el canal ya no empieza en el primer
+    #    token. Lleva TAMBIÉN lo que el runtime inyecta —el prompt del usuario y el
+    #    turno del asistente como mensajes— y la frontera de turno, que es la propiedad
+    #    canónica de `query.ts` (se yieldea lo mismo que se persiste, `:1588`/`:1610`).
     assert order == [
-        "TokenEvent", "TokenEvent", "ToolCallEvent", "DoneEvent", "ToolResultEvent",
+        "MessageEvent",     # prompt del usuario, entrado a la historia
+        "TurnStartEvent",   # frontera de turno + plan de tools como dato
+        "TokenEvent", "TokenEvent", "ToolCallEvent", "DoneEvent",
+        "MessageEvent",     # turno del asistente ya ensamblado
+        "ToolResultEvent",  # el resultado NO duplica `MessageEvent`: ya viaja aquí
     ], order
 
     # 3. el `ToolResultEvent` del loop llegó a AMBAS vías, y a la tipada primero
@@ -407,7 +417,9 @@ async def test_c3_a_throwing_handler_does_not_take_down_the_others():
     await _loop(caller, _make_registry(RecordingTool()), bus).run("x", ctx)
 
     # 1. el handler sano recibió TODO, pese a que otro reventó en cada evento
-    assert survivors == ["TokenEvent", "DoneEvent"], survivors
+    assert survivors == [
+        "MessageEvent", "TurnStartEvent", "TokenEvent", "DoneEvent", "MessageEvent",
+    ], survivors
     # 2. y el canal siguió vivo después de la excepción (evento posterior, vía tipada)
     assert late == ["stop"]
     # 3. el turno terminó normal: la excepción no escapó al loop
