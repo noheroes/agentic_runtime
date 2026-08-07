@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..contracts.permissions import PermissionContext
+from ..contracts.tools import tool_is_enabled
 from .protocol import ToolProtocol
 
 
@@ -55,6 +56,20 @@ def assemble_tool_pool(
     Native tools take precedence on name collisions. Each partition is sorted
     by name for prompt-cache stability before deduplication — matching the
     canonical's mergeAndFilterTools behavior.
+
+    Se aplican DOS filtros, y el ORDEN entre ellos es parte de la costura
+    (`tools.ts:311-326`): primero deny + dedup, y `is_enabled` **al final**,
+    sobre la lista ya deduplicada. No es cosmético — decide qué pasa cuando
+    una capability trae el nombre de una nativa deshabilitada: como la nativa
+    ya consumió el nombre en la deduplicación, el hueco NO lo rellena la
+    capability. Aplicar el enabled antes invertiría eso y dejaría que una tool
+    de terceros suplantara a una nativa apagada.
+
+    El segundo filtro faltaba entero — `FIND-TOOL-ENABLED-1`: sin él, una tool
+    que exige un humano se publica igual en un host sin humano, y el modelo la
+    llama y pierde el turno. A lo dice en un comentario, sobre plan mode:
+    *«Disable entry too so plan mode isn't a trap the model can enter but
+    never leave»* (`EnterPlanModeTool.ts:56-67`).
     """
     denied = permission_context.denied_names()
     result: list[ToolProtocol] = []
@@ -72,7 +87,7 @@ def assemble_tool_pool(
         result.append(tool)
         seen.add(tool.name)
 
-    return result
+    return [tool for tool in result if tool_is_enabled(tool)]
 
 
 __all__ = ["ToolPool", "assemble_tool_pool"]

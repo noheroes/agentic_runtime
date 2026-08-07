@@ -201,6 +201,163 @@ server. Un verde por el motivo equivocado es exactamente lo que `L03` llama ledg
 
 ---
 
+## 2 ter · La re-medida del `E2g` con el prompt de PRODUCTO (17ª ventana)
+
+La 16ª ventana midió el residuo del `E2g` **sin** el prompt del producto y lo dejó como pendiente de
+verificación abierto. El encargo de ésta fue re-medirlo con `operational_system_prompt()` de
+`agentic_code` puesto, ≥6 rondas, y **prohibido decidir el criterio de cierre antes de tener el dato**.
+
+**Premisa del encargo, corregida (`L01`).** La línea 329 concluyó de un `grep system_prompt` sobre
+`test_tramo1_gate.py` que «el gate corre sin ningún system prompt». Es falso: `:2384` hace
+`inner = _build_caller(_E2G_SYSTEM)`, **posicional**, a través de un import aliaseado (`:76`) cuya firma
+vive en `_azure_real.py:build_caller(system_prompt, options=None)`. El grep no lo vio porque el nombre
+no aparece en el fichero. El experimento no fue «desnudo vs vestido» sino **`_E2G_SYSTEM` solo vs
+`_E2G_SYSTEM` + invariantes del producto**, que es la ruta real de un usuario con prompt custom.
+
+**Instrumento.** Plugin de pytest de MEDICIÓN, fuera del árbol, que **no toca el fuente del gate**:
+importa la función REAL del integrador (no copia el texto, `D-15`) y cuelga `on_payload` para
+**probar el cableado** en vez de suponerlo — se asevera que todos los payloads que salen hacia Azure
+llevan `<completion-policy>`. Si no viajara, la medición sale roja ahí, no en silencio (`L09`).
+
+**Dato: 2 incumplimientos en 32 casos (6,3 %), la misma cifra de cabecera que sin el prompt de
+producto.** Pero abrir las dos rojas es lo que separó incitación de defecto:
+
+| Ronda | Semilla | Síntoma | Naturaleza |
+|---|---|---|---|
+| 3 | `1780649320` | `elegidas=['AskUserQuestion','glob']`, `respuesta=''` | residuo de INCITACIÓN — el `<completion-policy>` no lo corrige |
+| 6 | `986409977` | «la tarea fue CANCELADA esperando el stream», `TaskStop` entre las elegidas, `respuesta=''` | **defecto de B**, no del modelo → `FIND-TASK-SELF-1` |
+
+⇒ el residuo de incitación real es **1 de 32 (3,1 %)**, no 2. Con n=32, 2/32 frente a 2/32 significa
+«sin diferencia medible a este tamaño», **no** «sin efecto»: la muestra no distingue 6 % de 3 %, y eso
+se dice en vez de redondearlo a una conclusión.
+
+### `FIND-TASK-SELF-1` — el modelo podía detener su propio turno ✅ PAGADO
+
+**A tiene DOS registros; B los fusionó en uno.** `TaskStopTool.ts` valida contra `appState.tasks[id]`
+con `status === 'running'`, y ahí sólo viven tareas de FONDO (shells, agentes async, sesiones remotas);
+el turno principal **no es una entrada de ese registro**. `TaskList/Get/Update` de A leen la otra
+estructura, la lista por sesión. B tiene un único `InMemoryTaskRegistry` donde la tarea raíz también
+vive, con `owner_session_id == ctx.session_id` (`runtime.py:192-194`, `:292-293`) ⇒ `list_for`
+(`registry.py:106`) se la sirve al modelo y `_scoped_get` la resuelve por id, así que `TaskStop` la
+mata con `asyncio_task.cancel()` (`registry.py:118-125`).
+
+**Medido antes de arreglar**, con sonda de conducta sobre el runtime ensamblado por `create_runtime`
+(caller guionizado, sin red): `TaskList` devolvió la propia raíz, `TaskStop` apuntó a ella, y con el
+turno final esperando al stream el resultado fue `status=KILLED`, `result=None`. Segundo modo
+destapado por la variante rápida: si la cancelación llega tarde, **el registry dice `COMPLETED` con
+resultado mientras quien espera la tarea recibe `CancelledError`** — estado incoherente.
+
+**Pago:** guarda `_is_own_task(task_id, ctx)` sobre `ctx.task_id` (el cable que pobló `FIND-STREAM-1`),
+aplicada en `_scoped_get` (cubre `Get`/`Update`/`Stop`/`Output`) y en el filtro de `TaskList`.
+**Alcance declarado, no disimulado:** es una guarda, no la topología de A; la separación de los dos
+registros es más ancha y queda con `FIND-TASK-1`, que es la misma raíz.
+
+**Prueba:** 7 tests nacidos rojos en `test_task_self_stop_guard.py` — 4 de unidad parametrizados sobre
+las cuatro tools direccionables, uno de listado, uno E2E que reproduce la RONDA 6 (el modelo LEE el id
+de `TaskList`, no lo inventa) y **un control positivo** que impide que la guarda degenere en «`TaskStop`
+no para nada». **Acreditación `INY-51..55` → 5 rojas / 0 falsos positivos**: guarda neutralizada · sólo
+en `_scoped_get` · sólo en `TaskList` · cable equivocado (`agent_id` por `task_id`) · comparación laxa.
+Dicho: bajo `INY-53` el E2E **sobrevivió** y sólo cayeron los 4 de unidad — el E2E no cubre esa vía por
+sí solo, y por eso hacen falta los dos niveles.
+
+### Incitadores extendidos en el registro que ya existía (`agentic_code`, genéricos, `L10`)
+
+Para el residuo que sí es de incitación se extendió `operational_system_prompt()` con dos bloques más,
+**sin nombrar ninguna tool**: `<tool-availability>` (la lista visible puede no ser la completa; algunas
+se cargan al buscarlas y otras aparecen a mitad de conversación) y `<answer-policy>` (terminar siempre
+con el dato o con el bloqueo concreto; devolver la pregunta al usuario sólo si el trabajo no puede
+continuar sin su decisión). Es cierto en producción: el diferimiento lo decide `is_deferred_tool()`
+sobre el pool (`deferred_strategy.py:58,92`), no una configuración del banco de pruebas.
+
+---
+
+## 2 quater · `FIND-POOL-1` — al pool le faltaba el predicado de PUBLICACIÓN ✅ PAGADO (18ª ventana)
+
+**Es el mismo hallazgo que `FIND-POOL-1` de la §3, redescubierto por otra vía.** Lo abrí como
+`FIND-TOOL-ENABLED-1` desde las rojas del `E2g` sin caer en que el barrido EOF de la 10ª ventana ya lo
+había cazado leyendo el canónico. Se unifican bajo `FIND-POOL-1`: dos IDs para un defecto inflarían el
+ledger y romperían la trazabilidad. Que un mismo defecto salga por dos instrumentos independientes
+—lectura del canónico y medición con el modelo real— es la confirmación cruzada que `D-15` busca.
+
+**El defecto.** A tiene DOS filtros en el ensamblado del pool (`tools.ts:311-326`): deny —lo que el
+usuario prohibió— e `isEnabled()` —lo que el host no puede sostener—. B sólo tenía el primero.
+`isEnabled` no figuraba siquiera en la lista de miembros diferidos del contrato
+(`contracts/tools.py:3-6`): **omisión no declarada**, que es peor que una deuda.
+
+A escribe la razón, y es literalmente el síntoma que medí:
+> *«When --channels is active, ExitPlanMode is disabled (its approval dialog needs the terminal).
+> Disable entry too so plan mode isn't a trap the model can enter but never leave.»*
+> (`EnterPlanModeTool.ts:56-67`)
+
+**Medido tres veces en el `E2g`, con dos tools distintas**, y las tres son la misma forma —una tool que
+cede el turno esperando a un humano, publicada en un host que no tiene humano—:
+
+| Semilla | Síntoma |
+|---|---|
+| `1780649320` | `elegidas=['AskUserQuestion','glob']`, `respuesta=''` |
+| `29525785` | el modelo entró en plan mode y se declaró bloqueado |
+| `1561952726` | ídem |
+
+⇒ **3 de las 4 rojas residuales del `E2g` eran UN defecto de B, no incitación.** El cuadro que las
+contaba como ruido del modelo estaba mal, y la reclasificación es el resultado, no una excusa.
+
+**Pago.** `tool_is_enabled()` en el contrato (helper, no miembro del `Protocol`: declararlo requerido en
+un `runtime_checkable` estructural rompería el `isinstance` de toda tool de terceros — que es lo
+contrario de un *default*, y A lo tipa requerido pero lo lista en `DefaultableToolKeys` y lo rellena en
+`buildTool`, `Tool.ts:403,708,749,758`). Filtro aplicado en `assemble_tool_pool` **al final, tras deny y
+dedup**, orden que es parte de la costura: una capability NO puede ocupar el hueco de una nativa
+apagada. Eje nuevo `ToolsConfig.interactive`, default `False`, mismo criterio que los handlers OAuth de
+`CapabilitiesConfig` — el runtime headless no abre navegador.
+
+**Prueba:** 13 tests nacidos rojos en `test_tool_enablement.py`. La ronda de reversión con el estado
+previo íntegro sólo da `ImportError` —señal gruesa—, así que se midió además una ronda **quirúrgica**
+que deja el arreglo puesto salvo el filtro del pool: 7 rojos por `AssertionError`, conducta y no firma.
+Se descartan explícitamente dos rondas intermedias que enrojecían por `TypeError` en cadena: eso es
+`H-L4` y no acredita nada.
+
+**`INY-73..80` → 8 rojas / 0 falsos positivos**, y **dos de ellas nacieron VERDES, que es el hallazgo**:
+
+- `INY-76` (estrechar el helper a «sólo callable»): verde porque el fake siempre adjunta una lambda. La
+  docstring prometía aceptar también un atributo booleano —la grafía más natural en Python para una
+  tool de terceros— y **nadie lo medía**. Declaración sin prueba.
+- `INY-79` (invertir el default de `ToolsConfig.interactive`): verde porque todos los tests pasaban
+  `interactive=` explícito. El **default** es justo la costura del caso real —un integrador que no
+  configuró nada— y era la única sin vigilar.
+
+Ambas carencias son mías, se pagaron con dos tests más, y las inyecciones re-corridas ya enrojecen.
+
+**Radio de explosión, atendido y no disimulado.** El arreglo puso en rojo `E2c`, `E2d` y `E11`, que
+codificaban la premisa vieja «el censo entero se anuncia siempre». Ninguno se relajó:
+
+- `E2c` gana una **rama C** con el mismo tratamiento que ya se le había dado a `ToolSearch`: el censo
+  se anuncia entero **si y sólo si** el host sostiene las de puerta única, y se asevera que la
+  diferencia entre los dos hosts es *exactamente* ese conjunto. Es más fuerte que la premisa vieja.
+- `E2d` declara `interactive=True` porque mide selección **contra el censo íntegro como distractor**:
+  dejarlo headless le quitaría 3 opciones al modelo y ablandaría la prueba en silencio, quedándose
+  verde mientras mide algo más fácil que lo enunciado.
+- `E11` declara `interactive=True` porque `AskUserQuestion` está en `_E11_OBJETIVO`: en headless la
+  tool no se anuncia y el gate mediría una tool **ausente** en vez de una **no elegida** — dos cosas
+  distintas con el mismo rojo. Se corrigió además la nota de `_E11_CARENCIA` que decía «mecánicamente
+  cierta en un runtime headless» y habría quedado engañosa.
+
+**`FIND-CODE-HITL-1` (nuevo, desde el consumidor real).** `agentic_code` **no resuelve ninguna** tool de
+puerta única: `driver.py` (leído 1→EOF) se autodescribe como «driver headless compartido», es el mismo
+para el REPL y para `--print`, y ni detecta el `tool_call` de `AskUserQuestion`/`ExitPlanMode` en el
+stream ni reinyecta la respuesta del usuario en el turno siguiente. ⇒ el default headless es el
+correcto **en los dos modos**, y lo que se cablea es una declaración escrita en `composition.py` para
+que nadie lo «arregle» poniendo `True` sin la capa (`L09`). El día que el REPL implemente el HITL, ése
+es el punto exacto que cambia.
+
+**Deuda cero neta por diff**, medida contra el árbol sin el arreglo, no contra una cifra recordada:
+`ruff` 510 → 510 (los 2 `RUF012` que introduje se limpiaron con `ClassVar`), `mypy --strict` 135/52.
+
+**No pagado y dicho — `FIND-PLAN-FILE-1`:** el apagado headless saca a plan mode de la medición, pero
+**no cablea el plan-file**. Con un host interactivo, `provider.py:41` sigue ordenando escribir en
+`/plans/plan.md` y `is_session_plan_file` (`plan_file.py:58-63`) no tiene consumidor fuera de tests en
+ninguno de los dos repos. Queda abierto y nombrado, no cerrado por efecto lateral.
+
+---
+
 ## 3 · Cosecha del barrido EOF (10ª ventana) — entra en la misma cola
 
 Hallazgos del barrido del canónico sobre las LISTAS de tools (nativas, MCP diferidas, skills). No los
@@ -215,7 +372,9 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 | `FIND-SKILL-20` | El frontmatter PISA la identidad de la skill (A: siempre el nombre del directorio) | ⛔ abierto |
 | `FIND-SKILL-21` | Sin dimensión de fuente ni precedencia; `last-wins` donde A tiene `first-wins` por identidad de fichero real | ⛔ abierto |
 | `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0`. **Ampliado en la 12ª ventana: es UNIVERSAL** (medido en `ToolCallEvent`, `DoneEvent` y `ToolResultEvent`), no sólo el último; ningún sitio de producción de `src/` poblaba identidad. Sin `seq`/`ts` no se ordena ni se fecha una traza, y sin `task_id`/`agent_id` no se separa agente de subagente. Se pagó con el **#10** (mismo seam) | ✅ **PAGADO** (12ª ventana) |
-| `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ⛔ abierto |
+| `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ✅ **PAGADO** (18ª ventana) — ver **§ 2 quater**. Absorbe el `FIND-TOOL-ENABLED-1` que abrí por duplicado desde el `E2g`; 13 tests nacidos rojos, `INY-73..80` |
+| `FIND-CODE-HITL-1` | `agentic_code` no resuelve ninguna tool de puerta única: el mismo driver headless sirve al REPL y a `--print`, sin detección del `tool_call` ni reinyección de la respuesta | ⛔ abierto — declarado en `composition.py`; es lo que habilita `ToolsConfig.interactive=True` |
+| `FIND-PLAN-FILE-1` | El plan-file no está cableado: `provider.py:41` ordena escribir en `/plans/plan.md` y `is_session_plan_file` no tiene consumidor fuera de tests en ninguno de los dos repos | ⛔ abierto — **no** cerrado por el apagado headless de § 2 quater |
 
 **Dos `H-L4` — ✅ SALDADAS (13ª ventana).** `test_deferred_delta.py` se **reescribió** entero: el test que
 consagraba el reparseo (`:43-47`) pasó a medir la conducta («la misma tool no se anuncia dos veces») y

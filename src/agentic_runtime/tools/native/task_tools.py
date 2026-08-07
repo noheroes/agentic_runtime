@@ -35,13 +35,38 @@ def _registry_of(ctx: "ToolUseContext | None") -> Any:
     return getattr(ctx, "task_registry", None)
 
 
+# Anotación SIN comillas a propósito, a diferencia de sus vecinas: el fichero tiene
+# `from __future__ import annotations`, así que las comillas sobran y `ruff` las cuenta
+# (`UP037`). Las vecinas son deuda heredada; ésta no la aumenta.
+def _is_own_task(task_id: str, ctx: ToolUseContext | None) -> bool:
+    """¿Es `task_id` la tarea que está ejecutando a quien llama? (`FIND-TASK-SELF-1`)
+
+    En A el turno en curso **no existe** para estas tools: `TaskStopTool.ts` valida
+    contra `appState.tasks`, que sólo contiene tareas de FONDO (shells, agentes async,
+    sesiones remotas). B fusionó ese registro con la lista por sesión en un único
+    `InMemoryTaskRegistry` donde la tarea raíz también vive, así que sin esta guarda
+    `TaskList` se la sirve al modelo y `TaskStop` la mata: `kill` hace
+    `asyncio_task.cancel()` sobre el propio bucle (`registry.py:118-125`).
+
+    Medido, no supuesto: RONDA 6 del E2g (`seed 986409977`) murió así, «CANCELADA
+    esperando el stream del modelo», con la respuesta vacía.
+
+    Es una guarda, no la topología de A: la separación de los dos registros queda
+    declarada y pendiente junto a `FIND-TASK-1`, no disimulada aquí."""
+    own = getattr(ctx, "task_id", "")
+    return bool(own) and task_id == own
+
+
 def _scoped_get(task_id: str, ctx: "ToolUseContext | None"):
     """Resuelve un task SÓLO si pertenece a la lista de la sesión activa.
 
     Un `task_id` de otra sesión es invisible (espejo: no está en el tasks-dir
-    de esta sesión) → se trata como inexistente."""
+    de esta sesión) → se trata como inexistente. La tarea EN CURSO tampoco es
+    resoluble (`_is_own_task`): en A no está en el registro que estas tools leen."""
     registry = _registry_of(ctx)
     if registry is None:
+        return None
+    if _is_own_task(task_id, ctx):
         return None
     record = registry.get(task_id)
     if record is None or record.owner_session_id != _session_of(ctx):
@@ -228,7 +253,13 @@ Use TaskGet with a specific task ID to view full details including its result.
             return ToolResult.error(self.name, _NO_REGISTRY)
         # Escopado a la lista de la sesión activa (espejo de `getTaskListId()` →
         # `getSessionId()`): una sesión sólo ve sus propias tareas, sin bleed.
-        records = registry.list_for(_session_of(ctx))
+        # La tarea EN CURSO se excluye del listado (`FIND-TASK-SELF-1`): en A el turno
+        # principal no es una entrada de `appState.tasks`, y ofrecérsela al modelo es
+        # justo lo que le hizo apuntarle un `TaskStop`.
+        records = [
+            r for r in registry.list_for(_session_of(ctx))
+            if not _is_own_task(r.task_id, ctx)
+        ]
 
         return ToolResult(
             tool_name=self.name,

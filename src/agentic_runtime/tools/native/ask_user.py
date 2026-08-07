@@ -182,6 +182,24 @@ class AskUserQuestionTool:
     safe_for_background = False
     timeout_seconds = 300.0
 
+    # `FIND-TOOL-ENABLED-1` — tool de PUERTA ÚNICA: su `execute` cierra el turno
+    # (`ends_turn=True`, abajo) a la espera de una respuesta humana. En un host sin
+    # humano eso no es «esperar»: es un turno vacío garantizado, y el trabajo se
+    # pierde. Medido en el E2g (`GATE_E2G_SEED=1780649320`, `archivos/nativa`):
+    # `elegidas=['AskUserQuestion','glob']`, `respuesta=''`, centinela no emitido.
+    #
+    # Homólogo del criterio de A, que apaga la ENTRADA cuando la SALIDA no existe
+    # (`EnterPlanModeTool.ts:56-67`, sobre `--channels`: *«its approval dialog needs
+    # the terminal»*). Default `False` porque el runtime es headless salvo que el
+    # integrador declare lo contrario — mismo criterio ya establecido para los
+    # handlers OAuth de MCP (`CapabilitiesConfig`: «el runtime headless no abre
+    # navegador»). El cable es `ToolsConfig.interactive`.
+    def __init__(self, *, interactive: bool = False) -> None:
+        self._interactive = interactive
+
+    def is_enabled(self) -> bool:
+        return self._interactive
+
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         """HITL multi-turno: NO bloquea. Emite las preguntas (el consumidor las detecta por este
         `tool_call` en el stream) y CIERRA el turno vía `ends_turn`; el usuario responde y el

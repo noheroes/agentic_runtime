@@ -129,6 +129,18 @@ class ToolResult:
 
 @runtime_checkable
 class ToolProtocol(Protocol):
+    """Contrato estructural de tool.
+
+    `is_enabled` **no** se declara aquí a propósito, y no por olvido: es
+    *defaultable*, exactamente como en el canónico. A lo tipa requerido en
+    `Tool` (`Tool.ts:403`) pero lo lista en `DefaultableToolKeys` (`:708`) y
+    `buildTool` lo rellena con `() => true` (`:749,758`), de modo que ninguna
+    definición de tool está obligada a escribirlo. Aquí el equivalente de ese
+    relleno es `tool_is_enabled()`: declararlo requerido en un `Protocol`
+    estructural y `runtime_checkable` rompería el `isinstance` de toda tool de
+    terceros que no lo implemente — que es justo lo contrario del default.
+    """
+
     name: str
     description: str
     input_schema: dict[str, Any]
@@ -140,4 +152,31 @@ class ToolProtocol(Protocol):
     async def execute(self, input: dict[str, Any], ctx: Any) -> ToolResult: ...
 
 
-__all__ = ["ToolCategory", "ToolContext", "ToolProtocol", "ToolResult"]
+def tool_is_enabled(tool: Any) -> bool:
+    """¿Publica el host esta tool en este ensamblado? Homólogo de `Tool.isEnabled()`.
+
+    Predicado de PUBLICACIÓN, no de permisos: una tool deshabilitada no se
+    anuncia **ni se puede ejecutar**, porque en el canónico el filtro se aplica
+    en el ensamblado del pool (`tools.ts:325-326`) y la resolución por nombre
+    sale de ese mismo pool. Deny es «el usuario la prohibió»; esto es «el host
+    no puede sostenerla». Ver `assemble_tool_pool`.
+
+    Default `True` (espejo de `TOOL_DEFAULTS.isEnabled`, `Tool.ts:758`): quien
+    no se pronuncia, se publica. Fail-open es lo correcto AQUÍ y no contradice
+    el fail-closed del resto de `TOOL_DEFAULTS` — lo que se decide es si la
+    tool existe para el modelo, no si se le concede un permiso.
+
+    Se acepta tanto un método como un atributo booleano: el contrato es la
+    conducta (`H-L4`), no la firma.
+    """
+    flag = getattr(tool, "is_enabled", True)
+    return bool(flag() if callable(flag) else flag)
+
+
+__all__ = [
+    "ToolCategory",
+    "ToolContext",
+    "ToolProtocol",
+    "ToolResult",
+    "tool_is_enabled",
+]

@@ -29,6 +29,13 @@ class StorageConfig:
 @dataclass
 class ToolsConfig:
     extras: list[ToolProtocol] = field(default_factory=list)
+    # ¿Hay un humano capaz de responder EN MITAD del turno? Gobierna la publicación de
+    # las tools de puerta única (`AskUserQuestion`, `Enter`/`ExitPlanMode`), que ceden
+    # el turno esperando a una persona y en un host headless lo pierden entero
+    # (`FIND-TOOL-ENABLED-1`). Default `False`, igual criterio que los handlers OAuth de
+    # `CapabilitiesConfig`: el runtime es headless y la interactividad la declara quien
+    # integra. Un REPL con terminal pone `True`; un batch, un cron o un test, no.
+    interactive: bool = False
 
 
 @dataclass
@@ -230,7 +237,9 @@ class RuntimeFactory:
         storage = StorageRegistry.create(config.storage.backend, **storage_kwargs)
 
         # Tools nativas — input al ensamblado del pool, no lookup de ejecución
-        tool_registry = create_tools(extras=config.tools.extras)
+        tool_registry = create_tools(
+            extras=config.tools.extras, interactive=config.tools.interactive
+        )
 
         # Capabilities: manager con providers (Skills/MCP). El pool por turno
         # converge native + capability vía manager.build_tool_pool (alineado a

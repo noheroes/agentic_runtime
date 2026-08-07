@@ -156,12 +156,29 @@ class IdentityWitnessTool:
         return ToolResult(tool_name=self.name, output=f"codigo de verificacion: {self._code}")
 
 
-def _runtime(tmp_path: Path, caller: Any, tools: tuple, scope: Scope | None, **extra: Any):
-    """Punto de composición **real** (`C10`): el mismo `create_runtime` de producción."""
+def _runtime(
+    tmp_path: Path,
+    caller: Any,
+    tools: tuple,
+    scope: Scope | None,
+    *,
+    interactive: bool = False,
+    **extra: Any,
+):
+    """Punto de composición **real** (`C10`): el mismo `create_runtime` de producción.
+
+    `interactive` NO es un interruptor de conveniencia del gate: es el eje que
+    `FIND-TOOL-ENABLED-1` introdujo en producción (`ToolsConfig.interactive` →
+    `Tool.isEnabled()`, `tools.ts:325-326`). El default replica el de producción —
+    headless— para que ningún escenario se mida contra un host que el integrador real
+    no tiene. Los escenarios que ejercitan tools de puerta única lo declaran EXPLÍCITO
+    y dicen por qué: en A esas tools existen porque existe la capa de interacción que
+    las resuelve, no porque el pool las publique siempre.
+    """
     return create_runtime(config=RuntimeConfig(
         storage=StorageConfig(backend="filesystem", root=tmp_path),
         model_caller=caller,
-        tools=ToolsConfig(extras=list(tools)),
+        tools=ToolsConfig(extras=list(tools), interactive=interactive),
         scope=scope,
         **extra,
     ))
@@ -1317,6 +1334,12 @@ _NATIVE_CENSUS = frozenset({
     "WebSearch", "bash", "clone_repository", "glob", "grep", "read_file", "write_file",
 })
 
+#: Las del censo que CEDEN EL TURNO esperando a un humano. `FIND-TOOL-ENABLED-1`: un host
+#: que no declara humano no las publica (`ToolsConfig.interactive`), igual que A apaga
+#: `EnterPlanMode` cuando la vía de aprobación no existe (`EnterPlanModeTool.ts:56-67`).
+#: Siguen EN el censo: el registry las construye siempre; lo que cambia es la publicación.
+_PUERTA_UNICA = frozenset({"AskUserQuestion", "EnterPlanMode", "ExitPlanMode"})
+
 
 def test_e2c_the_native_census_is_exactly_what_the_factory_registers():
     """Ancla del barrido: 25 tools en 18 módulos, ni una menos.
@@ -1381,9 +1404,11 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
         async def execute(self, input: dict, ctx: ToolUseContext) -> ToolResult:
             return ToolResult(tool_name=self.name, output="ok")
 
-    async def _announce(extras: tuple, tag: str) -> set[str]:
+    async def _announce(extras: tuple, tag: str, *, interactive: bool = True) -> set[str]:
         caller = _CensusCaller()
-        runtime = _runtime(tmp_path / tag, caller, extras, Scope(f"scope-e2c-{tag}"))
+        runtime = _runtime(
+            tmp_path / tag, caller, extras, Scope(f"scope-e2c-{tag}"), interactive=interactive
+        )
         task_id = await runtime.dispatch(RuntimeTask(
             prompt="hola",
             description=f"gate-e2c-censo-{tag}",
@@ -1411,6 +1436,29 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
         "hay una diferida en el pool y `ToolSearch` no se anunció: es inalcanzable"
     )
     assert "censo_diferida" not in with_deferred, "una diferida no descubierta no se anuncia"
+
+    # Rama C — el HOST. Mismo tratamiento que se le dio a `ToolSearch` arriba: el
+    # censo no se anuncia entero incondicionalmente, se anuncia entero **si y sólo si**
+    # el host puede sostener las tools de puerta única (`FIND-TOOL-ENABLED-1`,
+    # `Tool.isEnabled()` en `tools.ts:325-326`). Aseverar las dos ramas es más fuerte
+    # que aseverar «las 24 siempre», que era la premisa vieja y ya no es cierta.
+    headless = await _announce((), "headless", interactive=False)
+    assert always - _PUERTA_UNICA <= headless, (
+        f"tools nativas que NO llegan al anuncio headless: "
+        f"{sorted((always - _PUERTA_UNICA) - headless)}"
+    )
+    assert headless & _PUERTA_UNICA == set(), (
+        f"un host SIN humano anuncia tools que ceden el turno esperando a uno: "
+        f"{sorted(headless & _PUERTA_UNICA)} — turno vacío garantizado (medido en `E2g`)"
+    )
+    assert _PUERTA_UNICA <= plain, (
+        "las de puerta única no vuelven con `interactive=True`: el apagado dejó de ser "
+        "condicional y se comió el censo"
+    )
+    assert plain - headless == _PUERTA_UNICA, (
+        f"la diferencia entre host con y sin humano no es exactamente el conjunto de "
+        f"puerta única: {plain - headless}"
+    )
 
 
 #: Escapes MEDIDOS corriendo (no inferidos) en el barrido de las 25, con motivo y
@@ -1706,6 +1754,11 @@ async def test_e2d_the_model_selects_native_tools_by_name_from_the_full_census(t
     ))
     runtime = _runtime(
         tmp_path, probe, (), Scope("scope-e2d"),
+        # `interactive=True` mantiene el censo ÍNTEGRO como campo de distractores, que es
+        # lo que este escenario dice medir. Dejarlo en el default headless le quitaría 3
+        # opciones al modelo (`FIND-TOOL-ENABLED-1`) y ABLANDARÍA la prueba sin que se
+        # notara: seguiría verde, midiendo una elección más fácil que la enunciada.
+        interactive=True,
         fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[tmp_path]),
         initial_allowed_tools=sorted(_NATIVE_CENSUS),
     )
@@ -3539,7 +3592,14 @@ _E11_OBJETIVO = frozenset({
 #:
 #: Se atacó la causa que `FIND-E11-2` ya había medido —«el modelo prefiere preguntar en
 #: prosa»— con una línea de conducta en `_E11_SYSTEM` que no nombra ninguna tool ni alude
-#: a ningún escenario, y que además es mecánicamente cierta en un runtime headless.
+#: a ningún escenario, y que además es mecánicamente cierta en este gate.
+#:
+#: ⚠ Esa frase decía «cierta en un runtime **headless**» y con `FIND-TOOL-ENABLED-1` habría
+#: pasado a ser engañosa: `E11` declara ahora `interactive=True`, porque en un host headless
+#: `AskUserQuestion` no se publica y el gate mediría una tool AUSENTE en vez de una no
+#: elegida. Lo que la línea afirma sigue siendo cierto y es la distinción de A: nadie lee la
+#: PROSA a mitad de turno —el turno acaba sin la respuesta— aunque sí exista una capa que
+#: resuelva la pregunta cuando se hace con la tool. Eso es lo que la hace la vía, no un empujón.
 #: **Medición posterior: 7 de 7 corridas la condujeron, 0 no la condujeron** (contra 1/5
 #: antes). Con eso `AskUserQuestion` vuelve a la PUERTA DURA de `E11` — que es exactamente
 #: lo que el `reason` del viejo `xfail` mandaba hacer el día que el modelo la condujera.
@@ -3901,6 +3961,13 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
             runtime = _runtime(
                 tmp_path / f"rt_e11_{n}", probe, (), Scope(f"scope-e11-{n}"),
                 fs=ConfinedFilesystem(roots=[tmp_path], write_roots=[ws]),
+                # `AskUserQuestion` está en `_E11_OBJETIVO`: este gate mide que el modelo
+                # la CONDUZCA, y para eso el host tiene que poder sostenerla. Con el
+                # default headless de `FIND-TOOL-ENABLED-1` ni siquiera se anunciaría, y
+                # el gate estaría midiendo una tool ausente en vez de una no elegida —
+                # dos cosas distintas que darían el mismo rojo. En A la tool existe
+                # justamente porque existe la capa de interacción que la resuelve.
+                interactive=True,
                 # Allow-list de PERMISOS, no de anuncio (`FIND-E11-1`): sin esto las
                 # `requires_permission` quedan fuera del pool y el escenario mediría
                 # una restricción que nadie pidió.

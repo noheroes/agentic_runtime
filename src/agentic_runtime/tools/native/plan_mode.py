@@ -130,6 +130,31 @@ than to redo work
     safe_for_background = False
     timeout_seconds = 5.0
 
+    # `FIND-TOOL-ENABLED-1` — plan mode es una PUERTA DE UN SOLO SENTIDO cuando no
+    # hay humano: se entra sin aprobación (`requires_permission = False`, pese a que
+    # la descripción de arriba promete «This tool REQUIRES user approval»), el régimen
+    # que impone dice «This supercedes any other instructions you have received», y la
+    # única salida —`ExitPlanMode`— cierra el turno esperando una aprobación que nadie
+    # va a dar. Medido dos veces en el E2g (`GATE_E2G_SEED` 29525785 y 1561952726).
+    #
+    # Es LITERALMENTE el caso que A guarda, y con la misma razón escrita en el
+    # canónico (`EnterPlanModeTool.ts:56-67`): *«ExitPlanMode is disabled (its approval
+    # dialog needs the terminal). Disable entry too so plan mode isn't a trap the model
+    # can enter but never leave»*. Se apagan LAS DOS, como en A: apagar sólo la entrada
+    # dejaría a `ExitPlanMode` publicada sin nada que la haga alcanzable.
+    #
+    # ⚠ NO se paga aquí, y queda DECLARADO — `FIND-PLAN-FILE-1`: aun con host
+    # interactivo, el recordatorio de 5 fases ordena escribir el plan en `/plans/plan.md`
+    # (`capabilities/plan/provider.py:41`) y `is_session_plan_file` —la exención del
+    # candado que `plan_file.py:58-63` documenta como «lo consume el integrador»— no
+    # tiene NINGÚN consumidor fuera de tests, en ninguno de los dos repos. Este apagado
+    # saca plan mode de la medida headless; no arregla el cable que le falta.
+    def __init__(self, *, interactive: bool = False) -> None:
+        self._interactive = interactive
+
+    def is_enabled(self) -> bool:
+        return self._interactive
+
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         # El discriminador de subagente es `is_subagent`, no `agent_id` (que también se
         # asigna al contexto raíz como identidad). Mismo criterio que el resto del runtime
@@ -205,6 +230,14 @@ approach.
     requires_permission = False
     safe_for_background = False
     timeout_seconds = 5.0
+
+    # Ver `EnterPlanModeTool.is_enabled`: en A la premisa del apagado es justamente que
+    # ESTA tool no puede operar sin terminal, y la entrada se apaga en consecuencia.
+    def __init__(self, *, interactive: bool = False) -> None:
+        self._interactive = interactive
+
+    def is_enabled(self) -> bool:
+        return self._interactive
 
     async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
         plan = await get_plan(ctx)

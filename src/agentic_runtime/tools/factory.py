@@ -4,11 +4,21 @@ from .protocol import ToolProtocol
 from .registry import ToolRegistry
 
 
-def create_tools(extras: list[ToolProtocol] | None = None) -> ToolRegistry:
+def create_tools(
+    extras: list[ToolProtocol] | None = None,
+    *,
+    interactive: bool = False,
+) -> ToolRegistry:
     """
     Crea un ToolRegistry con todas las tools nativas del runtime.
 
     Proyectos pasan `extras` para agregar tools propias sin modificar el runtime.
+
+    `interactive` declara si el host tiene un humano capaz de responder en mitad
+    del turno. Sólo lo consumen las tools de PUERTA ÚNICA —las que ceden el turno
+    esperando a una persona—, que en un host headless son un turno perdido:
+    `FIND-TOOL-ENABLED-1`. Default `False`: el runtime es headless salvo que el
+    integrador diga lo contrario.
     """
     from .native import (
         AgentTool,
@@ -40,13 +50,13 @@ def create_tools(extras: list[ToolProtocol] | None = None) -> ToolRegistry:
 
     native: list[ToolProtocol] = [
         AgentTool(),
-        AskUserQuestionTool(),
+        AskUserQuestionTool(interactive=interactive),
         BashTool(),
         CloneRepositoryTool(),
         ConfigTool(),
-        EnterPlanModeTool(),
+        EnterPlanModeTool(interactive=interactive),
         EnterWorktreeTool(),
-        ExitPlanModeTool(),
+        ExitPlanModeTool(interactive=interactive),
         ExitWorktreeTool(),
         FileEditTool(),
         GlobTool(),
