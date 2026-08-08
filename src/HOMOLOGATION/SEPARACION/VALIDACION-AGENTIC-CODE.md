@@ -657,3 +657,59 @@ verde midiendo un formato que ya nadie produce—. 15 tests, de 9 que había.
 `A-CIERRE` P4″ 12–18 · ledger 39 abiertos · `O-18`/`R-1b` · `R-6`/`O-16` · `ID-4`/`K3` · `H-3`.
 Diferidos nombrados: `SERPER_API_KEY` del entorno vs `ctx.git_credentials` · `ForkSnapshot` no
 transporta el confinamiento · `run_argv` no traduce paths DENTRO del argv.
+
+---
+
+## § 4 · CABLEADO PENDIENTE EN `agentic_code` — inventario completo (21ª ventana)
+
+**Por qué este inventario existe.** El usuario fijó como puerta lo que `D-15` ya decía en su paso (3):
+lo que se cierra en `agentic_runtime` o `agentic_models` **se cablea en `agentic_code` antes de
+declararlo cerrado**, porque una prueba manual real vale más que sólo pruebas sintéticas. Yo lo
+incumplí varias ventanas; `FIND-CODE-SKILL-1` era su residuo visible, y este inventario es el residuo
+COMPLETO. **Se ataca ENTERO antes de seguir con el resto del TRAMO.**
+
+**Método, para que la lista no sea de memoria:** `composition.py` leído 1→EOF (207 L) y cruzado campo
+a campo contra `RuntimeConfig`/`CapabilitiesConfig` (`factory.py:21-160`), más `grep` por nombre de
+costura en `agentic_code/src`. **Lo verificado es «la costura viene vacía»** — eso es firme y medido.
+Lo que NO está verificado para todos los ítems es si el hueco es DEUDA o **divergencia deliberada**
+(`L10`): eso exige abrir cada capacidad, y se marca como tal en vez de darse por hecho.
+
+**Lo que se pobla hoy (12 costuras)** y por tanto NO está en la lista: `model_caller`, `hook_runner`,
+`model_id`, `storage`, `scope`, `fs`, `storage_contract`, `exec_env`, `initial_allowed_tools`,
+`tools.interactive`, `root_context_modifier`, `capabilities.mcp_config_store`.
+
+### Bloque A — lo que la 21ª pagó y nadie consume (`FIND-CODE-SKILL-1`)
+
+| # | Costura vacía | Qué queda inalcanzable | Evidencia |
+|---|---|---|---|
+| A1 | `CapabilitiesConfig.skill_dirs` · `skill_store` | El `SkillsProvider` **ni se construye** (`factory.py:222` lo condiciona a uno de los dos). Toda la pata de skills de la 21ª —listado, identidad, precedencia, argumentos, variables— es inalcanzable desde el producto | `composition.py:205` pasa sólo `mcp_config_store`; grep `skill_dirs\|skill_store` en `agentic_code/src` = **0** |
+| A2 | `RuntimeConfig.input_processor` (`S11`) | `/<skill>` no existe para el usuario. **Corrijo lo que dije antes:** el sitio no es «que el REPL llame a `process_slash_command`», es esta costura, que el propio contrato designa para «slash-commands resueltos localmente» (`factory.py:91-93`) | grep `input_processor` = **0** |
+| A3 | `RuntimeConfig.agent_resolver` | La enumeración de subagentes que se acaba de añadir al `AgentDefinitionResolver` **no tiene qué enumerar**, y `AgentDefinition.description` vuelve a ser campo muerto de facto | grep `agent_resolver` = **0** |
+
+### Bloque B — capacidades de ventanas anteriores, pagadas y sin consumidor
+
+| # | Costura vacía | Qué queda inalcanzable | Clasificación |
+|---|---|---|---|
+| B1 | `CapabilitiesConfig.memory_root` · `memory_store` | El `MemoryProvider` **no se registra nunca** (`factory.py:227`): el producto no tiene memoria de agente | ❌ deuda, salvo prueba en contra |
+| B2 | `mcp_oauth_redirect_handler` · `mcp_oauth_callback_handler` | **Todo server MCP con OAuth es inalcanzable desde el producto.** Y el contrato dice por qué duele aquí: «el runtime headless no abre navegador» (`factory.py:60-62`) — `agentic_code` es justamente quien tiene persona y navegador delante | ❌ deuda |
+| B3 | `mcp_config_watcher` | Vector 2 de recarga dinámica muerto. El contrato **NOMBRA a este integrador** como su implementador: «`agentic_code`: inotify» (`factory.py:51-54`). Campo designado por escrito y vacío | ❌ deuda |
+| B4 | `task_registry` (`S19`) **+** `root_turn_start_hooks` | Van en PAREJA: sin registry no hay tareas en background, y sin los hooks de turn-start no se drenan sus notificaciones (`factory.py:129-135` lo dice: el consumidor no alcanza el loop, así que las inyecta ahí). Cablear uno solo deja el ciclo a medias | ❌ deuda, y **acoplada** |
+| B5 | `model_options` | `thinking`, `effort`, `temperature`, `max_tokens`, `tool_choice`, `metadata` llegan **siempre vacíos** al motor (`models/protocol.py:88-104`): el producto no puede pedir razonamiento ni acotar salida. Es la costura de `agentic_models`, el otro repo que el usuario nombró | ❌ deuda |
+| B6 | `presentation` (`PathPresentation`) | Sin presentación de paths inyectada, el default identidad — a verificar contra qué hace A al citar rutas al modelo | 🟡 abrir antes de rotular |
+| B7 | `git_credentials` | `clone_repository` sin auth. **Ya estaba nombrado como diferido** en ventanas anteriores (`SERPER_API_KEY` del entorno vs `ctx.git_credentials`) | ❌ deuda, ya nombrada |
+| B8 | `small_llm` | Sin modelo pequeño inyectado; a determinar qué lo consume en el runtime | 🟡 abrir antes de rotular |
+| B9 | `voice` (`stt` / `tts`) | Sin I/O por voz | 🟡 **candidato a divergencia deliberada** (`L10`) para un producto de terminal — se decide y se ESCRIBE, no se deja en blanco |
+
+### Lo que NO es deuda, y se dice para que nadie lo cuente como hueco
+
+`session_repo` (opcional por diseño: el runtime usa su `Session` nativa), `subagent_runner_factory`
+(`None` = `LocalSubagentRunner`, que es el default correcto — y su comentario recuerda que ahí vivió
+`FIND-EXEC1`), `notification_sink` (`None` = canal en-proceso), `skill_catalog`,
+`resolve_timeout_seconds`, `background_result_max_chars`, `extra_providers`. **Siete costuras vacías
+A PROPÓSITO**, con default correcto.
+
+### Criterio de cierre del bloque
+
+No es que compile ni que la suite siga verde: **es el `.jsonl` de sesión real** (`D-15`, paso 4). Un
+cableado que no se puede ver operar en una traza no ha cerrado el ciclo, lo ha dejado en tres pasos.
+Y el encuadre no se toca: se adapta el INTEGRADOR al núcleo, nunca al revés.
