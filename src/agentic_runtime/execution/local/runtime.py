@@ -70,6 +70,8 @@ class LocalAgentRuntime:
         presentation: Any = None,
         exec_env: Any = None,
         fs: Any = None,
+        # `FIND-PLAN-FILE-1`: peer de `fs`. Distinto de `storage` (blobs del transcript).
+        storage_contract: Any = None,
         git_credentials: Any = None,
         small_llm: Any = None,
         background_result_max_chars: int = 2000,
@@ -108,6 +110,7 @@ class LocalAgentRuntime:
         self._presentation = presentation
         self._exec_env = exec_env
         self._fs = fs
+        self._storage_contract = storage_contract
         self._git_credentials = git_credentials
         self._small_llm = small_llm
         self._max_chars = background_result_max_chars
@@ -437,6 +440,15 @@ class LocalAgentRuntime:
             # conserva su default seguro (ConfinedFilesystem confinado a cwd) — nunca ilimitado.
             if self._fs is not None:
                 ctx.fs = self._fs
+            # storage: peer de `fs` — la traducción token→host que `capabilities/plan/` lee por
+            # `ctx.storage`. `FIND-PLAN-FILE-1`: esta línea no existía, así que `ctx.storage`
+            # era `None` en TODO camino de producción (el único constructor de ctx que lo
+            # aceptaba, `context/adapters.py:12-49`, no lo llama nadie en `src/`) y toda la
+            # capa de plan-file era código muerto con sus tests unitarios en verde. Va aquí,
+            # junto a las demás costuras y ANTES del `root_context_modifier`, para que el
+            # integrador pueda sobrescribirlo si su política per-request lo necesita.
+            if self._storage_contract is not None:
+                ctx.storage = self._storage_contract
             # Autoría per-request del consumidor SOLO en la raíz (los subagentes heredan su
             # estado por el ForkSnapshot). Corre tras fijar los defaults para que el
             # consumidor pueda sembrar `app_state.native` y/o sobrescribir `presentation`.

@@ -12,10 +12,13 @@ token→key MinIO + materialización al workspace del contenedor es política de
 """
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
+
+logger = logging.getLogger(__name__)
 
 # ── Estado de plan runtime-visible (`app_state.native`) ─────────────────────────────────
 # Flag: plan mode activo (lo siembra EnterPlanMode / el flag del integrador).
@@ -91,6 +94,19 @@ async def get_plan(ctx: "ToolUseContext") -> str | None:
         local = await storage.ensure_local(token)
         return local.read_text(encoding="utf-8")
     except OSError:
+        return None
+    except (AttributeError, TypeError):
+        # `FIND-PLAN-FILE-1` · corte 2: `ctx.storage` puede traer un objeto que NO cumple
+        # `StorageContract`. No es hipotético — el storage NATIVO del runtime
+        # (`FilesystemStorage`) implementa `StorageProtocol` (`upload/download/…`), que no
+        # tiene `ensure_local`; enchufarlo aquí hacía REVENTAR a `ExitPlanMode` en vez de
+        # errar, porque `except OSError` no atrapa un `AttributeError`. `plan_file_exists`
+        # (arriba) ya degradaba a `False` por su `except Exception`: las dos mitades de la
+        # misma capa se comportaban distinto ante la misma entrada.
+        logger.warning(
+            "plan-file: `ctx.storage` no cumple `StorageContract` (falta `ensure_local`); "
+            "el plan-file queda inalcanzable. Inyecta `RuntimeConfig.storage_contract`."
+        )
         return None
 
 

@@ -109,6 +109,14 @@ class RuntimeConfig:
     presentation: Any = None      # PathPresentation inyectada por el consumidor (default identidad)
     exec_env: Any = None          # ToolExecEnvironment inyectado por el consumidor (default in-process)
     fs: Any = None                # ConfinedFilesystem inyectado por el consumidor (default confinado a cwd)
+    # `FIND-PLAN-FILE-1`: `StorageContract` del consumidor (traducción token→host path +
+    # materialización). Es el PEER de `fs` —lo normal es que sea el MISMO objeto que se le
+    # pasa a `ConfinedFilesystem(storage=…)`— y viaja a `ctx.storage`, que es de donde lee
+    # toda la capa `capabilities/plan/`. Hasta hoy no existía este campo y `ctx.storage`
+    # no se poblaba en NINGÚN camino de producción: `get_plan` devolvía `None` siempre y
+    # `ExitPlanMode` erraba invariablemente. Ojo con el homónimo: `storage` (arriba) es el
+    # `StorageProtocol` de blobs del runtime (transcript), otro contrato y otro objeto.
+    storage_contract: Any = None
     git_credentials: Any = None   # GitCredentialProvider inyectado por el consumidor (clone_repository); default sin auth
     small_llm: Any = None
     model_id: str = ""
@@ -282,6 +290,7 @@ class RuntimeFactory:
             presentation=presentation,
             exec_env=exec_env,
             fs=config.fs,
+            storage_contract=config.storage_contract,
             git_credentials=config.git_credentials,
             small_llm=config.small_llm,
             background_result_max_chars=config.background_result_max_chars,

@@ -340,6 +340,35 @@ codificaban la premisa vieja «el censo entero se anuncia siempre». Ninguno se 
   distintas con el mismo rojo. Se corrigió además la nota de `_E11_CARENCIA` que decía «mecánicamente
   cierta en un runtime headless» y habría quedado engañosa.
 
+**El radio de explosión estaba INCOMPLETO, y lo destapó la 19ª ventana: el propio `E2g`.** La suite
+completa salió `1 failed, 888 passed`, y el rojo era `E2g` fallando en **12,84 s** —antes de llamar al
+modelo— en la aserción de montaje `test_tramo1_gate.py:2497`:
+`AssertionError: [web/nativa] diferidas sin 'defer_loading' en el cable: ['EnterPlanMode']`.
+
+Causa: los **señuelos** del montaje se sorteaban sobre `_NATIVE_CENSUS` crudo
+(`rnd.sample(sorted(_NATIVE_CENSUS - sc["hide"] - {"ToolSearch"}), …)`), que sigue listando —con
+razón— las tres de puerta única. Desde el pago de `FIND-POOL-1` esas tres no se publican en un host
+headless, así que toda semilla cuyo `sample` tocara una de ellas exigía verla marcada `defer_loading`
+en un anuncio donde ya no está. No es fallo del modelo ni del runtime: es el **banco de pruebas
+arrastrando la premisa vieja**, exactamente el mismo error que en `E2c`/`E2d`/`E11`, en el único
+escenario que la revisión de aquella ventana no repasó.
+
+**Por qué una corrida verde no lo vio, dicho sin adornos:** la semilla es aleatoria salvo que se fije
+`GATE_E2G_SEED` (`:2378`), de modo que el defecto es **intermitente por construcción** y el verde
+único con que se cerró la 18ª ventana no prueba lo que parecía probar. Un gate con montaje aleatorio
+exige que el *invariante del montaje*, no la corrida, sea lo que se acredita.
+
+**Arreglo (19ª ventana).** El universo de señuelos pasa a derivarse de lo que el pool **publica**
+—`{t.name for t in create_tools().all_tools() if tool_is_enabled(t)}`— y no del censo. Una tool que
+el host no publica no es señuelo: no llega al anuncio, así que ni oculta nada en la rama simulada ni
+puede aparecer diferida en la nativa. `_NATIVE_CENSUS` **no se estrecha** (lo aseveran `:1353`,
+`:1617`, `:1763` como censo de registro), y se añade una guarda que exige
+`_NATIVE_CENSUS - publicables == _PUERTA_UNICA`: si mañana se apaga otra cosa, el gate se pone rojo y
+obliga a mirarlo en vez de dejar que el universo de señuelos se encoja en silencio. Que el arreglo sea
+correcto **para toda semilla** es una propiedad estructural, no un muestreo:
+`publicables ∩ _PUERTA_UNICA = ∅`, y ambos `sc["hide"]` (`:2344`, `:2356`) están dentro de
+`publicables`. Verificado además con corrida real (`GATE_E2G_SEED=4294967291` → passed en 37,57 s).
+
 **`FIND-CODE-HITL-1` (nuevo, desde el consumidor real).** `agentic_code` **no resuelve ninguna** tool de
 puerta única: `driver.py` (leído 1→EOF) se autodescribe como «driver headless compartido», es el mismo
 para el REPL y para `--print`, y ni detecta el `tool_call` de `AskUserQuestion`/`ExitPlanMode` en el
@@ -360,6 +389,168 @@ ninguno de los dos repos. Queda abierto y nombrado, no cerrado por efecto latera
 
 ---
 
+## 2 quinquies · `FIND-PLAN-FILE-1` + `FIND-CODE-HITL-1` — diagnóstico (19ª ventana)
+
+Los dos ítems que la 18ª ventana abrió. Se atacan juntos porque **`ExitPlanMode` es una de las dos
+tools de puerta única**: la capa HITL sin plan-file publica una tool que no puede funcionar, y el
+plan-file sin HITL no tiene quién apruebe. El orden real de pago es **plan-file → HITL → `interactive`**,
+y se dice por escrito porque no es el orden en que vienen enunciados en el encargo.
+
+### `FIND-PLAN-FILE-1` — no es «falta un consumidor»: son TRES cortes independientes
+
+Enunciado hasta hoy: «`is_session_plan_file` no tiene consumidor fuera de tests». Al leer el camino
+entero 1→EOF resulta ser el **tercero** de tres cortes, y los dos primeros son más graves porque
+dejan la tool muerta aunque el tercero se pague.
+
+1. **`ctx.storage` NUNCA se puebla en producción.** `execution/local/runtime.py:426-439` threadea al
+   ctx `presentation`, `exec_env`, `git_credentials`, `runner`, `task_registry` y `fs` — **`storage`
+   no está en esa lista**. `LocalAgentRuntime._storage` existe (`:107`) y se usa en un solo sitio,
+   `:578`, para subir el transcript. El único constructor de ctx que acepta `storage=`
+   (`context/adapters.py:12-49`) **no lo llama nadie en `src/`** (censo hecho: sólo `__init__.py` lo
+   re-exporta y tests lo usan). ⇒ `plan_file_exists()` devuelve `False` **siempre** y `get_plan()`
+   devuelve `None` **siempre** ⇒ `ExitPlanMode.execute` cae invariablemente en su rama de error
+   («No plan found at /plans/plan.md»), **aun con host interactivo y aun con el plan escrito**.
+   Es el patrón `S18`/`S19` ya pagado para `runner`/`task_registry`: el cable existe en el TIPO y no
+   existe en la EJECUCIÓN.
+2. **Desajuste de protocolo — dos `Storage*` distintos.** `plan_file.py:75,91` llama `real_path()` y
+   `await ensure_local()`, que son `StorageContract` (`contracts/storage.py:22-30`). Lo que
+   `factory.py:237` construye es `StorageRegistry.create("filesystem")` → `FilesystemStorage`, que
+   implementa `StorageProtocol` (`upload/download/presign/delete/exists/list_prefix`,
+   `storage/protocol.py:9-17`) y **no tiene ninguno de los dos métodos**. Consecuencia medible si
+   alguien «arregla» el corte 1 enchufando ese objeto: `plan_file_exists` se traga el `AttributeError`
+   (`except Exception` → `False`, silencioso) y `get_plan` lo deja **escapar** (`except OSError` no lo
+   atrapa) ⇒ `ExitPlanMode` revienta en vez de errar. Y **no hay ningún campo en `RuntimeConfig`** por
+   el que un integrador pueda inyectar un `StorageContract`: el único hueco es el parámetro `storage=`
+   de `ConfinedFilesystem` (`tools/fs_env.py:121-132`), que no llega al ctx.
+3. **Confinamiento: el modelo no puede obedecer la instrucción que el propio runtime le da.**
+   `capabilities/plan/provider.py:40-42` le ordena escribir el plan en `/plans/plan.md` con
+   `write_file`. `write_file` resuelve por `ctx.fs.resolve(token, for_write=True)`; con `storage=None`
+   el token se toma como path host y se confina contra `write_roots=[cwd]` (`composition.py:127-130`)
+   ⇒ **`PathOutsideWorkspace`**. El plan-file está fuera del workspace por construcción.
+
+**Qué dicta el canónico (`D-08`, leído, no razonado).** `isSessionPlanFile` (`filesystem.ts:245`)
+tiene **dos** consumidores de producción y los dos están en la capa de PERMISOS:
+`checkEditableInternalPath` (`:1488`, `'Plan files for current session are allowed for writing'`) y su
+gemelo de lectura (`:1645`, `…allowed for reading`). Es una **exención del chequeo de
+workspace/permisos**, no de un «candado de plan mode» — el docstring de `plan_file.py:58-63` lo
+nombra mal. Su homólogo exacto en B es `ConfinedFilesystem.resolve`, que es donde vive ese chequeo.
+Eso lo vuelve **mecanismo del runtime**, no política del integrador.
+
+**Lo que NO es hueco del runtime, y se dice para no inflar la deuda (`L10`).** `app_state.native` es
+per-ctx y no se persiste entre turnos, luego `plan_mode` no sobrevive al turno. Eso **no** es un
+defecto: `runtime.py:442` designa por escrito `root_context_modifier` como la costura donde el
+consumidor siembra `app_state.native`. Persistir el flag es trabajo del integrador, y `agentic_code`
+no lo hace hoy (`author_root_context` sólo siembra permisos y cwd).
+
+### `FIND-PLAN-FILE-1` — remediación desarrollada (`L05`)
+
+- **comportamiento** · Con host interactivo: el modelo escribe el plan en el token que el reminder le
+  dicta, `ExitPlanMode` lo lee y lo presenta. Sin host interactivo nada cambia (las tools siguen
+  despublicadas por `is_enabled`).
+- **seam** · (a) nuevo campo `RuntimeConfig.storage_contract: StorageContract | None`, threadeado a
+  `ctx.storage` en el mismo bloque que `ctx.fs` (`runtime.py:426-439`) y al fork; (b)
+  `ConfinedFilesystem.resolve` consume `is_session_plan_file(token)` para eximir el plan-file del
+  allow-set, espejo de `checkEditableInternalPath`/`checkReadableInternalPath`.
+- **firma** · `RuntimeConfig(storage_contract=…)`; `ConfinedFilesystem.resolve` sin cambio de firma
+  (la exención es interna, para que ningún consumidor la esquive — mismo criterio que el cap de
+  `FIND-DEFER-2`).
+- **cableado** · `factory._build_local` pasa `config.storage_contract` a `LocalAgentRuntime`, que lo
+  asigna al ctx raíz **antes** del `root_context_modifier`; el `ForkSnapshot` lo hereda por el mismo
+  camino que `fs`. En `agentic_code`: `WorkspaceStorage` (implementación de `StorageContract` que
+  mapea `/plans/<n>.md` → `<state_dir>/projects/<key>/plans/<n>.md`) inyectada a la vez en
+  `ConfinedFilesystem(storage=…)` y en `storage_contract`, más la persistencia de `plan_mode` en
+  `author_root_context`.
+- **orden** · Antes que el HITL: `ExitPlanMode` no es publicable mientras esto no funcione.
+- **prueba** · Tests nacidos ROJOS en los dos repos: (1) `ctx.storage` poblado en el ctx raíz REAL
+  que produce el runtime (no uno de test); (2) `get_plan` devuelve el plan escrito por `write_file`
+  en el token del reminder — el ciclo COMPLETO, que es el único que caza los tres cortes a la vez;
+  (3) `write_file` sobre `/plans/plan.md` no levanta `PathOutsideWorkspace`; (4) un token que NO es
+  plan-file sigue confinado (control negativo, sin el cual la exención sería un agujero).
+
+### `FIND-CODE-HITL-1` — remediación desarrollada (`L05`)
+
+Mecánica establecida por lectura, no supuesta: el loop deja en el historial el `assistant` con
+`tool_calls` y el `tool` placeholder (`agent_loop.py:596-613`), rompe con `LoopEndReason.ENDS_TURN`, y
+`runtime.py:523` hace `session.messages = list(ctx.messages)` ⇒ **el par tool_call/placeholder SÍ se
+persiste** y `ConversationState.reload()` lo ve. Ahí es donde entra la respuesta real.
+
+- **comportamiento** · Turno que cierra con `AskUserQuestion`/`ExitPlanMode` ⇒ el REPL presenta las
+  preguntas (o el plan), lee al humano por `self.reader`, y el turno siguiente arranca con el
+  tool_result REAL en lugar del placeholder.
+- **seam** · Detección: `RunResult.stream.tool_uses` (`streaming.py:151-160` ya modela `call_id`,
+  `name`, `tool_input`). Reinyección: `ConversationState`, que es quien posee los mensajes que
+  `inject()` mete en cada ctx raíz.
+- **firma** · Módulo nuevo `agentic_code/hitl.py`: `pending_interaction(snapshot) -> Pending | None`,
+  `resolve(pending, reader) -> Resolution(tool_result, user_message)`;
+  `ConversationState.replace_tool_result(call_id, content)`.
+- **cableado** · `repl._execute` tras `dispatch_prompt`; `composition.py` pasa a
+  `ToolsConfig.interactive=True` **sólo al final**, cuando lo anterior está verde.
+- **texto** · Lo DICTA el canónico, no yo: `User has answered your questions: "<q>"="<a>"…. You can
+  now continue with the user's answers in mind.` (`AskUserQuestionTool.tsx:222-244`);
+  `User has approved your plan. You can now start coding…` / `User has approved exiting plan mode.
+  You can now proceed.` (`ExitPlanModeV2Tool.ts`); rechazo: `REJECT_MESSAGE` /
+  `REJECT_MESSAGE_WITH_REASON_PREFIX` (`utils/messages.ts:212-215`).
+- **divergencia declarada** · El turno de continuación necesita un mensaje de usuario porque el loop
+  lo appendea siempre (`agent_loop.py:388`). Se usa **lo que el humano tecleó**, nunca un texto
+  inventado ni uno vacío: A no necesita ese mensaje porque resuelve dentro del mismo turno vía
+  `checkPermissions → behavior:'ask'`, capa que en B es `GAP-02`/`K1`.
+- **prueba** · Tests nacidos rojos: detección del pending; wording exacto de los cuatro desenlaces
+  (respuesta / plan aprobado / plan aprobado sin plan / rechazo con y sin razón); reemplazo del
+  placeholder por `call_id` (y control negativo: un `call_id` que no existe no toca nada); y un E2E
+  de REPL con `reader` guionizado que verifica que el turno siguiente lleva el tool_result real.
+
+**Hallazgo adicional a confirmar, NO aseverado.** En A, `ExitPlanModeV2Tool.call()` —que es quien
+restaura el modo— corre **después** de la aprobación (`checkPermissions → behavior:'ask'`), luego un
+plan rechazado deja plan mode intacto. En B, `ExitPlanModeTool.execute` (`plan_mode.py:252-259`) hace
+`pop(_PLAN_MODE_KEY)` y arma `_PLAN_EXIT_PENDING_KEY` **antes de que nadie decida**. Con la capa HITL
+en pie eso es medible: se mide y se resuelve entonces, no ahora.
+
+### `FIND-PLAN-FILE-1` + `FIND-CODE-HITL-1` — ✅ PAGADOS (19ª ventana)
+
+**Lo pagado.** `FIND-PLAN-FILE-1`, lado runtime: los tres cortes atados, con `storage_contract` como
+costura y **el mismo objeto** en `ctx.fs` y en `ctx.storage` —dos traducciones distintas del mismo
+token serían un plan que se escribe en un sitio y se lee en otro, que era el estado—. 5 tests nacidos
+rojos, `INY-81..85` → 5 rojas. `FIND-CODE-HITL-1`, lado integrador: módulo `agentic_code/hitl.py`
+(detección + los literales de A con cita), `repl._resolve_single_door_tools` con la respuesta
+entregada por un `asyncio.Future` —el bucle de `run()` es el ÚNICO lector de stdin y abrir un segundo
+consumidor los habría puesto a competir—, `PlanModeState.rearm()` para el plan rechazado, y
+`ToolsConfig.interactive = not args.print_mode`: **lo decide el MODO, no el paquete**, porque el
+driver es el mismo para el REPL y para `--print` y la diferencia está en si hay una persona.
+
+**El hallazgo anotado arriba queda CONFIRMADO y resuelto**: B sale de plan mode antes de que nadie
+decida, y como el ciclo aquí es multi-turno el runtime no puede conocer el desenlace ⇒ re-armar es
+del INTEGRADOR, que es quien tiene la decisión. El runtime lleva el cable; el consumidor decide. Se
+resuelve sin tocar el núcleo, según el encuadre vinculante.
+
+**Honestidad sobre el orden de la prueba.** El lado runtime fue test-first de verdad. El lado
+integrador (`hitl.py`, el cableado de `repl.py`/`composition.py`) **se escribió ANTES que sus tests**;
+se dice porque cambia el grado probatorio. Lo que lo compensa es la ronda de reversión, que es lo
+único que acredita que esos tests midan algo: **`INY-94..100` → 7 rojas / 0 falsos positivos**,
+reversión desde copia propia verificada por `sha256 -c` (nunca `git checkout`).
+
+### Superficie de terminal: foco y color (19ª ventana, encargo del usuario)
+
+Contraste de la TUI contra el canónico, fuera del ledger de homologación del runtime pero con el
+mismo método. `theme.py` nuevo porta la paleta SEMÁNTICA de `utils/theme.ts` con RGB explícito, por
+la razón que A documenta (`:107-110`): el `red` de un terminal lo define el usuario. Tres cosas que
+el contraste destapó, ninguna visible para la suite anterior:
+
+1. **El foco no volvía al editor.** `on_mount` lo enfocaba UNA vez, al arrancar; abrir un deck o
+   cerrar el modal de permiso dejaba las teclas sin destino. Pagado con `on_turn_end` en
+   `TextualPresentation` (lo disparan los tres desenlaces, incluidos cancelado y fallido) + `Esc`
+   como salida del transcript.
+2. **El régimen no se veía en ninguna parte.** En A toda la superficie de plan mode va con
+   `borderColor="planMode"` y `PERMISSION_MODE_CONFIG` da símbolo y color por modo. Pagado con el
+   indicador en la barra (`⏸ Plan` / `⏵⏵ Bypass`) y las reglas del editor teñidas por régimen.
+3. **Colores ANSI del terminal en toda la superficie**, incluido `CANCELLED` compartiendo amarillo
+   con «en curso». Pagado y **vigilado**: hay un test que enrojece si vuelve a entrar un `"bold red"`.
+
+`INY-86..93` → **8 rojas / 0 falsos positivos**. Carencia declarada y NO pagada: un solo tema fijo
+(A resuelve `auto`/claro/oscuro/daltónico y tiene variantes ANSI); fabricar los seis sin selector
+sería cableado que parece existir (`L09`). Guion manual `PRUEBAS-MANUALES.md § J1–J4`.
+
+---
+
 ## 3 · Cosecha del barrido EOF (10ª ventana) — entra en la misma cola
 
 Hallazgos del barrido del canónico sobre las LISTAS de tools (nativas, MCP diferidas, skills). No los
@@ -375,8 +566,8 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 | `FIND-SKILL-21` | Sin dimensión de fuente ni precedencia; `last-wins` donde A tiene `first-wins` por identidad de fichero real | ⛔ abierto |
 | `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0`. **Ampliado en la 12ª ventana: es UNIVERSAL** (medido en `ToolCallEvent`, `DoneEvent` y `ToolResultEvent`), no sólo el último; ningún sitio de producción de `src/` poblaba identidad. Sin `seq`/`ts` no se ordena ni se fecha una traza, y sin `task_id`/`agent_id` no se separa agente de subagente. Se pagó con el **#10** (mismo seam) | ✅ **PAGADO** (12ª ventana) |
 | `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ✅ **PAGADO** (18ª ventana) — ver **§ 2 quater**. Absorbe el `FIND-TOOL-ENABLED-1` que abrí por duplicado desde el `E2g`; 13 tests nacidos rojos, `INY-73..80` |
-| `FIND-CODE-HITL-1` | `agentic_code` no resuelve ninguna tool de puerta única: el mismo driver headless sirve al REPL y a `--print`, sin detección del `tool_call` ni reinyección de la respuesta | ⛔ abierto — declarado en `composition.py`; es lo que habilita `ToolsConfig.interactive=True` |
-| `FIND-PLAN-FILE-1` | El plan-file no está cableado: `provider.py:41` ordena escribir en `/plans/plan.md` y `is_session_plan_file` no tiene consumidor fuera de tests en ninguno de los dos repos | ⛔ abierto — **no** cerrado por el apagado headless de § 2 quater |
+| `FIND-CODE-HITL-1` | `agentic_code` no resuelve ninguna tool de puerta única: el mismo driver headless sirve al REPL y a `--print`, sin detección del `tool_call` ni reinyección de la respuesta | ✅ **PAGADO** (19ª ventana) — `hitl.py` + `repl._resolve_single_door_tools`; `interactive` lo decide el MODO (`not --print`); `INY-94..100` → 7 rojas. Escrito antes que sus tests, dicho |
+| `FIND-PLAN-FILE-1` | El plan-file no está cableado: `provider.py:41` ordena escribir en `/plans/plan.md` y `is_session_plan_file` no tiene consumidor fuera de tests en ninguno de los dos repos | ✅ **PAGADO** (19ª ventana) — `storage_contract`, el MISMO objeto en `ctx.fs` y `ctx.storage`; 5 tests nacidos rojos, `INY-81..85` |
 
 **Dos `H-L4` — ✅ SALDADAS (13ª ventana).** `test_deferred_delta.py` se **reescribió** entero: el test que
 consagraba el reparseo (`:43-47`) pasó a medir la conducta («la misma tool no se anuncia dos veces») y

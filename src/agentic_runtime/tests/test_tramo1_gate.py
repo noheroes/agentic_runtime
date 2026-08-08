@@ -2372,11 +2372,28 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
     """El modelo llega solo hasta `ToolSearch` cuando lo que necesita no se anuncia."""
     import urllib.request
 
+    from agentic_runtime.contracts.tools import tool_is_enabled
     from agentic_runtime.tools import factory as tool_factory
     from agentic_runtime.tools.fs_env import ConfinedFilesystem
 
     seed = int(os.getenv("GATE_E2G_SEED") or uuid.uuid4().int % (2**32))
     rnd = random.Random(seed)
+
+    # Universo de SEÑUELOS = lo que el pool publica, no el censo crudo. Una tool que el
+    # host no publica no distrae a nadie: no llega al anuncio, así que ni oculta nada en
+    # la rama simulada ni puede aparecer marcada como diferida en la nativa. Sacarla del
+    # censo a secas hacía que el gate se pusiera rojo por MONTAJE —y sólo con las semillas
+    # cuyo `sample` tocaba una puerta única, que es por lo que una corrida verde no lo vio.
+    _publicables = {
+        t.name for t in tool_factory.create_tools().all_tools() if tool_is_enabled(t)
+    }
+    # Guarda: el hueco entre censo y publicación es HOY exactamente la puerta única. Si
+    # mañana se apaga otra cosa, esto se pone rojo y obliga a mirarlo, en vez de dejar que
+    # el universo de señuelos se encoja en silencio.
+    assert _NATIVE_CENSUS - _publicables == _PUERTA_UNICA, (
+        "el apagado de publicación cambió: sin publicar "
+        f"{sorted(_NATIVE_CENSUS - _publicables)}, puerta única {sorted(_PUERTA_UNICA)}"
+    )
 
     scenarios = _e2g_scenarios(tmp_path, rnd)
     rnd.shuffle(scenarios)
@@ -2417,7 +2434,7 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
         # Señuelos fijos por escenario: las dos ramas ven exactamente el mismo
         # conjunto oculto, para que la comparación entre ellas signifique algo.
         decoys = set(rnd.sample(
-            sorted(_NATIVE_CENSUS - sc["hide"] - {"ToolSearch"}), rnd.randint(2, 3),
+            sorted(_publicables - sc["hide"] - {"ToolSearch"}), rnd.randint(2, 3),
         ))
         hidden = sc["hide"] | decoys
 

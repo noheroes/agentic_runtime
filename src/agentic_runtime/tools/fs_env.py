@@ -144,6 +144,30 @@ class ConfinedFilesystem:
     def resolve(self, token: str, *, for_write: bool) -> Path:
         host = self._storage.real_path(token) if self._storage is not None else Path(token)
         allow = self._write_roots if for_write else self._roots
+        # `FIND-PLAN-FILE-1` — exención del plan-file de la sesión. El canónico la aplica en
+        # este mismo punto (la capa de permisos de fs) y por partida doble:
+        # `checkEditableInternalPath` (`filesystem.ts:1488`, *«Plan files for current session
+        # are allowed for writing»*) y su gemelo de lectura (`:1645`). Sin ella, el plan-file
+        # —que por definición vive FUERA del workspace— es inescribible, y la única
+        # instrucción operativa de plan mode (`capabilities/plan/provider.py:40-42`, «create
+        # your plan at {token}») es imposible de cumplir.
+        #
+        # Va DENTRO de `resolve` y no en un helper que las tools llamen, por el mismo criterio
+        # que el cap de `FIND-DEFER-2`: un punto que ningún consumidor pueda esquivar. El
+        # predicado es el homologado (`is_session_plan_file`), no una comparación ad-hoc, y se
+        # aplica al TOKEN —que es lo que el modelo escribe— no al path host, que es privado
+        # del consumidor. Import local: `plan_file` es hoja (sólo `TYPE_CHECKING`), pero
+        # importarlo arriba ataría `tools/` a `capabilities/` en tiempo de carga.
+        #
+        # El guard de traversal NO es adorno: sin él `/plans/../../etc/passwd.md` satisface el
+        # predicado (prefijo y sufijo correctos) y saldría del workspace por la puerta que
+        # acabamos de abrir. A se defiende igual y lo dice en el propio comentario del
+        # canónico: *«SECURITY: Normalize to prevent path traversal bypasses via .. segments»*
+        # (`filesystem.ts:249`).
+        from ..capabilities.plan.plan_file import is_session_plan_file
+
+        if is_session_plan_file(token) and not contains_path_traversal(token):
+            return Path(expand_path(str(host), self._base_dir))
         if not path_in_allowed_working_path(str(host), [str(r) for r in allow], self._base_dir):
             raise PathOutsideWorkspace(
                 f"path {token!r} resolves outside the allowed "
