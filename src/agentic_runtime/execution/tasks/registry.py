@@ -32,20 +32,20 @@ class TaskRecord:
     turn_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    events: list = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
     asyncio_task: Any = None
 
 
 @runtime_checkable
 class TaskRegistryProtocol(Protocol):
     def register(self, *, description: str, session_id: str | None = None) -> TaskRecord: ...
-    def start(self, task_id: str, *, asyncio_task: asyncio.Task | None) -> None: ...
+    def start(self, task_id: str, *, asyncio_task: asyncio.Task[Any] | None) -> None: ...
     def arm_watchdog(self, task_id: str, timeout_seconds: float) -> None: ...
     def get(self, task_id: str) -> TaskRecord | None: ...
     def list_all(self) -> list[TaskRecord]: ...
     def list_for(self, session_id: str | None) -> list[TaskRecord]: ...
     def set_backgrounded(self, task_id: str, value: bool) -> None: ...
-    def push_event(self, task_id: str, event: dict) -> None: ...
+    def push_event(self, task_id: str, event: dict[str, Any]) -> None: ...
     def kill(self, task_id: str) -> bool: ...
     def fail(self, task_id: str, error: str, *, duration_ms: int = 0) -> None: ...
     def complete(
@@ -80,7 +80,7 @@ class InMemoryTaskRegistry:
         self._tasks[task_id] = record
         return record
 
-    def start(self, task_id: str, *, asyncio_task: asyncio.Task | None) -> None:
+    def start(self, task_id: str, *, asyncio_task: asyncio.Task[Any] | None) -> None:
         rec = self._tasks.get(task_id)
         if rec is not None:
             rec.status = TaskStatus.RUNNING
@@ -110,7 +110,7 @@ class InMemoryTaskRegistry:
         if rec is not None:
             rec.is_backgrounded = value
 
-    def push_event(self, task_id: str, event: dict) -> None:
+    def push_event(self, task_id: str, event: dict[str, Any]) -> None:
         rec = self._tasks.get(task_id)
         if rec is not None:
             rec.events.append(event)

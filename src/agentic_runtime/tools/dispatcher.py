@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 
 import agentic_models
 
-from .protocol import ToolResult
-
 from ..context.tool_use import ToolUseContext
+from .protocol import ToolResult
 
 
 class ToolDispatcher:
@@ -29,7 +28,7 @@ class ToolDispatcher:
         self,
         *,
         tool_name: str,
-        tool_input: dict,
+        tool_input: dict[str, Any],
         ctx: ToolUseContext,
         timeout: Optional[float] = None,
     ) -> ToolResult:
@@ -46,7 +45,7 @@ class ToolDispatcher:
         self,
         *,
         tool_name: str,
-        tool_input: dict,
+        tool_input: dict[str, Any],
         ctx: ToolUseContext,
         timeout: Optional[float] = None,
     ) -> ToolResult:
@@ -75,7 +74,7 @@ class ToolDispatcher:
             return ToolResult.error(tool_name, str(exc))
 
         try:
-            result = await asyncio.wait_for(
+            result: ToolResult = await asyncio.wait_for(
                 tool.execute(validated, ctx),
                 timeout=effective_timeout,
             )

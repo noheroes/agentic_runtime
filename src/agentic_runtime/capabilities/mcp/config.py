@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -102,7 +103,7 @@ class McpServerConfig(BaseModel):
         return headers
 
 
-def parse_server_config(name: str, raw: dict) -> McpServerConfig:
+def parse_server_config(name: str, raw: dict[str, Any]) -> McpServerConfig:
     """Parseo ESTRICTO — borde de seguridad (agregar un server explícitamente).
 
     Lanza `ValueError` si la config es inválida. Espejo del canónico, que hace
@@ -111,7 +112,7 @@ def parse_server_config(name: str, raw: dict) -> McpServerConfig:
     return McpServerConfig(name=name, **raw)
 
 
-def load_server_configs(raw: dict[str, dict]) -> list[McpServerConfig]:
+def load_server_configs(raw: dict[str, dict[str, Any]]) -> list[McpServerConfig]:
     """Carga TOLERANTE en bloque — aislamiento por ítem.
 
     Un server con config inválida se salta con log; los demás cargan. Espejo del

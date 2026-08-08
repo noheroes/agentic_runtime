@@ -5,15 +5,14 @@ from pathlib import Path
 from typing import Any, Optional, Type
 
 from .capabilities.resolver import CapabilitiesResolver
-from .contracts.identity import Scope, SessionRepo
 from .context.presentation import IdentityPresentation
+from .contracts.identity import Scope, SessionRepo
 from .models.protocol import ModelOptions
 from .storage.factory import StorageRegistry
-from .tools.exec_env import LocalExecEnvironment
 from .tools.dispatcher import ToolDispatcher
+from .tools.exec_env import LocalExecEnvironment
 from .tools.factory import create_tools
 from .tools.protocol import ToolProtocol
-
 
 # ---------------------------------------------------------------------------
 # Config dataclasses
@@ -43,7 +42,7 @@ class CapabilitiesConfig:
     skill_catalog: Any = None
     resolve_timeout_seconds: float = 5.0
     # Providers de capabilities (Skills/MCP) — el integrador declara qué conectar.
-    mcp_servers: dict[str, dict] = field(default_factory=dict)  # name -> raw server config
+    mcp_servers: dict[str, dict[str, Any]] = field(default_factory=dict)  # name -> raw server config
     skill_dirs: list[Path] = field(default_factory=list)        # raíces <dir>/<skill>/SKILL.md
     extra_providers: list[Any] = field(default_factory=list)    # CapabilityProvider adicionales
     # Puertos de persistencia (dónde se guardan el registro de MCP y los skills). Los
@@ -164,10 +163,10 @@ class RuntimeConfig:
 # ---------------------------------------------------------------------------
 
 class RuntimeFactory:
-    _modes: dict[str, Type] = {}
+    _modes: dict[str, Type[Any]] = {}
 
     @classmethod
-    def register_execution_mode(cls, name: str, runtime_cls: Type) -> None:
+    def register_execution_mode(cls, name: str, runtime_cls: Type[Any]) -> None:
         cls._modes[name] = runtime_cls
 
     @classmethod

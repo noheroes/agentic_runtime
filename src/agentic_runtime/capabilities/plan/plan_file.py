@@ -13,6 +13,7 @@ token→key MinIO + materialización al workspace del contenedor es política de
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -75,7 +76,7 @@ def plan_file_exists(ctx: "ToolUseContext") -> bool:
     if storage is None:
         return False
     try:
-        return storage.real_path(get_plan_file_path(ctx)).exists()
+        return bool(storage.real_path(get_plan_file_path(ctx)).exists())
     except Exception:
         return False
 
@@ -91,7 +92,7 @@ async def get_plan(ctx: "ToolUseContext") -> str | None:
         return None
     token = get_plan_file_path(ctx)
     try:
-        local = await storage.ensure_local(token)
+        local: Path = await storage.ensure_local(token)
         return local.read_text(encoding="utf-8")
     except OSError:
         return None

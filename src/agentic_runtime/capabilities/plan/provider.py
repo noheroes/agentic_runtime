@@ -11,7 +11,7 @@ Sin tools ni catálogo: contexto puro (como `MemoryProvider`). El plan-file es l
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .plan_file import (
     _PLAN_EXIT_PENDING_KEY,
@@ -26,8 +26,8 @@ from .plan_file import (
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
-    from ..contracts import CapabilitySummary
     from ...tools.protocol import ToolProtocol
+    from ..contracts import CapabilitySummary
 
 
 def _plan_file_info(token: str, exists: bool) -> str:
@@ -139,7 +139,7 @@ class PlanModeProvider:
     def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
         return []
 
-    def active_context(self, context: "ToolUseContext") -> list[dict]:
+    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         """Orientación de plan mode:
 
         - MIENTRAS `plan_mode` activo:
@@ -162,7 +162,7 @@ class PlanModeProvider:
         plan = native.get(_PLAN_KEY, "")
         return [{"role": "system", "content": _render_exit_reminder(plan)}]
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict]:
+    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         # Tras compactación el flag ya se consumió; el plan sigue en `app_state.native`
         # y el modelo puede re-leerlo, pero no se re-emite el one-shot.
         return []

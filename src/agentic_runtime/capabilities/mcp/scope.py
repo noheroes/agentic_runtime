@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class McpScope(str, Enum):
@@ -59,7 +60,7 @@ class ScopedConfig:
     """Config cruda de un server con su procedencia resuelta tras el merge."""
 
     scope: McpScope
-    raw: dict
+    raw: dict[str, Any]
 
 
 def is_mutable(scope: McpScope) -> bool:
@@ -75,7 +76,7 @@ def assert_mutable(scope: McpScope) -> None:
         )
 
 
-def merge_scoped(scoped: dict[McpScope, dict[str, dict]]) -> dict[str, ScopedConfig]:
+def merge_scoped(scoped: dict[McpScope, dict[str, dict[str, Any]]]) -> dict[str, ScopedConfig]:
     """Mergea configs por nombre aplicando precedencia y exclusividad.
 
     `scoped`: {scope: {name: raw}}. Devuelve {name: ScopedConfig} con la

@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..contracts import CapabilitySummary
-from .loader import SkillDefinition, default_is_enabled, load_skill_text, load_skills_dir
+from .loader import (
+    SkillDefinition,
+    default_is_enabled,
+    load_skill_text,
+    load_skills_dir,
+)
 from .state import SkillsState
 
 if TYPE_CHECKING:
@@ -150,14 +155,14 @@ class SkillsProvider:
 
         return [SkillTool(self._state, is_enabled=self._is_enabled)]
 
-    def active_context(self, context: "ToolUseContext") -> list[dict]:
+    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         """Skills activas en este contexto → mensajes 'continúa siguiendo' (S3).
 
         Scoped por agente: lee `app_state.capabilities['active_skills']` del ctx, que
         la invocación pobló. No reinyecta el catálogo como mandato de reinvocación.
         """
         active = context.app_state.capabilities.get("active_skills", {})
-        messages: list[dict] = []
+        messages: list[dict[str, Any]] = []
         for name, info in active.items():
             base = info.get("base_dir") or ""
             base_line = f"Base directory for this skill: {base}\n\n" if base else ""
@@ -170,7 +175,7 @@ class SkillsProvider:
             })
         return messages
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict]:
+    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         """Tras compactación: preservar skills activas como 'continue to follow' (S5).
 
         Mismo aporte que `active_context` — el contenido de la skill sobrevive a la

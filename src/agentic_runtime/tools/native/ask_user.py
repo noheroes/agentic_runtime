@@ -200,7 +200,7 @@ class AskUserQuestionTool:
     def is_enabled(self) -> bool:
         return self._interactive
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         """HITL multi-turno: NO bloquea. Emite las preguntas (el consumidor las detecta por este
         `tool_call` en el stream) y CIERRA el turno vía `ends_turn`; el usuario responde y el
         resultado REAL ('User has answered your questions: …') lo reinyecta el consumidor como el

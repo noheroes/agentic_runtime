@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...tools.protocol import ToolCategory, ToolResult
 from .state import McpState
@@ -36,7 +36,7 @@ class ListMcpResourcesTool:
     def __init__(self, state: McpState) -> None:
         self._state = state
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         server = input.get("server")
         resources = self._state.all_resources()
         if server:
@@ -68,7 +68,7 @@ class ReadMcpResourceTool:
     def __init__(self, state: McpState) -> None:
         self._state = state
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         uri = input.get("uri", "")
         server = input.get("server") or self._state.find_resource_server(uri)
         if not server:

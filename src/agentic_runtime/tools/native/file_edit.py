@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
@@ -57,7 +57,7 @@ Usage:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         file_path = input.get("file_path", "")
         old_string = input.get("old_string", "")
         new_string = input.get("new_string", "")

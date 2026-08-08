@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
-from .tool_use import AppState, ToolUseContext
 from ..contracts.abort import AbortSignal
+from ..contracts.events import Event
 from ..contracts.permissions import PermissionContext
 from ..tools.pool import ToolPool
+from .tool_use import AppState, ToolUseContext
 
 
 def tool_use_context_from_session(
@@ -14,7 +16,7 @@ def tool_use_context_from_session(
     *,
     tool_pool: ToolPool | None = None,
     stop: AbortSignal | None = None,
-    event_queue: asyncio.Queue | None = None,
+    event_queue: asyncio.Queue[Event] | None = None,
     storage: Any = None,
     presentation: Any = None,
 ) -> ToolUseContext:
@@ -59,7 +61,7 @@ def sync_session_from_tool_use_context(session: Any, context: ToolUseContext) ->
 
 
 def apply_context_modifier_compat(
-    modifier,
+    modifier: Callable[[Any], Any],
     *,
     session: Any,
     context: ToolUseContext,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .config import McpServerConfig
 
@@ -31,7 +31,7 @@ class McpState:
         self._servers: dict[str, McpServerConfig] = {}
         self._clients: dict[str, "McpClient"] = {}
         self._tools: dict[str, list["ToolProtocol"]] = {}
-        self._resources: dict[str, list[dict]] = {}
+        self._resources: dict[str, list[dict[str, Any]]] = {}
         self._status: dict[str, ServerStatus] = {}
         self._errors: dict[str, str] = {}
 
@@ -97,11 +97,11 @@ class McpState:
         return result
 
     # --- resources ---
-    def set_resources(self, server_name: str, resources: list[dict]) -> None:
+    def set_resources(self, server_name: str, resources: list[dict[str, Any]]) -> None:
         self._resources[server_name] = list(resources)
 
-    def all_resources(self) -> list[dict]:
-        result: list[dict] = []
+    def all_resources(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
         for server in self._servers:
             for resource in self._resources.get(server, []):
                 result.append({**resource, "server": server})

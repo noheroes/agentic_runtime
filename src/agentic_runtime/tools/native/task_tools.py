@@ -57,7 +57,7 @@ def _is_own_task(task_id: str, ctx: ToolUseContext | None) -> bool:
     return bool(own) and task_id == own
 
 
-def _scoped_get(task_id: str, ctx: "ToolUseContext | None"):
+def _scoped_get(task_id: str, ctx: "ToolUseContext | None") -> Any:
     """Resuelve un task SÓLO si pertenece a la lista de la sesión activa.
 
     Un `task_id` de otra sesión es invisible (espejo: no está en el tasks-dir
@@ -134,7 +134,7 @@ All tasks are created with status `pending`.
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         subject = input.get("subject", "")
         description = input.get("description", "")
         registry = _registry_of(ctx)
@@ -187,7 +187,7 @@ Returns full task details:
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
         record = _scoped_get(task_id, ctx)
         if record is None:
@@ -247,7 +247,7 @@ Use TaskGet with a specific task ID to view full details including its result.
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         registry = _registry_of(ctx)
         if registry is None:
             return ToolResult.error(self.name, _NO_REGISTRY)
@@ -325,7 +325,7 @@ Rewrite a task's description:
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
         record = _scoped_get(task_id, ctx)
         if record is None:
@@ -364,7 +364,7 @@ class TaskStopTool:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
         if _scoped_get(task_id, ctx) is None:
             return ToolResult.error(
@@ -415,7 +415,7 @@ class TaskOutputTool:
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         task_id = input.get("task_id", "")
         record = _scoped_get(task_id, ctx)
         if record is None:

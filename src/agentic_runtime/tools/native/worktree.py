@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..exec_env import ExecEnvironmentUnavailable, require_exec_env
 from ..fs_env import PathOutsideWorkspace
@@ -131,7 +131,7 @@ specifically mention worktrees
     safe_for_background = False
     timeout_seconds = 30.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         # Esta tool SIEMPRE lanza git; sin costura de ejecución no hay nada que hacer.
         try:
             require_exec_env(ctx)
@@ -255,7 +255,7 @@ with the user before re-invoking with `discard_changes: true`.
     safe_for_background = False
     timeout_seconds = 30.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         session = ctx.app_state.native.get(_WORKTREE_KEY)
         if not session:
             return ToolResult.error(self.name, "Not currently in a worktree session.")

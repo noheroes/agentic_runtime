@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...execution.fork import ForkSnapshot
 from ...execution.runner import SubagentSpec
@@ -132,7 +132,7 @@ specifically to change.
     safe_for_background = True
     timeout_seconds = 600.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         prompt = input.get("prompt", "")
         run_in_background: bool = bool(input.get("run_in_background", False))
         subagent_type: str | None = input.get("subagent_type")

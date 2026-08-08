@@ -8,6 +8,8 @@ del runtime vía StorageProtocol, no de la sesión.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from ...contracts.events import Usage
@@ -32,7 +34,13 @@ class Session(BaseModel):
     #: era la mímica que `SEAMS §S20` marca `existe-mímica`. Un runtime que inventa la
     #: identidad impide al integrador imponer la suya sin pelear con el default.
     session_id: str
-    messages: list = Field(default_factory=list)
+    # `list[Any]` y no `list[dict[str, Any]]` A PROPÓSITO: en un `BaseModel` la anotación
+    # no es documentación, es el validador. Estrecharla a `dict` hace que pydantic RECHACE
+    # en construcción lo que antes aceptaba, y que copie los dicts en vez de guardarlos por
+    # identidad — un cambio de conducta que ningún test pedía y que la suite verde no vería
+    # porque nadie construye así dentro del repo. El estrechamiento es una decisión de
+    # producto aparte, con su propia prueba; no un efecto lateral de callar a `mypy`.
+    messages: list[Any] = Field(default_factory=list)
     turn_count: int = 0
     usage: Usage = Field(default_factory=Usage)
     metadata: SessionMetadata = Field(default_factory=SessionMetadata)

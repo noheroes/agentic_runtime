@@ -14,10 +14,10 @@ class StorageRegistry:
     y luego `StorageRegistry.create("s3", bucket="...")` sin modificar el runtime.
     """
 
-    _backends: dict[str, Type] = {}
+    _backends: dict[str, Type[StorageProtocol]] = {}
 
     @classmethod
-    def register(cls, name: str, backend_cls: Type) -> None:
+    def register(cls, name: str, backend_cls: Type[StorageProtocol]) -> None:
         cls._backends[name] = backend_cls
 
     @classmethod

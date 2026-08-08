@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any
 
 from .config import McpServerConfig
 
 if TYPE_CHECKING:
+    import httpx
+
     from .auth import AuthDeps
 
 logger = logging.getLogger(__name__)
@@ -20,7 +23,7 @@ class McpToolError(Exception):
     """
 
 
-def _http_client_factory(ssl_verify: bool):
+def _http_client_factory(ssl_verify: bool) -> Callable[..., httpx.AsyncClient]:
     """Factory de cliente httpx para los transportes http/sse, respetando `ssl_verify`.
 
     Cumple `McpHttpClientFactory(headers, timeout, auth) -> httpx.AsyncClient`. Con
@@ -30,7 +33,9 @@ def _http_client_factory(ssl_verify: bool):
     """
     import httpx
 
-    def factory(headers=None, timeout=None, auth=None) -> "httpx.AsyncClient":
+    def factory(
+        headers: Any = None, timeout: Any = None, auth: Any = None
+    ) -> "httpx.AsyncClient":
         kwargs: dict[str, Any] = {"follow_redirects": True, "verify": ssl_verify}
         if headers is not None:
             kwargs["headers"] = headers
@@ -161,7 +166,7 @@ class McpClient:
         self._stack = stack
         self._session = session
 
-    async def list_tools(self) -> list[dict]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """Specs crudos de tools (name/description/inputSchema/annotations) para `build_mcp_tool`."""
         result = await self._session.list_tools()
         return [
@@ -180,7 +185,7 @@ class McpClient:
             for t in result.tools
         ]
 
-    async def list_resources(self) -> list[dict]:
+    async def list_resources(self) -> list[dict[str, Any]]:
         try:
             result = await self._session.list_resources()
         except Exception as exc:  # noqa: BLE001 — server sin resources es válido
@@ -196,7 +201,7 @@ class McpClient:
             for r in result.resources
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> str:
+    async def call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         """Implementa el contrato `McpCall`. `isError` → `McpToolError` (sin re-llamar)."""
         result = await self._session.call_tool(tool_name, tool_input)
         text = _text_from_content(getattr(result, "content", None))
@@ -219,7 +224,7 @@ class McpClient:
         self._session = None
 
 
-def _annotations_dict(tool: Any) -> dict:
+def _annotations_dict(tool: Any) -> dict[str, Any]:
     ann = getattr(tool, "annotations", None)
     if ann is None:
         return {}

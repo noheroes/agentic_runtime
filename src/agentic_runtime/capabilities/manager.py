@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .contracts import CapabilityProvider, CapabilitySummary
 
@@ -95,14 +95,14 @@ class CapabilityManager:
                 sections.append(section)
         return sections
 
-    def active_context(self, context: "ToolUseContext") -> list[dict]:
-        messages: list[dict] = []
+    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         for provider in self._providers:
             messages.extend(provider.active_context(context))
         return messages
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict]:
-        messages: list[dict] = []
+    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         for provider in self._providers:
             messages.extend(provider.compact_context(context))
         return messages

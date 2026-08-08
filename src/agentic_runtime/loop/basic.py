@@ -1,1 +1,3 @@
-from .agent_loop import AgentLoop as BasicLoop  # noqa: F401
+from .agent_loop import AgentLoop as BasicLoop
+
+__all__ = ["BasicLoop"]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..exec_env import ExecEnvironmentUnavailable, require_exec_env
 from ..protocol import ToolCategory, ToolResult
@@ -101,7 +101,7 @@ the workspace, return structured results, and are easier to review.
             "Please restart from an existing directory."
         )
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         command = input.get("command", "")
         # Sin costura de ejecución NO se ejecuta (problema `#2`). El default vive en el
         # ensamblador (`factory.py:256`), no aquí: un `or LocalExecEnvironment()` local

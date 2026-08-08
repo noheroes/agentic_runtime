@@ -6,7 +6,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..protocol import ToolCategory, ToolResult
 
@@ -79,7 +79,7 @@ IMPORTANT - Use the correct year in search queries:
     safe_for_background = True
     timeout_seconds = 30.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         query: str = input.get("query", "")
         if not query:
             return ToolResult.error(self.name, "query is required.")

@@ -22,8 +22,8 @@ class McpConfigStore(Protocol):
     lee al arrancar para encontrar los servers registrados.
     """
 
-    async def load(self) -> dict[str, dict]: ...           # name -> raw server config
-    async def save(self, name: str, raw: dict) -> None: ...
+    async def load(self) -> dict[str, dict[str, Any]]: ...           # name -> raw server config
+    async def save(self, name: str, raw: dict[str, Any]) -> None: ...
     async def remove(self, name: str) -> None: ...
 
 
@@ -37,7 +37,7 @@ class StorageBackedMcpConfigStore:
         self._storage = storage
         self._key = key
 
-    async def load(self) -> dict[str, dict]:
+    async def load(self) -> dict[str, dict[str, Any]]:
         try:
             if not await self._storage.exists(self._key):
                 return {}
@@ -48,10 +48,10 @@ class StorageBackedMcpConfigStore:
             return {}
         return data if isinstance(data, dict) else {}
 
-    async def _write(self, data: dict[str, dict]) -> None:
+    async def _write(self, data: dict[str, dict[str, Any]]) -> None:
         await self._storage.upload(self._key, json.dumps(data).encode(), "application/json")
 
-    async def save(self, name: str, raw: dict) -> None:
+    async def save(self, name: str, raw: dict[str, Any]) -> None:
         data = await self.load()
         data[name] = raw
         await self._write(data)
@@ -95,9 +95,9 @@ class ScopedMcpConfigStore:
             raise ValueError(f"no hay productor registrado para scope {scope.value!r}")
         return store
 
-    async def load_scoped(self) -> dict[McpScope, dict[str, dict]]:
+    async def load_scoped(self) -> dict[McpScope, dict[str, dict[str, Any]]]:
         """Carga cada productor de forma aislada (uno caído no tumba al resto)."""
-        result: dict[McpScope, dict[str, dict]] = {}
+        result: dict[McpScope, dict[str, dict[str, Any]]] = {}
         for scope, store in self._producers.items():
             try:
                 result[scope] = await store.load()
@@ -113,7 +113,7 @@ class ScopedMcpConfigStore:
         """Vista mergeada por nombre con precedencia/exclusividad."""
         return merge_scoped(await self.load_scoped())
 
-    async def save(self, scope: McpScope, name: str, raw: dict) -> None:
+    async def save(self, scope: McpScope, name: str, raw: dict[str, Any]) -> None:
         """Persiste en el productor del scope. Gate: solo scopes mutables."""
         assert_mutable(scope)
         await self._producer(scope).save(name, raw)

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from ..protocol import ToolCategory, ToolResult
 # La capa plan-file (token + lectura vía storage inyectado) vive en un módulo hoja para que tanto
 # esta tool como el `PlanModeProvider` la importen sin ciclo. Re-exportados aquí por compat.
 from ...capabilities.plan.plan_file import (  # noqa: F401
@@ -13,6 +12,7 @@ from ...capabilities.plan.plan_file import (  # noqa: F401
     get_plan,
     get_plan_file_path,
 )
+from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
@@ -155,7 +155,7 @@ than to redo work
     def is_enabled(self) -> bool:
         return self._interactive
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         # El discriminador de subagente es `is_subagent`, no `agent_id` (que también se
         # asigna al contexto raíz como identidad). Mismo criterio que el resto del runtime
         # (resolver/agent_loop/runtime). Canónico: EnterPlanMode es root-only.
@@ -239,7 +239,7 @@ approach.
     def is_enabled(self) -> bool:
         return self._interactive
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         plan = await get_plan(ctx)
         if not plan or not plan.strip():
             return ToolResult.error(

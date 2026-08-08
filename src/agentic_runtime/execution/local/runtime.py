@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 300.0
 
 
-def _last_assistant_text(messages: list) -> str:
+def _last_assistant_text(messages: list[Any]) -> str:
     for m in reversed(messages):
         if isinstance(m, dict) and m.get("role") == "assistant":
             return m.get("content") or ""
@@ -216,7 +216,7 @@ class LocalAgentRuntime:
         asyncio.Task del loop termina, después de que el loop emitió todos sus eventos
         (emit se awaitea dentro de run()), garantizando que no se pierde ninguno.
         """
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
         sentinel = object()
 
         async def _sink(event: Event) -> None:
@@ -267,7 +267,9 @@ class LocalAgentRuntime:
     # Ciclo de ejecución
     # ------------------------------------------------------------------
 
-    def _build_child(self, task: "RuntimeTask", parent_snapshot: ForkSnapshot | None):
+    def _build_child(
+        self, task: "RuntimeTask", parent_snapshot: ForkSnapshot | None
+    ) -> tuple[Any, str | None, int]:
         if parent_snapshot is not None:
             policy = ForkPolicy(inherit_messages=task.fork_context)
             ctx = RuntimeContextForker().fork(

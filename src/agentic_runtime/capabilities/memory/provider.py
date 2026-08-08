@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...contracts.errors import RuntimeIdentityError
 from .prompt import build_memory_activation
@@ -97,7 +97,7 @@ class MemoryProvider:
         index = self._store.read_index(agent)
         return build_memory_activation(str(memory_dir), index)
 
-    def active_context(self, context: "ToolUseContext") -> list[dict]:
+    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         """Recall: ≤5 memorias relevantes al último texto del usuario.
 
         Scoped por agente (un subagente no ve memorias de otro). Excluye `MEMORY.md`
@@ -108,7 +108,7 @@ class MemoryProvider:
         ranked = rank_memories(headers, _last_user_text(context))
         return [{"role": "system", "content": _render_recall(header)} for header in ranked]
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict]:
+    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         """Tras compactación: mismas memorias relevantes (sobreviven al recorte)."""
         return self.active_context(context)
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from ..fs_env import PathOutsideWorkspace
@@ -91,7 +91,7 @@ class CloneRepositoryTool:
     safe_for_background = True
     timeout_seconds = 120.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         repository = (input.get("repository") or "").strip()
         if not repository:
             return ToolResult.error(self.name, "repository es obligatorio")

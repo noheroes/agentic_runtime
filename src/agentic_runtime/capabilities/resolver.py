@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
 
-from .protocol import CapabilitySource, ResolvedCapabilities, SkillCatalogProtocol
 from ..context.tool_use import ToolUseContext
 from ..tools.registry import ToolRegistry
+from .protocol import CapabilitySource, ResolvedCapabilities, SkillCatalogProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class CapabilitiesResolver:
         ]
 
         # Fuentes externas con timeout parcial — si tardan, se devuelve lo disponible
-        external_schemas: list[dict] = []
+        external_schemas: list[dict[str, Any]] = []
 
         sources: list[SkillCatalogProtocol | CapabilitySource] = []
         if self._skill_catalog is not None:

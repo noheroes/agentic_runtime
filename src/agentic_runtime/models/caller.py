@@ -38,8 +38,8 @@ def _compose_system_prompt(
 
 
 def _dict_messages_to_context(
-    messages: list[dict],
-    tools: list[dict],
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
     system_prompt: str | None,
 ) -> Any:
     """Convert dict messages + tool schemas to agentic_models.Context."""
@@ -54,7 +54,7 @@ def _dict_messages_to_context(
         UserMessage,
     )
 
-    def _to_message(m: dict):
+    def _to_message(m: dict[str, Any]) -> Any:
         role = m.get("role")
         content = m.get("content") or ""
 
@@ -152,8 +152,8 @@ class AgenticModelsCaller:
 
     async def complete(
         self,
-        messages: list[dict],
-        tools: list[dict],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         *,
         stop: AbortSignal | None = None,
         model_id: str = "",
@@ -191,8 +191,8 @@ class AgenticModelsCaller:
 
     async def _stream(
         self,
-        messages: list[dict],
-        tools: list[dict],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         *,
         stop: AbortSignal | None = None,
         model_id: str = "",
@@ -277,7 +277,7 @@ class AgenticModelsCaller:
             model = get_registry().get_by_provider(self._model.provider, model_id)
 
         event_stream = (
-            stream_simple(model, context, opts)  # type: ignore[arg-type]
+            stream_simple(model, context, opts)
             if reasoning is not None
             else stream(model, context, opts)
         )

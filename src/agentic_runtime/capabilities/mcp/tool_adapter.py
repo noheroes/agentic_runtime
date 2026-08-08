@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from ...tools.protocol import ToolCategory, ToolResult
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # El transporte real lo inyecta quien embebe el runtime: dado (tool_name, input)
 # devuelve el texto de salida del server MCP. El shell no implementa transporte.
-McpCall = Callable[[str, dict], Awaitable[str]]
+McpCall = Callable[[str, dict[str, Any]], Awaitable[str]]
 
 # Claves de `_meta` de las que se lee el search hint, EN ORDEN de precedencia. El `_meta`
 # de MCP es un espacio namespaced por vendor (`<vendor>/<campo>`) y el runtime es
@@ -81,7 +81,7 @@ class McpTool:
         *,
         name: str,
         description: str,
-        input_schema: dict,
+        input_schema: dict[str, Any],
         call: McpCall,
         read_only: bool = False,
         timeout_seconds: float = 30.0,
@@ -124,7 +124,7 @@ class McpTool:
         self.timeout_seconds = timeout_seconds
         self.server_name = server_name
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         from .client import McpToolError
 
         try:
@@ -138,7 +138,7 @@ class McpTool:
 
 
 def build_mcp_tool(
-    spec: dict,
+    spec: dict[str, Any],
     call: McpCall,
     *,
     timeout_seconds: float = 30.0,

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Awaitable, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
 
 
 class HookEvent(str, Enum):
@@ -42,7 +42,7 @@ class HookDecision:
     block: bool = False
     stop: bool = False
     message: Optional[str] = None
-    modified_input: Optional[dict] = None
+    modified_input: Optional[dict[str, Any]] = None
     additional_context: Optional[str] = None
 
     @classmethod
@@ -59,14 +59,14 @@ class HookDecision:
 
 
 # Un handler recibe el payload del punto de ciclo y opcionalmente devuelve una decisión.
-HookHandler = Callable[[HookEvent, dict], Awaitable[Optional[HookDecision]]]
+HookHandler = Callable[[HookEvent, dict[str, Any]], Awaitable[Optional[HookDecision]]]
 
 
 @runtime_checkable
 class HookSinkProtocol(Protocol):
     """Contrato que cualquier consumidor implementa para recibir hooks."""
 
-    async def handle(self, event: HookEvent, payload: dict) -> Optional[HookDecision]: ...
+    async def handle(self, event: HookEvent, payload: dict[str, Any]) -> Optional[HookDecision]: ...
 
 
 __all__ = ["HookEvent", "HookDecision", "HookHandler", "HookSinkProtocol"]

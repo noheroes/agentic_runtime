@@ -32,7 +32,12 @@ class CapabilityActivation(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     tools_to_enable: list[str] = Field(default_factory=list)
-    messages_to_append: list[dict] = Field(default_factory=list)
+    # DELTA DE CONDUCTA DECLARADO: era `list[dict]` (= `dict[Any, Any]`), así que pydantic
+    # aceptaba claves no-`str`; con `dict[str, Any]` las RECHAZA en construcción. Se mantiene
+    # el estrechamiento —estos dicts se serializan a JSON, donde la clave es `str` por
+    # definición— pero se deja escrito, porque un cambio de validación no puede colarse como
+    # efecto lateral de callar a `mypy`. Contrapunto: `Session.messages` NO se estrechó.
+    messages_to_append: list[dict[str, Any]] = Field(default_factory=list)
     permission_rules: list[str] = Field(default_factory=list)
     active_state: dict[str, Any] = Field(default_factory=dict)
     refresh_tool_pool: bool = False
@@ -65,8 +70,8 @@ class CapabilityProvider(Protocol):
 
     def catalog(self, context: "ToolUseContext") -> list[CapabilitySummary]: ...
     def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]: ...
-    def active_context(self, context: "ToolUseContext") -> list[dict]: ...
-    def compact_context(self, context: "ToolUseContext") -> list[dict]: ...
+    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]: ...
+    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]: ...
 
 
 __all__ = [

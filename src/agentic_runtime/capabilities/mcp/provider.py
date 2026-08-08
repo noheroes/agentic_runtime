@@ -114,13 +114,13 @@ class McpProvider:
 
     # --- registro (lo usa el integrador) ---------------------------------
 
-    def add_server(self, name: str, raw: dict) -> McpServerConfig:
+    def add_server(self, name: str, raw: dict[str, Any]) -> McpServerConfig:
         """Estricto — borde de seguridad. Lanza si la config es inválida."""
         config = parse_server_config(name, raw)
         self._state.set_server(config)
         return config
 
-    def load_servers(self, raw: dict[str, dict]) -> list[McpServerConfig]:
+    def load_servers(self, raw: dict[str, dict[str, Any]]) -> list[McpServerConfig]:
         """Tolerante — aislamiento por ítem. Un server inválido se salta con log."""
         configs = load_server_configs(raw)
         for config in configs:
@@ -130,7 +130,7 @@ class McpProvider:
     def register_tools_from_specs(
         self,
         server_name: str,
-        specs: list[dict],
+        specs: list[dict[str, Any]],
         call: McpCall,
     ) -> None:
         """Adapta specs crudos de un server a tools tolerantes (omite las malformadas)."""
@@ -143,7 +143,7 @@ class McpProvider:
                 tools.append(tool)
         self._state.set_tools(server_name, tools)
 
-    def register_resources(self, server_name: str, resources: list[dict]) -> None:
+    def register_resources(self, server_name: str, resources: list[dict[str, Any]]) -> None:
         self._state.set_resources(server_name, resources)
 
     # --- ciclo de vida de clients (M1) -----------------------------------
@@ -294,7 +294,7 @@ class McpProvider:
         return plan
 
     async def register_server(
-        self, name: str, raw: dict, *, scope: McpScope = McpScope.USER
+        self, name: str, raw: dict[str, Any], *, scope: McpScope = McpScope.USER
     ) -> McpServerConfig:
         """Registra un server EN runtime: valida, persiste en el scope (default user) y
         deja listo para conectar. El gate rechaza scopes no mutables (managed/enterprise).
@@ -339,13 +339,13 @@ class McpProvider:
             for tool in self._state.all_tools()
         ]
 
-    def resources(self, context: "ToolUseContext") -> list[dict]:
+    def resources(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         return self._state.all_resources()
 
-    def active_context(self, context: "ToolUseContext") -> list[dict]:
+    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         return []
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict]:
+    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
         return []
 
 

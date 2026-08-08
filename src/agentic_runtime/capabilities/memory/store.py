@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import yaml
 from pydantic import BaseModel
@@ -44,7 +44,7 @@ class MemoryStore(Protocol):
     def scan(self, agent_id: str | None) -> list[MemoryHeader]: ...
 
 
-def _parse_frontmatter(text: str) -> dict:
+def _parse_frontmatter(text: str) -> dict[str, Any]:
     """Parse mínimo y TOLERANTE del frontmatter YAML (nunca lanza).
 
     No reutiliza `SkillFrontmatter` — su schema es distinto (la memoria usa

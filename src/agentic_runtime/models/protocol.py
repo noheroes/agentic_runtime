@@ -132,8 +132,8 @@ class UnsupportedModelOptionError(NotImplementedError):
 class ModelRequest:
     """Immutable model request — the loop builds this and passes it to the caller."""
 
-    messages: list[dict]
-    tools: list[dict]
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]]
     model_id: str
     stop: AbortSignal | None = field(default=None, compare=False)
     options: ModelOptions = field(default_factory=ModelOptions)
@@ -148,8 +148,8 @@ class ModelCallerProtocol(Protocol):
 
     async def complete(
         self,
-        messages: list[dict],
-        tools: list[dict],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         *,
         stop: AbortSignal | None = None,
         model_id: str = "",

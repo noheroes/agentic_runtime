@@ -246,7 +246,10 @@ class AgentLoop:
         if self._deferred_strategy_override is not None:
             return self._deferred_strategy_override
         if self._deferred_strategy_cached is None:
-            from ..tools.deferred_strategy import NativeDeferredStrategy, SimulatedDeferredStrategy
+            from ..tools.deferred_strategy import (
+                NativeDeferredStrategy,
+                SimulatedDeferredStrategy,
+            )
 
             native = False
             probe = getattr(self._model_caller, "supports_native_tool_search", None)
@@ -552,7 +555,7 @@ class AgentLoop:
             # Persiste respuesta del asistente
             assistant_content = "".join(token_buffer)
             if assistant_content or tool_calls:
-                msg: dict = {"role": "assistant", "content": assistant_content}
+                msg: dict[str, Any] = {"role": "assistant", "content": assistant_content}
                 if tool_calls:
                     msg["tool_calls"] = [
                         {"id": tc.call_id, "function": {"name": tc.tool_name, "arguments": json.dumps(tc.tool_input)}}

@@ -14,7 +14,7 @@ lo nuevo (un server MCP registrado a mitad de sesión) y se retira lo desconecta
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .deferred import is_deferred_tool
 
@@ -72,7 +72,7 @@ def _parse_section_names(content: str, header: str) -> list[str]:
     return names
 
 
-def _announced_deferred_names(messages: list[dict]) -> set[str]:
+def _announced_deferred_names(messages: list[dict[str, Any]]) -> set[str]:
     """Reconstruye el conjunto de diferidas YA anunciadas escaneando reminders previos
     (espejo del escaneo de attachments `deferred_tools_delta` del canónico)."""
     announced: set[str] = set()
@@ -89,7 +89,7 @@ def _announced_deferred_names(messages: list[dict]) -> set[str]:
 
 
 def compute_deferred_tools_delta(
-    pool_tools: list["ToolProtocol"], messages: list[dict]
+    pool_tools: list["ToolProtocol"], messages: list[dict[str, Any]]
 ) -> tuple[list[str], list[str]] | None:
     """Diff del pool diferido actual contra lo ya anunciado en la conversación.
 

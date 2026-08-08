@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
+
+from pydantic import BaseModel
 
 from ...contracts.identity import Scope
 
@@ -11,6 +13,11 @@ if TYPE_CHECKING:
     from ...storage.protocol import StorageProtocol
 
 logger = logging.getLogger(__name__)
+
+#: Lo que `_load` devuelve es EXACTAMENTE el modelo que se le pide validar. Tiparlo
+#: genérico —en vez de `Any`— es lo que hace que `get_tokens`/`get_client_info`
+#: comprueben su propio tipo de retorno en vez de dejar pasar cualquier cosa.
+_M = TypeVar("_M", bound=BaseModel)
 
 
 class StorageBackedTokenStorage:
@@ -31,7 +38,7 @@ class StorageBackedTokenStorage:
         self._tokens_key = f"{base}/oauth_tokens.json"
         self._client_key = f"{base}/oauth_client.json"
 
-    async def _load(self, key: str, model):
+    async def _load(self, key: str, model: type[_M]) -> _M | None:
         try:
             if not await self._storage.exists(key):
                 return None
@@ -45,7 +52,7 @@ class StorageBackedTokenStorage:
             logger.warning("mcp oauth: %s corrupto, se ignora: %s", key, exc)
             return None
 
-    async def _save(self, key: str, value) -> None:
+    async def _save(self, key: str, value: BaseModel) -> None:
         try:
             await self._storage.upload(key, value.model_dump_json().encode(), "application/json")
         except Exception as exc:  # noqa: BLE001

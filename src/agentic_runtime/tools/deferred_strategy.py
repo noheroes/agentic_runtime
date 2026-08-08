@@ -16,7 +16,7 @@ Contrato durable: `new_core/PLAN_DEFERRED_LOADING_PRIMITIVA.md` §2-3.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .deferred import discovered_tool_names, is_deferred_tool
 from .deferred_delta import compute_deferred_tools_delta, render_deferred_tools_delta
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .protocol import ToolProtocol
 
 
-def _base_schema(tool: "ToolProtocol") -> dict:
+def _base_schema(tool: "ToolProtocol") -> dict[str, Any]:
     return {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
 
 
@@ -35,7 +35,7 @@ def _base_schema(tool: "ToolProtocol") -> dict:
 class TurnToolPlan:
     """Plan de tools del turno: schemas a anunciar (cada uno puede llevar `defer_loading`)
     y mensajes `<system-reminder>` a insertar (el loop los envuelve y añade a `ctx.messages`)."""
-    tool_schemas: list[dict]
+    tool_schemas: list[dict[str, Any]]
     announcements: list[str] = field(default_factory=list)
     # Nombres de las tools que este turno trata como DIFERIDAS. Lo sabe la estrategia
     # —es quien lo decide— y el loop lo transporta al `TurnStartEvent` (`#10`). Sin este
@@ -59,7 +59,7 @@ class SimulatedDeferredStrategy:
         tool_search_active = bool(deferred_names)
         discovered = discovered_tool_names(ctx)
 
-        schemas: list[dict] = []
+        schemas: list[dict[str, Any]] = []
         for tool in pool:
             if tool.name == TOOL_SEARCH_TOOL_NAME:
                 if not tool_search_active:
@@ -84,7 +84,7 @@ class NativeDeferredStrategy:
     """Rama nativa Responses — el provider resuelve el tool-search server-side."""
 
     def prepare_turn(self, ctx: "ToolUseContext", pool: list["ToolProtocol"]) -> TurnToolPlan:
-        schemas: list[dict] = []
+        schemas: list[dict[str, Any]] = []
         for tool in pool:
             if tool.name == TOOL_SEARCH_TOOL_NAME:
                 continue  # el provider añade su propio tool_search server-side

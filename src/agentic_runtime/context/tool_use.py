@@ -6,6 +6,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..contracts.abort import AbortSignal
+from ..contracts.events import Event
 from ..contracts.identity import Scope
 from ..contracts.permissions import PermissionContext
 
@@ -81,7 +82,7 @@ class ToolUseContext(BaseModel):
     # `C2`/`S2`: señal de abort CONSULTABLE (`.aborted`/`.reason()`), no `asyncio.Event`.
     # El tipo viejo viajaba hasta el provider y ningún provider sabía leerlo.
     stop: AbortSignal | None = None
-    event_queue: asyncio.Queue | None = None
+    event_queue: asyncio.Queue[Event] | None = None
     storage: Any = None
     # `S12`: traducción de rutas host → texto que ve el modelo. `to_llm` en el punto de
     # emisión (forward, exacto) + `sanitize_output` en el choke del dispatcher (red de

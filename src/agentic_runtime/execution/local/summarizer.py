@@ -9,6 +9,7 @@ Comportamiento de degradación graceful:
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ _SUMMARY_PROMPT = (
 async def summarize_if_needed(
     text: str,
     max_chars: int,
-    llm,
+    llm: Any,
 ) -> str:
     if len(text) <= max_chars or llm is None:
         return text
@@ -42,7 +43,7 @@ async def summarize_if_needed(
                 len(text),
                 len(summary),
             )
-            return summary
+            return cast(str, summary)
     except Exception as exc:
         logger.warning("background result summarization failed: %s", exc)
 

@@ -61,7 +61,7 @@ settings, or when adjusting a setting would benefit them.
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         setting = input.get("setting", "")
         if not setting:
             return ToolResult.error(self.name, "setting is required.")

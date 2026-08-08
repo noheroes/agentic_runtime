@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -68,7 +69,7 @@ class SkillFrontmatter(BaseModel):
         return []
 
     @classmethod
-    def from_raw(cls, raw: dict) -> "SkillFrontmatter":
+    def from_raw(cls, raw: dict[str, Any]) -> "SkillFrontmatter":
         """Construcción TOTAL — nunca lanza. Frontmatter corrupto → defaults."""
         try:
             return cls.model_validate(raw)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ...tools.protocol import ToolCategory, ToolResult
 from .loader import SkillDefinition, default_is_enabled
@@ -35,7 +35,9 @@ def render_skill(skill: SkillDefinition) -> str:
     return "\n\n".join(p for p in (head, base, body, tail) if p)
 
 
-def build_skill_context_modifier(skill: SkillDefinition):
+def build_skill_context_modifier(
+    skill: SkillDefinition,
+) -> Callable[[ToolUseContext], ToolUseContext]:
     """Construye el `context_modifier` de una skill invocada (S2).
 
     Muta ctx in-place (convención del runtime): registra la skill activa en
@@ -104,7 +106,7 @@ class SkillTool:
         # deshabilitada no es invocable ni aparece en la lista de disponibles.
         self._is_enabled = is_enabled or default_is_enabled
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         command = (input.get("command") or "").strip()
         skill = self._state.get(command)
         if skill is None or not self._is_enabled(skill):

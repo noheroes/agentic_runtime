@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
@@ -68,7 +68,7 @@ Usage:
     safe_for_background = True
     timeout_seconds = 15.0
 
-    async def execute(self, input: dict, ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
         try:
             base = ctx.fs.resolve(input.get("path", "."), for_write=False)
         except PathOutsideWorkspace as exc:

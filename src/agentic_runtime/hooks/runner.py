@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from typing import Any
 
 from .protocol import HookDecision, HookEvent, HookHandler, HookSinkProtocol
 
@@ -30,13 +31,13 @@ class HookRunner:
         for ev in targets:
             self._handlers[ev].append(sink.handle)
 
-    async def run(self, event: HookEvent, payload: dict) -> HookDecision:
+    async def run(self, event: HookEvent, payload: dict[str, Any]) -> HookDecision:
         """Corre los handlers del evento en orden de registro y agrega decisiones.
 
         Un block/stop corta y se devuelve de inmediato. Si nadie corta, se acumulan
         modified_input y additional_context en una decisión final de tipo allow.
         """
-        modified_input: dict | None = None
+        modified_input: dict[str, Any] | None = None
         contexts: list[str] = []
 
         for handler in self._handlers.get(event, []):
