@@ -19,9 +19,8 @@ import asyncio
 
 import pytest
 
-from agentic_runtime.contracts.abort import AbortController, AbortReason
-
 from agentic_runtime.context.tool_use import AppState, ToolUseContext
+from agentic_runtime.contracts.abort import AbortController, AbortReason
 from agentic_runtime.execution.fork import (
     ForkContext,
     ForkPolicy,
@@ -29,9 +28,10 @@ from agentic_runtime.execution.fork import (
     RuntimeContextForker,
 )
 from agentic_runtime.signals import SignalBus, SignalHandler, SignalType
-from agentic_runtime.tools.dispatcher import ToolDispatcher  # noqa: F401  (referencia de seam)
+from agentic_runtime.tools.dispatcher import (
+    ToolDispatcher,  # noqa: F401  (referencia de seam)
+)
 from agentic_runtime.tools.protocol import ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Lo que SÍ está homologado (comportamiento verificado) — deben PASAR

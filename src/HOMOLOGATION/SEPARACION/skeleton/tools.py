@@ -121,7 +121,7 @@ class ToolDispatcher:
                 if self._timeout is not None
                 else await coro
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResultEvent(
                 call_id=call.call_id,
                 output=f"tool timed out after {self._timeout}s: {call.name}",
@@ -147,7 +147,7 @@ class AddTool:
     resultado se aplana, y el modelo redacta la respuesta con el número devuelto)."""
 
     name: str = "add_numbers"
-    input_schema: dict[str, object] = {
+    input_schema: dict[str, object] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "a": {"type": "integer", "description": "primer sumando"},
@@ -179,7 +179,7 @@ class AgentTool:
     El turno end-to-end de A2.5 prueba que el factory SÍ lo cablea (L09: cableado, no existencia)."""
 
     name: str = "agent"
-    input_schema: dict[str, object] = {
+    input_schema: dict[str, object] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "la subtarea a delegar al subagente"},

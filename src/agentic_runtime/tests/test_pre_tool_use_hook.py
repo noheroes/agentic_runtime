@@ -11,9 +11,9 @@ import pytest
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.events import DoneEvent, ToolCallEvent
 from agentic_runtime.hooks import HookDecision, HookEvent, HookRunner
+from agentic_runtime.loop import AgentLoop
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
-from agentic_runtime.loop import AgentLoop
 
 
 def _make_caller(*events):
@@ -30,7 +30,7 @@ class RecordingTool:
     """Tool nativa que registra cada ejecución para asertar si corrió o no."""
     name = "echo"
     description = "Echoes input"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -82,7 +82,6 @@ async def test_pre_tool_use_fires_with_payload():
 
     async def handler(event, payload):
         seen.append(payload)
-        return None  # no opina → la tool corre
 
     runner = HookRunner()
     runner.register(HookEvent.PRE_TOOL_USE, handler)
@@ -176,7 +175,6 @@ async def test_hitl_grant_then_execute():
         ctx = payload["ctx"]
         if payload["tool_name"] == "write_file" and "write_file" not in ctx.permission_context.allowed_names():
             ctx.app_state.permissions = ctx.app_state.permissions.with_command_allow(["write_file"])
-        return None
 
     runner = HookRunner()
     runner.register(HookEvent.PRE_TOOL_USE, approve)

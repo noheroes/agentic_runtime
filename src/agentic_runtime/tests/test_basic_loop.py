@@ -3,7 +3,6 @@ import pytest
 
 from agentic_runtime.loop import BasicLoop, DrainableLoopProtocol, LoopProtocol
 
-
 # ---------------------------------------------------------------------------
 # Protocol checks
 # ---------------------------------------------------------------------------

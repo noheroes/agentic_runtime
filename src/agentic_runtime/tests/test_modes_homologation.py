@@ -19,7 +19,6 @@ import pytest
 
 from agentic_runtime.modes import AgentMode, ModeManager
 
-
 # --- lo homologado: modes/ existe y su semántica local es coherente ----------
 
 def test_agentmode_enumerates_three_conflated_axes():

@@ -51,7 +51,7 @@ Usage:
 - Reading a whole file without `limit` fails if the file exceeds the size cap; the error
   tells you to use `offset`/`limit` or to search for the content instead
 - This tool reads files, not directories. Use the glob tool to list files"""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "path": {"type": "string"},
@@ -71,7 +71,7 @@ Usage:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         try:
             path = ctx.fs.resolve(input["path"], for_write=False)
         except PathOutsideWorkspace as exc:
@@ -103,5 +103,5 @@ Usage:
             inicio = 0 if offset == 0 else offset - 1
             selected = lines[inicio:] if limit is None else lines[inicio : inicio + limit]
             return ToolResult(tool_name=self.name, output=_numerar(selected, inicio + 1))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
             return ToolResult.error(self.name, str(exc))

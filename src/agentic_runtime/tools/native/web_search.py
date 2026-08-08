@@ -48,7 +48,7 @@ Usage notes:
 IMPORTANT - Use the correct year in search queries:
 - When searching for recent information, documentation or current events, include the CURRENT
   year in the query, not last year's."""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "query": {
@@ -79,7 +79,7 @@ IMPORTANT - Use the correct year in search queries:
     safe_for_background = True
     timeout_seconds = 30.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         query: str = input.get("query", "")
         if not query:
             return ToolResult.error(self.name, "query is required.")
@@ -140,7 +140,7 @@ def _serper_search(tool_name: str, query: str, n: int, api_key: str) -> ToolResu
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         return ToolResult.error(tool_name, f"Serper HTTP {e.code}: {e.reason}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tras `HTTPError`; el resto vuelve al modelo como texto
         return ToolResult.error(tool_name, f"Web search failed: {exc}")
 
     results = data.get("organic", [])[:n]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, ToolCallEvent
 from agentic_runtime.execution.agents import AgentDefinition
@@ -20,7 +21,6 @@ from agentic_runtime.factory import (
     create_runtime,
 )
 from agentic_runtime.loop import AgentLoop
-from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
 

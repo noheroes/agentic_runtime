@@ -25,6 +25,7 @@ from agentic_runtime.context.adapters import (
     tool_use_context_from_session,
 )
 from agentic_runtime.context.tool_use import AppState, ContextModifier, ToolUseContext
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.execution.fork import (
     ForkContext,
@@ -33,8 +34,6 @@ from agentic_runtime.execution.fork import (
     RuntimeContextForker,
 )
 from agentic_runtime.tools.pool import ToolPool
-from agentic_runtime.contracts.identity import Scope
-
 
 # --- A · ToolUseContext: forma núcleo (par de Tool.ts:158-300) --------------
 
@@ -161,8 +160,10 @@ def test_apply_context_modifier_compat_legacy_session_path():
 
     def legacy_modifier(obj):
         # Falla si le pasan un ToolUseContext (no tiene .legacy_touch), forzando el
-        # camino de compatibilidad con la sesión.
-        obj.legacy_touch  # AttributeError sobre ToolUseContext
+        # camino de compatibilidad con la sesión. La expresión "inútil" ES el mecanismo
+        # del test: el acceso al atributo es lo que lanza el `AttributeError`. Asignarla
+        # a una variable cambiaría lo que se está probando, de ahí el silenciado.
+        obj.legacy_touch  # noqa: B018
         touched.append("session")
 
     sess.legacy_touch = None  # la sesión sí lo tiene

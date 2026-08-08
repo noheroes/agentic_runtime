@@ -1,18 +1,15 @@
 """Tests para runtime/loop/AgentLoop — ciclo real LLM → tools → acumula."""
-import asyncio
 import logging
 
 import pytest
 
+from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.abort import AbortController
-
+from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.loop import AgentLoop, BasicLoop
 from agentic_runtime.loop.outcome import LoopEndReason
-from agentic_runtime.context.tool_use import ToolUseContext
-from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
-
 
 # ---------------------------------------------------------------------------
 # Stubs
@@ -32,7 +29,7 @@ def _make_caller(*events):
 class EchoTool:
     name = "echo"
     description = "Echoes input"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -360,7 +357,7 @@ class _SuspendTool:
 
     name = "suspend"
     description = "Ends the turn (HITL)"
-    input_schema: dict = {"type": "object", "properties": {}}
+    input_schema: dict = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.SYSTEM
     requires_permission = False
     safe_for_background = False

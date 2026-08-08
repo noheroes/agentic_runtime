@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Type
+from typing import Any, ClassVar
 
 from .filesystem import FilesystemStorage
 from .protocol import StorageProtocol
@@ -14,10 +14,10 @@ class StorageRegistry:
     y luego `StorageRegistry.create("s3", bucket="...")` sin modificar el runtime.
     """
 
-    _backends: dict[str, Type[StorageProtocol]] = {}
+    _backends: ClassVar[dict[str, type[StorageProtocol]]] = {}
 
     @classmethod
-    def register(cls, name: str, backend_cls: Type[StorageProtocol]) -> None:
+    def register(cls, name: str, backend_cls: type[StorageProtocol]) -> None:
         cls._backends[name] = backend_cls
 
     @classmethod

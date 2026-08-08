@@ -3,9 +3,9 @@ from .protocol import HookDecision, HookEvent, HookHandler, HookSinkProtocol
 from .runner import HookRunner
 
 __all__ = [
-    "HookEvent",
     "HookDecision",
+    "HookEvent",
     "HookHandler",
-    "HookSinkProtocol",
     "HookRunner",
+    "HookSinkProtocol",
 ]

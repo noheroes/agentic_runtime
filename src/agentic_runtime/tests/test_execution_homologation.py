@@ -20,6 +20,7 @@ import inspect
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.execution.agents import INHERIT, resolve_subagent_model
 from agentic_runtime.execution.fork import (
     ForkContext,
@@ -35,8 +36,6 @@ from agentic_runtime.execution.local.notification import (
 )
 from agentic_runtime.execution.tasks.registry import TaskRecord
 from agentic_runtime.execution.tasks.status import TaskStatus
-from agentic_runtime.contracts.identity import Scope
-
 
 # --- lo homologado -----------------------------------------------------------
 
@@ -211,7 +210,6 @@ async def test_max_turns_threaded_to_loop():
     no era que faltara el parámetro, era que **nadie lo pasaba**, y una aserción
     sobre la firma no distingue esos dos mundos (`L09`).
     """
-    import asyncio
 
     from agentic_runtime.contracts.identity import Scope as _Scope
     from agentic_runtime.contracts.runtime import RuntimeTask

@@ -7,7 +7,6 @@ import pytest
 from agentic_runtime.capabilities.mcp import McpServerConfig, parse_server_config
 from agentic_runtime.capabilities.mcp.client import _http_client_factory
 
-
 # ---------------------------------------------------------------------------
 # type explícito y resolución de transporte
 # ---------------------------------------------------------------------------

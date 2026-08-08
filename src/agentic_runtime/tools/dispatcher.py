@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 import agentic_models
 
@@ -21,7 +21,7 @@ class ToolDispatcher:
     uniformes en el pool. El loop puebla `ctx.tool_pool` por turno.
     """
 
-    def __init__(self, *, timeout_override: Optional[float] = None) -> None:
+    def __init__(self, *, timeout_override: float | None = None) -> None:
         self._timeout_override = timeout_override
 
     async def dispatch(
@@ -30,7 +30,7 @@ class ToolDispatcher:
         tool_name: str,
         tool_input: dict[str, Any],
         ctx: ToolUseContext,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> ToolResult:
         result = await self._run(tool_name=tool_name, tool_input=tool_input, ctx=ctx, timeout=timeout)
         # Choke point único de presentación: todo ToolResult (ok/error/timeout/aborted)
@@ -47,7 +47,7 @@ class ToolDispatcher:
         tool_name: str,
         tool_input: dict[str, Any],
         ctx: ToolUseContext,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> ToolResult:
         # Abort check — antes de cualquier trabajo. La razón viaja: la señal la lleva
         # (`AbortController` deriva `aborted` de `AbortReason`) y perderla aquí hacía
@@ -79,7 +79,7 @@ class ToolDispatcher:
                 timeout=effective_timeout,
             )
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResult.timeout(tool_name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — LA costura: toda excepción de tool se vuelve ToolResult legible
             return ToolResult.error(tool_name, str(exc))

@@ -13,6 +13,7 @@ Crecimiento del spike (PLAN §4 · SEAMS §5):
 - A2.5: S18 (`SubagentRunnerProtocol`) + S4 + S21; turno end-to-end; `SKELETON-REPORT.md`.
 """
 
+from skeleton.bridge import AgenticModelsCaller
 from skeleton.contracts import (
     CompactBoundaryEvent,
     DoneEvent,
@@ -32,7 +33,6 @@ from skeleton.contracts import (
     ToolSchema,
     Usage,
 )
-from skeleton.bridge import AgenticModelsCaller
 from skeleton.events import EventBus, Unsubscribe
 from skeleton.factory import create_runtime
 from skeleton.loop import AgentLoop

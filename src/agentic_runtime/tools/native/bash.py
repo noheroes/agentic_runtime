@@ -60,7 +60,7 @@ the workspace, return structured results, and are easier to review.
   - Never use interactive flags (`-i`), which cannot work here.
 - Avoid unnecessary `sleep` commands: do not sleep between commands that can run immediately,
   and do not retry failing commands in a sleep loop — diagnose the root cause instead."""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"command": {"type": "string"}},
         "required": ["command"],
@@ -101,7 +101,7 @@ the workspace, return structured results, and are easier to review.
             "Please restart from an existing directory."
         )
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         command = input.get("command", "")
         # Sin costura de ejecución NO se ejecuta (problema `#2`). El default vive en el
         # ensamblador (`factory.py:256`), no aquí: un `or LocalExecEnvironment()` local
@@ -138,5 +138,5 @@ the workspace, return structured results, and are easier to review.
                 output=result.output,
                 is_error=result.returncode != 0,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
             return ToolResult.error(self.name, str(exc))

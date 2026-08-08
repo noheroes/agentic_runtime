@@ -34,7 +34,7 @@ class StorageBackedSkillStore:
 
     _SUFFIX = "/SKILL.md"
 
-    def __init__(self, storage: "StorageProtocol", *, scope: Scope, prefix: str = "skills") -> None:
+    def __init__(self, storage: StorageProtocol, *, scope: Scope, prefix: str = "skills") -> None:
         # `C9`/`ID-3`: el prefijo era `"skills"` FIJO, sin componente de identidad ⇒ dos
         # tenants escribían sus skills bajo la misma clave. El `Scope` va delante.
         self._storage = storage

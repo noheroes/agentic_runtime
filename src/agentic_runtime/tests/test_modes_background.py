@@ -7,20 +7,18 @@ Dos ejes ortogonales:
 """
 import asyncio
 
-
 from agentic_runtime.capabilities import CapabilitiesResolver
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.execution.tasks.registry import InMemoryTaskRegistry
 from agentic_runtime.execution.tasks.status import TaskStatus
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 
-
 # --- stub tools: una interactiva (no background) y una segura ---------------
 
 class _InteractiveTool:
     name = "ask_user"
     description = "needs a human"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = False
@@ -33,7 +31,7 @@ class _InteractiveTool:
 class _SafeTool:
     name = "read_file"
     description = "safe to run unattended"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.FILE
     requires_permission = False
     safe_for_background = True

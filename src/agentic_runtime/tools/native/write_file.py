@@ -27,7 +27,7 @@ Usage:
 - Parent directories are created as needed.
 - NEVER create documentation files (*.md) or README files unless explicitly requested.
 - Only use emojis if the user explicitly requests it."""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "path": {"type": "string"},
@@ -40,7 +40,7 @@ Usage:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         try:
             path = ctx.fs.resolve(input["path"], for_write=True)
         except PathOutsideWorkspace as exc:
@@ -51,5 +51,5 @@ Usage:
             # `S12`: la ruta resuelta es HOST. El modelo debe verla en los términos del
             # deployment (`/workspace/...` bajo fake-path), no la real. Bajo identidad es no-op.
             return ToolResult(tool_name=self.name, output=ctx.presentation.to_llm(path))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
             return ToolResult.error(self.name, str(exc))

@@ -24,7 +24,6 @@ el modelo o abrir permisos del turno). Eso es la battery `commands`, que está
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from typing import Protocol, runtime_checkable
 
 from .tools import ToolContext

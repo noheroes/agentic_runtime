@@ -42,7 +42,7 @@ def _plan_file_info(token: str, exists: bool) -> str:
     )
 
 
-def _render_plan_full(context: "ToolUseContext") -> str:
+def _render_plan_full(context: ToolUseContext) -> str:
     """Workflow completo de 5 fases (espejo de `getPlanModeV2Instructions`, messages.ts:3207).
 
     El ROOT orquesta: lanza subagentes `Explore` (P1) y `Plan` (P2), revisa (P3), escribe el
@@ -84,7 +84,7 @@ At the very end of your turn, once you are happy with your final plan file, call
 **Important:** Use AskUserQuestion ONLY to clarify requirements or choose between approaches. Use ExitPlanMode to request plan approval — do NOT ask about approval any other way (no text questions like "Is this plan okay?")."""
 
 
-def _render_plan_sparse(context: "ToolUseContext") -> str:
+def _render_plan_sparse(context: ToolUseContext) -> str:
     """Recordatorio escueto de iteraciones siguientes (espejo de `getPlanModeV2SparseInstructions`)."""
     token = get_plan_file_path(context)
     return (
@@ -133,13 +133,13 @@ class PlanModeProvider:
 
     async def shutdown(self) -> None: ...
 
-    def catalog(self, context: "ToolUseContext") -> list["CapabilitySummary"]:
+    def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
         return []
 
-    def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
+    def tools(self, context: ToolUseContext) -> list[ToolProtocol]:
         return []
 
-    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         """Orientación de plan mode:
 
         - MIENTRAS `plan_mode` activo:
@@ -162,7 +162,7 @@ class PlanModeProvider:
         plan = native.get(_PLAN_KEY, "")
         return [{"role": "system", "content": _render_exit_reminder(plan)}]
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         # Tras compactación el flag ya se consumió; el plan sigue en `app_state.native`
         # y el modelo puede re-leerlo, pero no se re-emite el one-shot.
         return []

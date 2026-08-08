@@ -38,7 +38,7 @@ class SkillDefinition(BaseModel):
     version: str = ""
 
 
-def default_is_enabled(skill: "SkillDefinition") -> bool:
+def default_is_enabled(skill: SkillDefinition) -> bool:
     """Predicado de enablement por defecto: la skill declara su estado en el frontmatter.
 
     Espejo del `isEnabled` canónico (un predicado de código, no un toggle persistido).

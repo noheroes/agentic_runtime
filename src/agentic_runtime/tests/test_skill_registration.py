@@ -16,7 +16,12 @@ from agentic_runtime.capabilities.skills import SkillsProvider
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
-from agentic_runtime.factory import CapabilitiesConfig, RuntimeConfig, StorageConfig, create_runtime
+from agentic_runtime.factory import (
+    CapabilitiesConfig,
+    RuntimeConfig,
+    StorageConfig,
+    create_runtime,
+)
 
 _REAL_SKILLS = Path("/tmp/skills")
 

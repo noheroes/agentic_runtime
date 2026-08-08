@@ -1,11 +1,10 @@
 """Tests para runtime/factory.py — create_runtime() meta-factory."""
 import pytest
 
-from agentic_runtime.factory import RuntimeConfig, StorageConfig, create_runtime
 from agentic_runtime.execution.local import LocalAgentRuntime
+from agentic_runtime.factory import RuntimeConfig, StorageConfig, create_runtime
 from agentic_runtime.storage.filesystem import FilesystemStorage
 from agentic_runtime.storage.protocol import StorageProtocol
-
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -48,7 +47,7 @@ def test_create_runtime_extra_tools_registered(tmp_path):
     class MyTool:
         name = "my_custom_tool"
         description = "Custom"
-        input_schema: dict = {}
+        input_schema: dict = {}  # noqa: RUF012
         category = ToolCategory.UTILITY
         requires_permission = False
         safe_for_background = True

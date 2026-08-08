@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.execution.fork import ForkSnapshot
@@ -13,7 +14,6 @@ from agentic_runtime.execution.tasks.status import TaskStatus
 from agentic_runtime.hooks import HookEvent, HookRunner
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
-from agentic_runtime.contracts.identity import Scope
 
 
 def _make_caller(*events):
@@ -29,7 +29,7 @@ def _make_caller(*events):
 class EchoTool:
     name = "echo"
     description = "echo"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True

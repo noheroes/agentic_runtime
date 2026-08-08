@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Protocol, runtime_checkable
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .outcome import LoopOutcome
 
@@ -18,7 +19,7 @@ class LoopProtocol(Protocol):
     historial, que es justo lo que `L09` castiga.
     """
 
-    async def run(self, prompt: str, ctx: "ToolUseContext") -> LoopOutcome: ...
+    async def run(self, prompt: str, ctx: ToolUseContext) -> LoopOutcome: ...
 
 
 @runtime_checkable

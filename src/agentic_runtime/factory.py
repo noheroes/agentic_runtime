@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Type
+from typing import Any, ClassVar
 
 from .capabilities.resolver import CapabilitiesResolver
 from .context.presentation import IdentityPresentation
@@ -21,7 +21,7 @@ from .tools.protocol import ToolProtocol
 @dataclass
 class StorageConfig:
     backend: str = "filesystem"
-    root: Optional[Path] = None
+    root: Path | None = None
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -55,7 +55,7 @@ class CapabilitiesConfig:
     skill_store: Any = None
     # Memoria del agente: dir raíz en disco (default `FilesystemMemoryStore`) o un
     # `MemoryStore` inyectado. Si alguno está presente, se registra `MemoryProvider`.
-    memory_root: Optional[Path] = None
+    memory_root: Path | None = None
     memory_store: Any = None
     # Auth OAuth de MCP: handlers interactivos inyectados por el integrador (el runtime
     # headless no abre navegador). TokenStorage por defecto = sobre StorageProtocol.
@@ -149,13 +149,13 @@ class RuntimeConfig:
     # skills). `None` = sin scope: nada se persiste bajo una clave inventada. Una task
     # puede traer el suyo (`RuntimeTask.scope`) y entonces manda el de la task — así un
     # integrador multi-tenant sirve muchos scopes desde un solo host (`D-11`).
-    scope: Optional[Scope] = None
+    scope: Scope | None = None
     # `S20`/`DEUDA-A ID-2`: repo de sesión del integrador. **Opcional** a propósito —
     # el precedente PI lo confirma: el integrador complejo (openclaw) no usa los tipos
     # `Session*` del core y habla sólo el protocolo, luego el boundary real es
     # protocolo+motor y el repo es costura, no obligación. `None` = el runtime usa su
     # `Session` nativa y sigue siendo ejecutable por sí solo.
-    session_repo: Optional["SessionRepo[Any]"] = None
+    session_repo: SessionRepo[Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -163,15 +163,15 @@ class RuntimeConfig:
 # ---------------------------------------------------------------------------
 
 class RuntimeFactory:
-    _modes: dict[str, Type[Any]] = {}
+    _modes: ClassVar[dict[str, type[Any]]] = {}
 
     @classmethod
-    def register_execution_mode(cls, name: str, runtime_cls: Type[Any]) -> None:
+    def register_execution_mode(cls, name: str, runtime_cls: type[Any]) -> None:
         cls._modes[name] = runtime_cls
 
     @classmethod
     def _build_capability_manager(
-        cls, caps: "CapabilitiesConfig", storage: Any = None, scope: Optional[Scope] = None
+        cls, caps: CapabilitiesConfig, storage: Any = None, scope: Scope | None = None
     ) -> Any:
         """Ensambla el CapabilityManager con providers MCP/Skills declarados.
 
@@ -315,7 +315,7 @@ class RuntimeFactory:
 def create_runtime(
     *,
     execution_mode: str = "local",
-    config: Optional[RuntimeConfig] = None,
+    config: RuntimeConfig | None = None,
 ) -> Any:
     """
     Meta-factory que ensambla un runtime completo a partir de RuntimeConfig.

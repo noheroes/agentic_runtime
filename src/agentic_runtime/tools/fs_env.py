@@ -121,7 +121,7 @@ class ConfinedFilesystem:
     def __init__(
         self,
         roots: list[Path] | None = None,
-        storage: "StorageContract | None" = None,
+        storage: StorageContract | None = None,
         *,
         write_roots: list[Path] | None = None,
     ) -> None:

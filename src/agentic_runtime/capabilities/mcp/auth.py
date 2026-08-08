@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .config import McpServerConfig
@@ -52,7 +53,7 @@ def available_auth_strategies() -> list[str]:
     return sorted(_STRATEGIES)
 
 
-def build_auth(config: "McpServerConfig", *, server_url: str, deps: AuthDeps | None = None) -> AuthArtifacts:
+def build_auth(config: McpServerConfig, *, server_url: str, deps: AuthDeps | None = None) -> AuthArtifacts:
     """Resuelve los artefactos de auth para un server según su modo (`config.auth`)."""
     name = (config.auth or "none").lower().strip() or "none"
     builder = _STRATEGIES.get(name)
@@ -66,16 +67,16 @@ def build_auth(config: "McpServerConfig", *, server_url: str, deps: AuthDeps | N
 
 # --- modos integrados --------------------------------------------------------
 
-def _build_none(config: "McpServerConfig", server_url: str, deps: AuthDeps) -> AuthArtifacts:
+def _build_none(config: McpServerConfig, server_url: str, deps: AuthDeps) -> AuthArtifacts:
     return AuthArtifacts()
 
 
-def _build_bearer(config: "McpServerConfig", server_url: str, deps: AuthDeps) -> AuthArtifacts:
+def _build_bearer(config: McpServerConfig, server_url: str, deps: AuthDeps) -> AuthArtifacts:
     # Token estático pre-obtenido (caso 'pre-registro/credencial estática' de la spec).
     return AuthArtifacts(headers={"Authorization": f"Bearer {config.token}"})
 
 
-def _build_oauth(config: "McpServerConfig", server_url: str, deps: AuthDeps) -> AuthArtifacts:
+def _build_oauth(config: McpServerConfig, server_url: str, deps: AuthDeps) -> AuthArtifacts:
     """OAuth 2.1 completo vía el SDK `mcp` (NO se reimplementa el flujo).
 
     `OAuthClientProvider` (un `httpx.Auth`) hace descubrimiento (RFC 9728 + RFC 8414/

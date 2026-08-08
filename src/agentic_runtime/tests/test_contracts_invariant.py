@@ -71,6 +71,7 @@ def test_contracts_imports_with_the_base_absent_from_the_path() -> None:
         capture_output=True,
         text=True,
         cwd=str(SRC_DIR.parent),
+        check=False,  # el returncode ES la aserción de abajo
     )
     assert proc.returncode == 0, (
         "el paquete `contracts` NO es invariante — no carga sin el base:\n"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .protocols import SignalType
 
@@ -10,19 +9,19 @@ from .protocols import SignalType
 @dataclass
 class _Node:
     task_id: str
-    parent_id: Optional[str]
-    signal: Optional[SignalType] = field(default=None)
+    parent_id: str | None
+    signal: SignalType | None = field(default=None)
 
 
 class SignalHandle:
     """Token que devuelve SignalBus.register(); permite al ejecutor consultar su señal."""
 
-    def __init__(self, bus: "SignalBus", task_id: str, parent_id: Optional[str]) -> None:
+    def __init__(self, bus: SignalBus, task_id: str, parent_id: str | None) -> None:
         self._bus = bus
         self.task_id = task_id
         self.parent_id = parent_id
 
-    def check(self) -> Optional[SignalType]:
+    def check(self) -> SignalType | None:
         return self._bus.get_signal(self.task_id)
 
 
@@ -33,14 +32,14 @@ class SignalBus:
         self._nodes: dict[str, _Node] = {}
         self._lock = asyncio.Lock()
 
-    def register(self, *, task_id: str, parent_id: Optional[str]) -> SignalHandle:
+    def register(self, *, task_id: str, parent_id: str | None) -> SignalHandle:
         self._nodes[task_id] = _Node(task_id=task_id, parent_id=parent_id)
         return SignalHandle(bus=self, task_id=task_id, parent_id=parent_id)
 
     def unregister(self, task_id: str) -> None:
         self._nodes.pop(task_id, None)
 
-    def get_signal(self, task_id: str) -> Optional[SignalType]:
+    def get_signal(self, task_id: str) -> SignalType | None:
         node = self._nodes.get(task_id)
         return node.signal if node else None
 

@@ -7,7 +7,6 @@ porque el dispatcher sanitiza en un único punto que alimenta ambas rutas.
 import asyncio
 from pathlib import Path
 
-
 from agentic_runtime.context.presentation import IdentityPresentation
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.storage import PathPresentation
@@ -15,7 +14,6 @@ from agentic_runtime.events import DoneEvent, EventBus, ToolCallEvent, ToolResul
 from agentic_runtime.loop.agent_loop import AgentLoop
 from agentic_runtime.tools import ToolCategory, ToolDispatcher, ToolRegistry, ToolResult
 from agentic_runtime.tools.pool import ToolPool
-
 
 _REAL = "/srv/agents/u42/work/secret.txt"
 
@@ -25,7 +23,7 @@ class PathLeakingTool:
 
     name = "leak"
     description = "echoes a real host path"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.FILE
     requires_permission = False
     safe_for_background = True

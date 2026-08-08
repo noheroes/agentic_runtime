@@ -171,7 +171,7 @@ async def _run_real() -> bool:
 
     from skeleton.bridge import AgenticModelsCaller
 
-    setattr(ssl, "create_default_context", _lenient_ctx)
+    ssl.create_default_context = _lenient_ctx
     am.register_builtins()
     model: Any = am.get_registry().get_by_provider("anthropic", _MODEL_ID)
     oauth_client = AsyncAnthropic(

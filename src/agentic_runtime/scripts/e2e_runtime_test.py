@@ -23,26 +23,27 @@ import time
 from pathlib import Path
 
 # ── resolución de imports del paquete ──────────────────────────────────────────
+# Los imports de abajo van DESPUÉS del `sys.path.insert` a propósito: este script se
+# ejecuta suelto, sin instalar el paquete.
 _SRC = Path(__file__).resolve().parents[2]  # src/
 sys.path.insert(0, str(_SRC))
 
-from agentic_runtime.contracts.runtime import RuntimeTask  # noqa: E402
-from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent  # noqa: E402
-from agentic_runtime.factory import (  # noqa: E402
+from agentic_runtime.contracts.runtime import RuntimeTask
+from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
+from agentic_runtime.factory import (
     RuntimeConfig,
     StorageConfig,
     ToolsConfig,
     create_runtime,
 )
-from agentic_runtime.tools import ToolCategory, ToolResult  # noqa: E402
-
+from agentic_runtime.tools import ToolCategory, ToolResult
 
 # ── tool determinista para el modo faux ────────────────────────────────────────
 
 class EchoTool:
     name = "echo"
     description = "Devuelve el texto recibido"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -90,6 +91,7 @@ def _build_faux(tmp: Path):
 
 def _build_real(tmp: Path):
     from agentic_models import get_model, register_builtins
+
     from agentic_runtime.models.caller import AgenticModelsCaller
 
     register_builtins()

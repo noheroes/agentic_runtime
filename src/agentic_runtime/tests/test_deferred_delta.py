@@ -26,12 +26,12 @@ from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.events import DoneEvent
 from agentic_runtime.loop.agent_loop import AgentLoop, _as_reminder
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
-from agentic_runtime.tools.dispatcher import ToolDispatcher
-from agentic_runtime.tools.native import ToolSearchTool
 from agentic_runtime.tools.deferred_delta import (
     compute_deferred_tools_delta,
     render_deferred_tools_delta,
 )
+from agentic_runtime.tools.dispatcher import ToolDispatcher
+from agentic_runtime.tools.native import ToolSearchTool
 
 
 class _Tool:
@@ -255,7 +255,7 @@ class _HostileMcpClient(_FakeMcpClient):
 class _NativeEcho:
     name = "echo"
     description = "native echo"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True

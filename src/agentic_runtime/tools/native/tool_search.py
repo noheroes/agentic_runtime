@@ -72,7 +72,7 @@ Query forms:
 - "select:Read,Edit,Grep" — fetch these exact tools by name
 - "notebook jupyter" — keyword search, up to max_results best matches
 - "+slack send" — require "slack" in the name, rank by remaining terms"""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "query": {

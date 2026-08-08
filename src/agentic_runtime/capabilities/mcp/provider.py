@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ...contracts.identity import Scope
 from ..contracts import CapabilitySummary
@@ -42,19 +43,19 @@ class McpProvider:
         self,
         state: McpState | None = None,
         *,
-        client_factory: "Callable[[McpServerConfig], McpClient] | None" = None,
-        config_store: "Any | None" = None,
-        config_watcher: "Any | None" = None,
-        storage: "Any | None" = None,
-        redirect_handler: "Any | None" = None,
-        callback_handler: "Any | None" = None,
+        client_factory: Callable[[McpServerConfig], McpClient] | None = None,
+        config_store: Any | None = None,
+        config_watcher: Any | None = None,
+        storage: Any | None = None,
+        redirect_handler: Any | None = None,
+        callback_handler: Any | None = None,
         scope: Scope | None = None,
     ) -> None:
         self._state = state or McpState()
         # Puerto de persistencia del registro de servers, scope-aware. El integrador
         # registra un productor por scope; un store plano (legacy) se envuelve como el
         # productor del scope `user`. Se lee (mergeado por precedencia) en startup().
-        self._scoped: "ScopedMcpConfigStore | None" = self._normalize_store(config_store)
+        self._scoped: ScopedMcpConfigStore | None = self._normalize_store(config_store)
         # Procedencia (scope) resuelta de cada server tras el merge — gobierna el gate
         # de mutabilidad (managed/enterprise no mutables por el usuario).
         self._scope_of: dict[str, McpScope] = {}
@@ -73,7 +74,7 @@ class McpProvider:
         self._client_factory = client_factory or self._default_client
 
     @staticmethod
-    def _normalize_store(config_store: "Any | None") -> "ScopedMcpConfigStore | None":
+    def _normalize_store(config_store: Any | None) -> ScopedMcpConfigStore | None:
         """Acepta un store scope-aware o uno plano (legacy → productor del scope user)."""
         if config_store is None:
             return None
@@ -136,7 +137,7 @@ class McpProvider:
         """Adapta specs crudos de un server a tools tolerantes (omite las malformadas)."""
         config = self._state.servers.get(server_name)
         timeout = (config.timeout_seconds if config and config.timeout_seconds else 30.0)
-        tools: list["ToolProtocol"] = []
+        tools: list[ToolProtocol] = []
         for spec in specs:
             tool = build_mcp_tool(spec, call, timeout_seconds=timeout, server_name=server_name)
             if tool is not None:
@@ -317,8 +318,8 @@ class McpProvider:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("mcp: error cerrando client %r: %s", name, exc)
 
-    def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
-        tools: list["ToolProtocol"] = list(self._state.all_tools())
+    def tools(self, context: ToolUseContext) -> list[ToolProtocol]:
+        tools: list[ToolProtocol] = list(self._state.all_tools())
         # M4: tools de acceso a resources, expuestas solo si hay resources descubiertos
         # (espejo del canónico, que añade las special tools condicionalmente).
         if self._state.all_resources():
@@ -328,7 +329,7 @@ class McpProvider:
             tools.append(ReadMcpResourceTool(self._state))
         return tools
 
-    def catalog(self, context: "ToolUseContext") -> list[CapabilitySummary]:
+    def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
         return [
             CapabilitySummary(
                 name=tool.name,
@@ -339,13 +340,13 @@ class McpProvider:
             for tool in self._state.all_tools()
         ]
 
-    def resources(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def resources(self, context: ToolUseContext) -> list[dict[str, Any]]:
         return self._state.all_resources()
 
-    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         return []
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         return []
 
 

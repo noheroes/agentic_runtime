@@ -12,11 +12,8 @@ señal de reclasificar el estado en 11-cap-mcp.md.
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar
 
 import pytest
-
-from agentic_runtime.contracts.abort import AbortController
 
 from agentic_runtime.capabilities.mcp.config import (
     McpServerConfig,
@@ -30,7 +27,6 @@ from agentic_runtime.capabilities.mcp.scope import (
     EXCLUSIVE_SCOPES,
     MUTABLE_SCOPES,
     McpScope,
-    ScopedConfig,
     assert_mutable,
     is_mutable,
     merge_scoped,
@@ -38,6 +34,7 @@ from agentic_runtime.capabilities.mcp.scope import (
 from agentic_runtime.capabilities.mcp.state import McpState, ServerStatus
 from agentic_runtime.capabilities.mcp.tool_adapter import build_mcp_tool
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.abort import AbortController
 from agentic_runtime.tools.deferred import is_deferred_tool
 
 
@@ -272,7 +269,7 @@ def test_mcp_state_captures_capabilities():
 
 @pytest.mark.xfail(strict=True, reason="FIND-MCP14: sin módulo de política allow/deny")
 def test_mcp_policy_module_exists():
-    from agentic_runtime.capabilities.mcp import policy  # noqa: F401
+    from agentic_runtime.capabilities.mcp import policy
 
     assert hasattr(policy, "is_server_allowed")
 
@@ -305,7 +302,7 @@ def test_mcp_provider_refreshes_on_list_changed():
 
 @pytest.mark.xfail(strict=True, reason="FIND-MCP22: sin dedup por firma de config")
 def test_mcp_dedup_by_signature():
-    from agentic_runtime.capabilities.mcp.config import server_signature  # noqa: F401
+    from agentic_runtime.capabilities.mcp.config import server_signature
 
     a = McpServerConfig(name="a", url="https://h/mcp")
     b = McpServerConfig(name="b", url="https://h/mcp")  # misma URL → mismo server
@@ -472,7 +469,7 @@ def test_native_tool_description_no_se_capa():
     class _NativaLarga:
         name = "Agent"
         description = "N" * 60_000
-        input_schema: ClassVar[dict] = {}
+        input_schema: dict = {}  # noqa: RUF012
         category = ToolCategory.UTILITY
         requires_permission = False
         safe_for_background = True

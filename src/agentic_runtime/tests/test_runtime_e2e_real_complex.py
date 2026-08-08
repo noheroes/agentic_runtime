@@ -22,9 +22,11 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from typing import Any
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events.event_types import (
     DoneEvent,
@@ -34,12 +36,16 @@ from agentic_runtime.events.event_types import (
     ToolResultEvent,
 )
 from agentic_runtime.execution.tasks.status import TaskStatus
-from agentic_runtime.factory import RuntimeConfig, StorageConfig, ToolsConfig, create_runtime
+from agentic_runtime.factory import (
+    RuntimeConfig,
+    StorageConfig,
+    ToolsConfig,
+    create_runtime,
+)
 from agentic_runtime.tools import ToolCategory, ToolResult
 
 from ._azure_real import build_caller
 from ._azure_real import skip_marker as pytest_skip
-from agentic_runtime.contracts.identity import Scope
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,7 +57,7 @@ pytestmark = pytest.mark.asyncio
 class ListDocumentsTool:
     name = "list_documents"
     description = "Lista los documentos disponibles. Sin argumentos."
-    input_schema = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -68,7 +74,7 @@ class ListDocumentsTool:
 class ReadDocumentTool:
     name = "read_document"
     description = "Lee el contenido de un documento por nombre."
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"name": {"type": "string"}},
         "required": ["name"],
@@ -95,7 +101,7 @@ class ReadDocumentTool:
 class SubmitCodeTool:
     name = "submit_code"
     description = "Envía el CODIGO-INTERNO extraído y devuelve el acuse oficial."
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"code": {"type": "string"}},
         "required": ["code"],

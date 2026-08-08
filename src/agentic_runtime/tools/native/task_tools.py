@@ -24,12 +24,12 @@ _NO_REGISTRY = (
 )
 
 
-def _session_of(ctx: "ToolUseContext | None") -> str | None:
+def _session_of(ctx: ToolUseContext | None) -> str | None:
     """Lista activa = sesión del contexto (espejo de `getTaskListId()`)."""
     return getattr(ctx, "session_id", None)
 
 
-def _registry_of(ctx: "ToolUseContext | None") -> Any:
+def _registry_of(ctx: ToolUseContext | None) -> Any:
     """El registry del turno. `None` = costura sin poblar: la tool devuelve `is_error`
     limpio, no levanta — que es lo que el global hacía y por lo que nadie lo notaba."""
     return getattr(ctx, "task_registry", None)
@@ -57,7 +57,7 @@ def _is_own_task(task_id: str, ctx: ToolUseContext | None) -> bool:
     return bool(own) and task_id == own
 
 
-def _scoped_get(task_id: str, ctx: "ToolUseContext | None") -> Any:
+def _scoped_get(task_id: str, ctx: ToolUseContext | None) -> Any:
     """Resuelve un task SÓLO si pertenece a la lista de la sesión activa.
 
     Un `task_id` de otra sesión es invisible (espejo: no está en el tasks-dir
@@ -121,7 +121,7 @@ All tasks are created with status `pending`.
 - Create tasks with clear, specific subjects that describe the outcome
 - Check TaskList first to avoid creating duplicate tasks
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "subject": {"type": "string", "description": "Brief title for the task."},
@@ -134,7 +134,7 @@ All tasks are created with status `pending`.
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         subject = input.get("subject", "")
         description = input.get("description", "")
         registry = _registry_of(ctx)
@@ -175,7 +175,7 @@ Returns full task details:
 
 - Use TaskList to see all tasks in summary form.
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "description": "The ID of the task."}
@@ -187,7 +187,7 @@ Returns full task details:
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         task_id = input.get("task_id", "")
         record = _scoped_get(task_id, ctx)
         if record is None:
@@ -241,13 +241,13 @@ Use TaskGet with a specific task ID to view full details including its result.
     #: es una invención de B, mal acotada, que hace mentir a la tool. `L10` —una
     #: divergencia con el canónico no es una mejora hasta que se demuestre— así que
     #: se retira en vez de parchearse con un `enum`.
-    input_schema = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.BACKGROUND
     requires_permission = False
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         registry = _registry_of(ctx)
         if registry is None:
             return ToolResult.error(self.name, _NO_REGISTRY)
@@ -312,7 +312,7 @@ Rewrite a task's description:
 {"task_id": "1", "description": "Run the integration tests, not just the unit tests"}
 ```
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "description": "The task ID to update."},
@@ -325,7 +325,7 @@ Rewrite a task's description:
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         task_id = input.get("task_id", "")
         record = _scoped_get(task_id, ctx)
         if record is None:
@@ -352,7 +352,7 @@ class TaskStopTool:
 - Returns a success or failure status
 - Use this tool when you need to terminate a long-running task
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "description": "The ID of the task to stop."}
@@ -364,7 +364,7 @@ class TaskStopTool:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         task_id = input.get("task_id", "")
         if _scoped_get(task_id, ctx) is None:
             return ToolResult.error(
@@ -403,7 +403,7 @@ class TaskOutputTool:
 - Returns the task output along with status information
 - Works with all task types: background shells, async agents, and remote sessions
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "description": "The ID of the task."}
@@ -415,7 +415,7 @@ class TaskOutputTool:
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         task_id = input.get("task_id", "")
         record = _scoped_get(task_id, ctx)
         if record is None:

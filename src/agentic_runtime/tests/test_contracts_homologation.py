@@ -15,17 +15,12 @@ Primera pasada: solo documentar — no se ajusta el runtime para hacerlos pasar.
 """
 from __future__ import annotations
 
-import inspect
-
-import pytest
-
 from agentic_runtime.contracts.runtime import AgentRuntime, RuntimeTask
 from agentic_runtime.contracts.storage import PathPresentation, StorageContract
 from agentic_runtime.contracts.user_input import (
     NoopUserInputProcessor,
     UserInputProcessor,
 )
-
 
 # ---------------------------------------------------------------- AgentRuntime
 

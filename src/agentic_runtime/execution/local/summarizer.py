@@ -44,7 +44,7 @@ async def summarize_if_needed(
                 len(summary),
             )
             return cast(str, summary)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — sin resumen se devuelve el texto entero, nunca se pierde
         logger.warning("background result summarization failed: %s", exc)
 
     return text

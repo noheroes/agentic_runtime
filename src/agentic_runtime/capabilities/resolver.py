@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from ..context.tool_use import ToolUseContext
 from ..tools.registry import ToolRegistry
@@ -25,7 +25,7 @@ class CapabilitiesResolver:
         self,
         *,
         tool_registry: ToolRegistry,
-        skill_catalog: Optional[SkillCatalogProtocol] = None,
+        skill_catalog: SkillCatalogProtocol | None = None,
         resolve_timeout_seconds: float = 5.0,
     ) -> None:
         self._tool_registry = tool_registry
@@ -74,7 +74,7 @@ class CapabilitiesResolver:
                     timeout=self.resolve_timeout_seconds,
                 )
                 external_schemas.extend(schemas)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("capabilities: timeout resolving source %r — returning partial", source)
             except Exception:
                 logger.exception("capabilities: error resolving source %r — skipped", source)

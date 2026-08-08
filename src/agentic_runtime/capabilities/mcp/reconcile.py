@@ -35,8 +35,8 @@ class _ReconcileTarget(Protocol):
 
 
 def plan_reconcile(
-    desired: "dict[str, McpServerConfig]",
-    live: "dict[str, McpServerConfig]",
+    desired: dict[str, McpServerConfig],
+    live: dict[str, McpServerConfig],
 ) -> ReconcilePlan:
     """Calcula el plan de reconciliación.
 

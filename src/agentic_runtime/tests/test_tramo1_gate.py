@@ -54,8 +54,9 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator, ClassVar
+from typing import Any
 
 import pytest
 
@@ -141,7 +142,7 @@ class IdentityWitnessTool:
 
     name = "consultar_expediente"
     description = "Consulta el expediente activo y devuelve su código de verificación."
-    input_schema = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -940,7 +941,7 @@ async def test_e2b_unique_pool_deferred_is_visibility_not_availability(tmp_path)
     class _DeferredWitness:
         name = "consultar_expediente_diferido"
         description = "Consulta diferida."
-        input_schema = {"type": "object", "properties": {}}
+        input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
         category = ToolCategory.UTILITY
         requires_permission = False
         safe_for_background = True
@@ -1394,7 +1395,7 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
     class _DeferredWitness:
         name = "censo_diferida"
         description = "Diferida de control."
-        input_schema = {"type": "object", "properties": {}}
+        input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
         category = ToolCategory.UTILITY
         requires_permission = False
         safe_for_background = True
@@ -3110,7 +3111,7 @@ async def _e10_tool_search(tool: Any, env: _E10Env) -> str:
     class _DiferidaTestigo:
         name = "e10_diferida"
         description = "Testigo diferido de la matriz funcional."
-        input_schema: ClassVar[dict] = {
+        input_schema: dict = {  # noqa: RUF012
             "type": "object", "properties": {"campo": {"type": "string"}},
         }
         category = ToolCategory.UTILITY

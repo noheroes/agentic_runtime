@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,12 +12,12 @@ from ..contracts.identity import Scope
 from ..contracts.permissions import PermissionContext
 
 
-def _default_pool() -> "Any":
+def _default_pool() -> Any:
     from ..tools.pool import ToolPool
     return ToolPool()
 
 
-def _default_presentation() -> "Any":
+def _default_presentation() -> Any:
     # Default seguro simétrico al de `fs`: identidad (= comportamiento CLI canónico,
     # el FS del usuario ES el del agente). Antes era `None` y cada consumidor repetía
     # el fallback `ctx.presentation or IdentityPresentation()` por su cuenta; una tool
@@ -25,7 +26,7 @@ def _default_presentation() -> "Any":
     return IdentityPresentation()
 
 
-def _default_fs() -> "Any":
+def _default_fs() -> Any:
     # Default seguro: confina a cwd() — nunca ilimitado. El consumidor lo sobreescribe
     # con el allow-set real (workspace_dir / pwd) por sesión.
     from ..tools.fs_env import ConfinedFilesystem
@@ -125,7 +126,7 @@ class ToolUseContext(BaseModel):
     def permission_context(self) -> PermissionContext:
         return self.app_state.permissions
 
-    def with_permissions(self, permissions: PermissionContext) -> "ToolUseContext":
+    def with_permissions(self, permissions: PermissionContext) -> ToolUseContext:
         return self.model_copy(
             update={"app_state": self.app_state.model_copy(update={"permissions": permissions})}
         )

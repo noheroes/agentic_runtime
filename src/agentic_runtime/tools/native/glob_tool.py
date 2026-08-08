@@ -30,7 +30,7 @@ class GlobTool:
 - Only files are returned, never directories
 - Use this tool when you need to find files by name patterns
 - Results are capped; if truncated, narrow the pattern or the path rather than paging"""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "pattern": {"type": "string"},
@@ -43,7 +43,7 @@ class GlobTool:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         try:
             base = ctx.fs.resolve(input.get("path", "."), for_write=False)
         except PathOutsideWorkspace as exc:
@@ -77,5 +77,5 @@ class GlobTool:
             if len(matches) > DEFAULT_GLOB_LIMIT:
                 output += "\n(Results are truncated. Consider using a more specific path or pattern.)"
             return ToolResult(tool_name=self.name, output=output)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
             return ToolResult.error(self.name, str(exc))

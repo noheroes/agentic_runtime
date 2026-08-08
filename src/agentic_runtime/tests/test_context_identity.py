@@ -19,8 +19,10 @@ import importlib
 
 import pytest
 
-from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.errors import RuntimeIdentityError
+from agentic_runtime.contracts.identity import Scope
+from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.execution.fork import (
     ForkContext,
     ForkPolicy,
@@ -28,9 +30,6 @@ from agentic_runtime.execution.fork import (
     RuntimeContextForker,
 )
 from agentic_runtime.execution.local.runtime import LocalAgentRuntime
-from agentic_runtime.contracts.errors import RuntimeIdentityError
-from agentic_runtime.contracts.identity import Scope
-
 
 # --- 1. Los remanentes muertos ya no existen -------------------------------
 
@@ -183,8 +182,8 @@ async def test_agent_tool_snapshot_carries_parent_capabilities():
 # --- 5. Tier 2: memoria scopeada por usuario -------------------------------
 
 def test_memory_scope_separates_users(tmp_path):
-    from agentic_runtime.capabilities.memory.store import FilesystemMemoryStore
     from agentic_runtime.capabilities.memory.provider import MemoryProvider
+    from agentic_runtime.capabilities.memory.store import FilesystemMemoryStore
 
     store = FilesystemMemoryStore(tmp_path)
     scope_u1 = MemoryProvider._scope(ToolUseContext(session_id="s1", scope=Scope("u1")))

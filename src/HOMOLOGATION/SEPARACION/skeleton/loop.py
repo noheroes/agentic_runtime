@@ -21,9 +21,9 @@ from skeleton.contracts import (
     Message,
     ResultEvent,
     RuntimeTask,
+    TokenEvent,
     ToolCall,
     ToolCallEvent,
-    TokenEvent,
     Usage,
 )
 from skeleton.seams import (

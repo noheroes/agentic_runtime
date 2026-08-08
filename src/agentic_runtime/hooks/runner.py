@@ -43,7 +43,7 @@ class HookRunner:
         for handler in self._handlers.get(event, []):
             try:
                 decision = await handler(event, payload)
-            except Exception as exc:  # un handler no debe romper el ciclo
+            except Exception as exc:  # noqa: BLE001 — un handler no debe romper el ciclo
                 logger.warning("hook handler raised on %s: %s", event.value, exc)
                 continue
             if decision is None:

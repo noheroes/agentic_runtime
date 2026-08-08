@@ -19,14 +19,13 @@ silencio es exactamente el defecto que produjo el `stop` roto.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Literal,
-    Mapping,
     Protocol,
     runtime_checkable,
 )

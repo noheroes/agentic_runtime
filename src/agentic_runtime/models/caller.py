@@ -7,7 +7,8 @@ and maps agentic_models stream events to agentic_runtime event types.
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping
+from typing import Any
 
 from ..contracts.abort import AbortSignal
 from ..events.event_types import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent, Usage
@@ -70,7 +71,7 @@ def _dict_messages_to_context(
                 raw_args = fn.get("arguments") or "{}"
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception:
+                except Exception:  # noqa: BLE001 — argumentos de tool-call ilegibles → {}, el turno continúa
                     args = {}
                 parts.append(ToolCall(
                     id=tc.get("id") or "",
@@ -146,7 +147,7 @@ class AgenticModelsCaller:
             from agentic_models import get_registry
             try:
                 model = get_registry().get_by_provider(self._model.provider, model_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — model_id desconocido cae al default sin romper
                 model = self._model
         return bool(getattr(model, "native_tool_search", False))
 

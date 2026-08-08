@@ -10,7 +10,6 @@ from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.tools import ToolCategory, ToolPool, ToolResult
 
-
 # ---------------------------------------------------------------------------
 # Stubs
 # ---------------------------------------------------------------------------

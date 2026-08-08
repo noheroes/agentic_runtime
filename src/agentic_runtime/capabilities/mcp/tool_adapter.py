@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from ...tools.protocol import ToolCategory, ToolResult
 
@@ -124,7 +125,7 @@ class McpTool:
         self.timeout_seconds = timeout_seconds
         self.server_name = server_name
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         from .client import McpToolError
 
         try:
@@ -132,7 +133,7 @@ class McpTool:
         except McpToolError as exc:
             # El server respondió isError=True: error de la tool, no del transporte.
             return ToolResult.error(self.name, str(exc))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — fallo de transporte MCP → error de tool, no caída del turno
             return ToolResult.error(self.name, f"mcp call failed: {exc}")
         return ToolResult(tool_name=self.name, output=output)
 

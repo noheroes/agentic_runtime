@@ -17,11 +17,16 @@ import pytest
 
 from agentic_runtime.capabilities.mcp import StorageBackedMcpConfigStore
 from agentic_runtime.capabilities.skills import StorageBackedSkillStore
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
-from agentic_runtime.factory import CapabilitiesConfig, RuntimeConfig, StorageConfig, create_runtime
+from agentic_runtime.factory import (
+    CapabilitiesConfig,
+    RuntimeConfig,
+    StorageConfig,
+    create_runtime,
+)
 from agentic_runtime.storage.filesystem import FilesystemStorage
-from agentic_runtime.contracts.identity import Scope
 
 _SERVER = str((Path(__file__).parent / "_mcp_echo_server.py").resolve())
 
@@ -52,6 +57,7 @@ def _self_signed_cert(dirpath: Path) -> tuple[str, str]:
          "-keyout", str(key), "-out", str(cert), "-days", "1",
          "-subj", "/CN=localhost"],
         capture_output=True,
+        check=False,  # el returncode se comprueba abajo, con mensaje propio
     )
     if rc.returncode != 0:
         pytest.skip(f"openssl no disponible: {rc.stderr.decode()[:200]}")
@@ -159,7 +165,7 @@ async def test_register_and_operate_mcp_and_skill_end_to_end(tmp_path):
         await runtime.startup()
 
         try:
-            mcp = [p for p in runtime._capability_manager.providers if p.name == "mcp"][0]
+            mcp = next(p for p in runtime._capability_manager.providers if p.name == "mcp")
             # conectó al server TLS self-signed gracias a ssl_verify=False
             assert mcp.state.status("local").value == "connected"
             assert mcp.state.status("dead").value == "failed"  # aislado, no abortó al resto

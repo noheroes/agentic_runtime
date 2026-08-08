@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from .native.tool_search import TOOL_SEARCH_TOOL_NAME
 
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 _DISCOVERED_KEY = "discovered_tools"
 
 
-def is_deferred_tool(tool: "ToolProtocol") -> bool:
+def is_deferred_tool(tool: ToolProtocol) -> bool:
     """Una tool diferida no se anuncia hasta que ToolSearch la descubre.
 
     Espejo de `isDeferredTool`: las tools MCP son diferidas siempre (workflow-specific);
@@ -27,11 +28,11 @@ def is_deferred_tool(tool: "ToolProtocol") -> bool:
     return bool(getattr(tool, "deferred", False))
 
 
-def discovered_tool_names(ctx: "ToolUseContext") -> set[str]:
+def discovered_tool_names(ctx: ToolUseContext) -> set[str]:
     return set(ctx.app_state.capabilities.get(_DISCOVERED_KEY, []) or [])
 
 
-def mark_tools_discovered(ctx: "ToolUseContext", names: Iterable[str]) -> None:
+def mark_tools_discovered(ctx: ToolUseContext, names: Iterable[str]) -> None:
     current = discovered_tool_names(ctx)
     current.update(names)
     ctx.app_state.capabilities[_DISCOVERED_KEY] = sorted(current)

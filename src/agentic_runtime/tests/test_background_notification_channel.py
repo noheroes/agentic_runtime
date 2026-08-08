@@ -26,7 +26,6 @@ from agentic_runtime.execution.local.notification import (
     put_notification,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixture: limpiar canal entre tests
 # ---------------------------------------------------------------------------
@@ -44,15 +43,15 @@ def _reset_channel():
 # ---------------------------------------------------------------------------
 
 def _notif(**kw) -> BackgroundNotification:
-    defaults = dict(
-        parent_scope="u1",
-        parent_session_id="s1",
-        task_id="t1",
-        status="completed",
-        description="task",
-        notification_text="done",
-        final_text="",
-    )
+    defaults = {
+        "parent_scope": "u1",
+        "parent_session_id": "s1",
+        "task_id": "t1",
+        "status": "completed",
+        "description": "task",
+        "notification_text": "done",
+        "final_text": "",
+    }
     defaults.update(kw)
     return BackgroundNotification(**defaults)
 

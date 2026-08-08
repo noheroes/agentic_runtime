@@ -26,7 +26,6 @@ from agentic_runtime.capabilities.plan.plan_file import (
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.tools.native.plan_mode import (
     _PLAN_EXIT_PENDING_KEY,
-    _PLAN_KEY,
     _PLAN_MODE_KEY,
     EnterPlanModeTool,
     ExitPlanModeTool,

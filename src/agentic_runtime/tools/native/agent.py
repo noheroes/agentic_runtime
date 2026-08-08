@@ -92,7 +92,7 @@ the research, implement it." Those phrases push synthesis onto the agent instead
 yourself. Write prompts that prove you understood: include file paths, line numbers, what \
 specifically to change.
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "prompt": {
@@ -132,7 +132,7 @@ specifically to change.
     safe_for_background = True
     timeout_seconds = 600.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         prompt = input.get("prompt", "")
         run_in_background: bool = bool(input.get("run_in_background", False))
         subagent_type: str | None = input.get("subagent_type")
@@ -183,7 +183,7 @@ specifically to change.
 
         try:
             result = await runner.run(spec, background=run_in_background)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — el subagente falla como resultado, no como excepción del padre
             return ToolResult.error(self.name, f"Subagent failed: {e}")
 
         if run_in_background:

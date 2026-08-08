@@ -4,6 +4,8 @@ No hay API HTTP en este repo: la "capa service" que una API /mcp llamaría son m
 del provider (add/disconnect/remove/reconnect). Actualizan el estado del provider sin
 tocar ningún registry nativo; el pool se reensambla por turno (vía el manager).
 """
+from typing import ClassVar
+
 from agentic_runtime.capabilities.mcp import McpProvider, McpServerConfig, ServerStatus
 from agentic_runtime.context.tool_use import ToolUseContext
 
@@ -13,7 +15,7 @@ def _ctx() -> ToolUseContext:
 
 
 class _FakeClient:
-    instances: list["_FakeClient"] = []
+    instances: ClassVar[list["_FakeClient"]] = []
 
     def __init__(self, config: McpServerConfig) -> None:
         self.config = config

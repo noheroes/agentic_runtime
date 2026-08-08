@@ -20,7 +20,6 @@ from agentic_runtime.tools.fs_env import (
 from agentic_runtime.tools.native.read_file import ReadFileTool
 from agentic_runtime.tools.native.write_file import WriteFileTool
 
-
 # ── Mecanismo homologado ────────────────────────────────────────────────────
 
 def test_contains_path_traversal_detects_dotdot():

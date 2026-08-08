@@ -17,6 +17,7 @@ import asyncio
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.execution.fork import ForkSnapshot
@@ -31,8 +32,6 @@ from agentic_runtime.factory import (
     create_runtime,
 )
 from agentic_runtime.tools import ToolCategory, ToolResult
-from agentic_runtime.contracts.identity import Scope
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Dobles deterministas
@@ -82,7 +81,7 @@ class BlockingCaller:
 class EchoTool:
     name = "echo"
     description = "Devuelve el texto recibido"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -95,7 +94,7 @@ class EchoTool:
 class GuardedTool:
     name = "guarded"
     description = "Requiere permiso explícito"
-    input_schema: dict = {"type": "object", "properties": {}}
+    input_schema: dict = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = True
     safe_for_background = False

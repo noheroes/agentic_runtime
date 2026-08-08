@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from .protocol import ToolProtocol
 
 
@@ -19,7 +17,7 @@ class ToolRegistry:
     def register(self, tool: ToolProtocol) -> None:
         self._tools[tool.name] = tool
 
-    def resolve(self, name: str) -> Optional[ToolProtocol]:
+    def resolve(self, name: str) -> ToolProtocol | None:
         return self._tools.get(name)
 
     def list_available(self, *, mode: str = "foreground") -> list[ToolProtocol]:

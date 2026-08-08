@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, NamedTuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
@@ -31,10 +32,10 @@ def parse_slash_command(text: str) -> SlashCommand | None:
 
 def process_slash_command(
     text: str,
-    state: "SkillsState",
-    ctx: "ToolUseContext",
+    state: SkillsState,
+    ctx: ToolUseContext,
     *,
-    is_enabled: "Callable[[SkillDefinition], bool] | None" = None,
+    is_enabled: Callable[[SkillDefinition], bool] | None = None,
 ) -> str | None:
     """Procesa un slash command de skill (S4), desacoplado del loop.
 

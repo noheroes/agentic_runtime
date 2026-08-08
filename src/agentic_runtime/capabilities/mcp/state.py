@@ -29,8 +29,8 @@ class McpState:
 
     def __init__(self) -> None:
         self._servers: dict[str, McpServerConfig] = {}
-        self._clients: dict[str, "McpClient"] = {}
-        self._tools: dict[str, list["ToolProtocol"]] = {}
+        self._clients: dict[str, McpClient] = {}
+        self._tools: dict[str, list[ToolProtocol]] = {}
         self._resources: dict[str, list[dict[str, Any]]] = {}
         self._status: dict[str, ServerStatus] = {}
         self._errors: dict[str, str] = {}
@@ -53,17 +53,17 @@ class McpState:
         return dict(self._servers)
 
     # --- clients ---
-    def set_client(self, server_name: str, client: "McpClient") -> None:
+    def set_client(self, server_name: str, client: McpClient) -> None:
         self._clients[server_name] = client
 
-    def get_client(self, server_name: str) -> "McpClient | None":
+    def get_client(self, server_name: str) -> McpClient | None:
         return self._clients.get(server_name)
 
     def remove_client(self, server_name: str) -> None:
         self._clients.pop(server_name, None)
 
     @property
-    def clients(self) -> dict[str, "McpClient"]:
+    def clients(self) -> dict[str, McpClient]:
         return dict(self._clients)
 
     # --- estado de conexión ---
@@ -87,11 +87,11 @@ class McpState:
         return [n for n, s in self._status.items() if s is ServerStatus.CONNECTED]
 
     # --- tools ---
-    def set_tools(self, server_name: str, tools: list["ToolProtocol"]) -> None:
+    def set_tools(self, server_name: str, tools: list[ToolProtocol]) -> None:
         self._tools[server_name] = list(tools)
 
-    def all_tools(self) -> list["ToolProtocol"]:
-        result: list["ToolProtocol"] = []
+    def all_tools(self) -> list[ToolProtocol]:
+        result: list[ToolProtocol] = []
         for server in self._servers:  # orden de registro de servers
             result.extend(self._tools.get(server, []))
         return result

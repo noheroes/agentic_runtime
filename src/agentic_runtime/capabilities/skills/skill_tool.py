@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ...tools.protocol import ToolCategory, ToolResult
 from .loader import SkillDefinition, default_is_enabled
@@ -46,7 +47,7 @@ def build_skill_context_modifier(
     diferidas que la skill habilita se anuncien (cruce S2↔M3: 'Skill(x) habilita x__*').
     """
 
-    def modifier(c: "ToolUseContext") -> "ToolUseContext":
+    def modifier(c: ToolUseContext) -> ToolUseContext:
         caps = c.app_state.capabilities
         invoked = caps.setdefault("invoked_skills", [])
         if skill.name not in invoked:
@@ -82,7 +83,7 @@ class SkillTool:
         "Invoke an available skill by name to load its instructions and enable its tools. "
         "Pass the skill name as 'command'."
     )
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Name of the skill to invoke."},
@@ -106,7 +107,7 @@ class SkillTool:
         # deshabilitada no es invocable ni aparece en la lista de disponibles.
         self._is_enabled = is_enabled or default_is_enabled
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         command = (input.get("command") or "").strip()
         skill = self._state.get(command)
         if skill is None or not self._is_enabled(skill):

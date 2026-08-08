@@ -12,7 +12,8 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 from ...context.presentation import IdentityPresentation
 from ...context.tool_use import ToolUseContext
@@ -59,14 +60,14 @@ class LocalAgentRuntime:
     def __init__(
         self,
         *,
-        model_caller: "Optional[ModelCallerProtocol]" = None,
+        model_caller: ModelCallerProtocol | None = None,
         tool_registry: Any = None,
         capability_manager: Any = None,
-        capabilities_resolver: "Optional[CapabilitiesResolver]" = None,
-        tool_dispatcher: "Optional[ToolDispatcher]" = None,
-        task_registry: Optional[TaskRegistryProtocol] = None,
-        hook_runner: Optional[HookRunner] = None,
-        storage: Optional[StorageProtocol] = None,
+        capabilities_resolver: CapabilitiesResolver | None = None,
+        tool_dispatcher: ToolDispatcher | None = None,
+        task_registry: TaskRegistryProtocol | None = None,
+        hook_runner: HookRunner | None = None,
+        storage: StorageProtocol | None = None,
         presentation: Any = None,
         exec_env: Any = None,
         fs: Any = None,
@@ -76,9 +77,9 @@ class LocalAgentRuntime:
         small_llm: Any = None,
         background_result_max_chars: int = 2000,
         model_id: str = "",
-        model_options: "ModelOptions | None" = None,
+        model_options: ModelOptions | None = None,
         input_processor: Any = None,
-        initial_allowed_tools: Optional[list[str]] = None,
+        initial_allowed_tools: list[str] | None = None,
         root_context_modifier: Any = None,
         root_turn_start_hooks: Any = None,
         stt: Any = None,
@@ -96,7 +97,7 @@ class LocalAgentRuntime:
         # que el drenador del padre funcione sin que el integrador cablee nada.
         notification_sink: Any = None,
         scope: Scope | None = None,
-        session_repo: "SessionRepo[Any] | None" = None,
+        session_repo: SessionRepo[Any] | None = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._model_caller = model_caller
@@ -187,7 +188,7 @@ class LocalAgentRuntime:
 
     async def dispatch(
         self,
-        task: "RuntimeTask",
+        task: RuntimeTask,
         parent_snapshot: ForkSnapshot | None = None,
         *,
         on_event: EventHandler | None = None,
@@ -206,7 +207,7 @@ class LocalAgentRuntime:
 
     async def stream(
         self,
-        task: "RuntimeTask",
+        task: RuntimeTask,
         parent_snapshot: ForkSnapshot | None = None,
     ) -> AsyncIterator[Event]:
         """Despacha la task y produce sus eventos en vivo, en orden, hasta el cierre.
@@ -268,7 +269,7 @@ class LocalAgentRuntime:
     # ------------------------------------------------------------------
 
     def _build_child(
-        self, task: "RuntimeTask", parent_snapshot: ForkSnapshot | None
+        self, task: RuntimeTask, parent_snapshot: ForkSnapshot | None
     ) -> tuple[Any, str | None, int]:
         if parent_snapshot is not None:
             policy = ForkPolicy(inherit_messages=task.fork_context)
@@ -315,7 +316,7 @@ class LocalAgentRuntime:
             )
         return ctx, None, 0
 
-    async def _resolve_prompt(self, task: "RuntimeTask", ctx: ToolUseContext) -> str:
+    async def _resolve_prompt(self, task: RuntimeTask, ctx: ToolUseContext) -> str:
         """Entrada por voz: si hay audio y el STT está activo, lo transcribe y usa
         la transcripción como prompt del turno. Ante fallo o transcripción vacía,
         cae al `task.prompt` — la voz no debe tumbar la task."""
@@ -380,7 +381,7 @@ class LocalAgentRuntime:
             bus.subscribe_all(on_event)
         return bus
 
-    async def _fire_stop(self, task_id: str, task: "RuntimeTask", status: str,
+    async def _fire_stop(self, task_id: str, task: RuntimeTask, status: str,
                          result: str | None, duration_ms: int) -> None:
         if self._hook_runner is None:
             return
@@ -390,7 +391,7 @@ class LocalAgentRuntime:
         })
 
     def _notify(self, parent_scope: Scope | None, parent_session_id: str | None,
-                task: "RuntimeTask", task_id: str, status: str, text: str,
+                task: RuntimeTask, task_id: str, status: str, text: str,
                 final_text: str) -> None:
         if parent_session_id is None:
             return
@@ -405,7 +406,7 @@ class LocalAgentRuntime:
     async def _run_loop(
         self,
         task_id: str,
-        task: "RuntimeTask",
+        task: RuntimeTask,
         parent_snapshot: ForkSnapshot | None,
         on_event: EventHandler | None = None,
     ) -> None:
@@ -522,7 +523,7 @@ class LocalAgentRuntime:
                          task, task_id, "killed",
                          "Agent was killed (timeout or manual cancel)", "")
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — la tarea falla y se REPORTA como failed; el runtime sigue vivo
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.fail(task_id, str(exc), duration_ms=duration_ms)
             await self._fire_stop(task_id, task, "failed", None, duration_ms)
@@ -571,7 +572,7 @@ class LocalAgentRuntime:
         handle = self._session_repo.open(SessionId(session_id))
         return Session(session_id=handle.id)
 
-    async def _persist(self, task: "RuntimeTask", ctx: ToolUseContext, session: Session) -> None:
+    async def _persist(self, task: RuntimeTask, ctx: ToolUseContext, session: Session) -> None:
         if self._storage is None:
             return
         # `C9`/`ID-3`: el transcript se escribe bajo el SCOPE, no bajo un `user_id` (que
@@ -590,7 +591,7 @@ class LocalAgentRuntime:
         key = StorageKeys.transcript_key(ctx.scope, ctx.session_id, agent_id)
         try:
             await self._storage.upload(key, session.model_dump_json().encode(), "application/json")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — persistir es best-effort: no puede tumbar el turno ya servido
             logger.warning("persist failed for %s: %s", key, exc)
 
 

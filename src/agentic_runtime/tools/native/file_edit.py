@@ -34,7 +34,7 @@ Usage:
   more surrounding context to make it unique — usually 2-4 adjacent lines is enough.
 - ALWAYS prefer editing existing files over writing new ones.
 - Only use emojis if the user explicitly requests it."""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "file_path": {
@@ -57,7 +57,7 @@ Usage:
     safe_for_background = True
     timeout_seconds = 10.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         file_path = input.get("file_path", "")
         old_string = input.get("old_string", "")
         new_string = input.get("new_string", "")
@@ -73,7 +73,7 @@ Usage:
 
         try:
             content = path.read_text(encoding="utf-8")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
             return ToolResult.error(self.name, f"Cannot read file: {e}")
 
         count = content.count(old_string)
@@ -91,7 +91,7 @@ Usage:
         new_content = content.replace(old_string, new_string, 1)
         try:
             path.write_text(new_content, encoding="utf-8")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
             return ToolResult.error(self.name, f"Cannot write file: {e}")
 
         return ToolResult(tool_name=self.name, output=f"Edited {file_path}")

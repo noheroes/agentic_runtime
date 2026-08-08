@@ -22,7 +22,7 @@ class ListMcpResourcesTool:
 
     name = LIST_MCP_RESOURCES_TOOL_NAME
     description = "List available MCP resources across connected servers."
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "server": {"type": "string", "description": "Optional server name to filter by."},
@@ -36,7 +36,7 @@ class ListMcpResourcesTool:
     def __init__(self, state: McpState) -> None:
         self._state = state
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         server = input.get("server")
         resources = self._state.all_resources()
         if server:
@@ -52,7 +52,7 @@ class ReadMcpResourceTool:
 
     name = READ_MCP_RESOURCE_TOOL_NAME
     description = "Read the contents of an MCP resource by uri."
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "uri": {"type": "string", "description": "Resource uri to read."},
@@ -68,7 +68,7 @@ class ReadMcpResourceTool:
     def __init__(self, state: McpState) -> None:
         self._state = state
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         uri = input.get("uri", "")
         server = input.get("server") or self._state.find_resource_server(uri)
         if not server:

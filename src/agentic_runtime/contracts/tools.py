@@ -143,6 +143,15 @@ class ToolProtocol(Protocol):
 
     name: str
     description: str
+    #: Variable de INSTANCIA, y por eso las tools nativas silencian `RUF012`
+    #: sobre su `input_schema` de clase. Esa regla pide `ClassVar`/`Final`, y las dos
+    #: rompen aquí: con `ClassVar` mypy responde «expected instance variable, got
+    #: class variable», y con `Final`, «expected settable variable, got read-only».
+    #: Declararla `ClassVar` en el propio Protocol sería peor: `McpTool` la asigna
+    #: por instancia desde la respuesta del server (`mcp/tool_adapter.py:113`), así
+    #: que dejaría fuera al caso de tercero más importante que hay. El dict de clase
+    #: de una tool nativa es una constante compartida que nadie muta; el aviso de
+    #: ruff es correcto en general y falso contra ESTE contrato.
     input_schema: dict[str, Any]
     category: ToolCategory
     requires_permission: bool

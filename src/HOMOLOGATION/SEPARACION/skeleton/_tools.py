@@ -50,7 +50,7 @@ def _lenient_ctx(*args: Any, **kwargs: Any) -> ssl.SSLContext:
 
 
 def _install_tls_shim() -> None:
-    setattr(ssl, "create_default_context", _lenient_ctx)
+    ssl.create_default_context = _lenient_ctx
 
 
 def _load_oauth_token() -> str:

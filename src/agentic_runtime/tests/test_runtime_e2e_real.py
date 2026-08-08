@@ -14,12 +14,18 @@ y el modelo consumió su salida — tokens únicos no adivinables), no progreso 
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.execution.tasks.status import TaskStatus
-from agentic_runtime.factory import RuntimeConfig, StorageConfig, ToolsConfig, create_runtime
+from agentic_runtime.factory import (
+    RuntimeConfig,
+    StorageConfig,
+    ToolsConfig,
+    create_runtime,
+)
 from agentic_runtime.tools import ToolCategory, ToolResult
 
 from ._azure_real import build_caller as _build_caller
@@ -57,7 +63,7 @@ class LookupSecretTool:
 
     name = "lookup_secret"
     description = "Devuelve el código secreto asociado a una clave dada."
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"key": {"type": "string", "description": "La clave a consultar"}},
         "required": ["key"],
@@ -81,7 +87,7 @@ class Step1Tool:
 
     name = "obtener_token"
     description = "Obtiene un token de acceso de un solo uso. Llámala sin argumentos."
-    input_schema = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -101,7 +107,7 @@ class Step2Tool:
 
     name = "canjear_token"
     description = "Canjea un token (obtenido con obtener_token) y devuelve el resultado final."
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"token": {"type": "string", "description": "El token de obtener_token"}},
         "required": ["token"],

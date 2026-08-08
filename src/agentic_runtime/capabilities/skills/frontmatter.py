@@ -69,7 +69,7 @@ class SkillFrontmatter(BaseModel):
         return []
 
     @classmethod
-    def from_raw(cls, raw: dict[str, Any]) -> "SkillFrontmatter":
+    def from_raw(cls, raw: dict[str, Any]) -> SkillFrontmatter:
         """Construcción TOTAL — nunca lanza. Frontmatter corrupto → defaults."""
         try:
             return cls.model_validate(raw)
@@ -98,8 +98,7 @@ def parse_frontmatter(text: str) -> tuple[SkillFrontmatter, str]:
     raw_block = rest[:end]
     body_start = end + 1 + len(_DELIM)
     body = rest[body_start:]
-    if body.startswith("\n"):
-        body = body[1:]
+    body = body.removeprefix("\n")
 
     try:
         loaded = yaml.safe_load(raw_block)

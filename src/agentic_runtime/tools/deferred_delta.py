@@ -89,7 +89,7 @@ def _announced_deferred_names(messages: list[dict[str, Any]]) -> set[str]:
 
 
 def compute_deferred_tools_delta(
-    pool_tools: list["ToolProtocol"], messages: list[dict[str, Any]]
+    pool_tools: list[ToolProtocol], messages: list[dict[str, Any]]
 ) -> tuple[list[str], list[str]] | None:
     """Diff del pool diferido actual contra lo ya anunciado en la conversación.
 

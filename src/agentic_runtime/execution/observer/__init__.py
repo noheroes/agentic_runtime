@@ -1,11 +1,16 @@
 from .events import SubagentStarted, SubagentStopped
-from .observer import ExecutionObserverProtocol, NoopObserver, get_observer, set_observer
+from .observer import (
+    ExecutionObserverProtocol,
+    NoopObserver,
+    get_observer,
+    set_observer,
+)
 
 __all__ = [
-    "SubagentStarted",
-    "SubagentStopped",
     "ExecutionObserverProtocol",
     "NoopObserver",
+    "SubagentStarted",
+    "SubagentStopped",
     "get_observer",
     "set_observer",
 ]

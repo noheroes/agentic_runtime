@@ -1,5 +1,6 @@
 """Primitiva DeferredToolStrategy: rama nativa vs simulada + selección por capability."""
 import json
+from typing import ClassVar
 
 from agentic_runtime.capabilities import CapabilityManager
 from agentic_runtime.capabilities.mcp import McpProvider, McpServerConfig
@@ -21,7 +22,7 @@ from agentic_runtime.tools.native.tool_search import TOOL_SEARCH_TOOL_NAME
 class _NativeEcho:
     name = "echo"
     description = "native echo"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -67,7 +68,7 @@ async def _pool_with_mcp(ctx: ToolUseContext):
 
 def _make_caller(*events, native: bool):
     class StubCaller:
-        captured: list[dict] = []
+        captured: ClassVar[list[dict]] = []
 
         def supports_native_tool_search(self, model_id=""):
             return native
@@ -170,7 +171,7 @@ def _scripted_caller(turns: list[list], *, native: bool):
     """Caller que emite una lista de eventos DISTINTA por turno y guarda lo anunciado en cada uno."""
 
     class ScriptedCaller:
-        announced_per_turn: list[list[dict]] = []
+        announced_per_turn: ClassVar[list[list[dict]]] = []
         _turn = 0
 
         def supports_native_tool_search(self, model_id=""):
@@ -293,7 +294,7 @@ async def test_loop_defaults_simulated_without_capability():
     reg.register(ToolSearchTool())
 
     class BareCaller:
-        captured: list[dict] = []
+        captured: ClassVar[list[dict]] = []
 
         async def complete(self, messages, tools, *, stop=None, model_id="", **kw):
             BareCaller.captured = list(tools)

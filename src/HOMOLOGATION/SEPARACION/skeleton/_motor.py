@@ -45,7 +45,7 @@ def _lenient_ctx(*args: Any, **kwargs: Any) -> ssl.SSLContext:
 
 
 def _install_tls_shim() -> None:
-    setattr(ssl, "create_default_context", _lenient_ctx)
+    ssl.create_default_context = _lenient_ctx
 
 
 def _load_oauth_token() -> str:
@@ -82,7 +82,6 @@ async def _main() -> int:
 
     async def _capture(params: dict[str, Any], _model: Any) -> None:
         captured.update(params)
-        return None  # no modifica el payload
 
     caller = AgenticModelsCaller(model, client=oauth_client, on_payload=_capture)
     runtime = LocalAgentRuntime(

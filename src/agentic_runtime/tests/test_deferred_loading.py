@@ -5,6 +5,7 @@ las descubre), pero SIEMPRE ejecutables desde el pool. ToolSearch descubre (acti
 devuelve schemas. Deferred es visibilidad, no disponibilidad.
 """
 import json
+from typing import ClassVar
 
 from agentic_runtime.capabilities import CapabilityManager
 from agentic_runtime.capabilities.mcp import McpProvider, McpServerConfig
@@ -25,7 +26,7 @@ from agentic_runtime.tools.native import ToolSearchTool
 class _NativeEcho:
     name = "echo"
     description = "native echo"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -69,7 +70,7 @@ async def _connected_provider() -> McpProvider:
 
 def _make_caller(*events):
     class StubCaller:
-        captured: list[dict] = []
+        captured: ClassVar[list[dict]] = []
 
         async def complete(self, messages, tools, *, stop=None, model_id=""):
             StubCaller.captured = list(tools)

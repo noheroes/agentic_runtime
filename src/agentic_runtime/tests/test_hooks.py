@@ -39,7 +39,6 @@ async def test_handler_block_short_circuits():
 
     async def after(event, payload):
         calls.append("after")
-        return None
 
     runner.register(HookEvent.PRE_TOOL_USE, blocker)
     runner.register(HookEvent.PRE_TOOL_USE, after)
@@ -101,7 +100,6 @@ async def test_handlers_isolated_per_event():
 
     async def only_pre(event, payload):
         seen.append("pre")
-        return None
 
     runner.register(HookEvent.PRE_TOOL_USE, only_pre)
     await runner.run(HookEvent.POST_TOOL_USE, {})
@@ -116,7 +114,6 @@ async def test_register_sink_receives_events():
     class _Sink:
         async def handle(self, event, payload):
             received.append(event)
-            return None
 
     sink = _Sink()
     assert isinstance(sink, HookSinkProtocol)

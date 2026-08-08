@@ -101,7 +101,7 @@ are better off just doing the task directly.
 When in doubt, use this tool. Being proactive with task management demonstrates attentiveness and \
 ensures you complete all requirements successfully.
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "todos": {
@@ -116,11 +116,11 @@ ensures you complete all requirements successfully.
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         todos = input.get("todos", [])
         old_todos = ctx.app_state.native.get(_TODOS_KEY, [])
 
-        def modifier(c: "ToolUseContext") -> "ToolUseContext":
+        def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native[_TODOS_KEY] = todos
             return c
 

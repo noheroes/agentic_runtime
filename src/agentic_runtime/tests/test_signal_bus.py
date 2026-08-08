@@ -3,7 +3,6 @@ import pytest
 
 from agentic_runtime.signals import SignalBus, SignalType
 
-
 # ---------------------------------------------------------------------------
 # Registro y árbol
 # ---------------------------------------------------------------------------

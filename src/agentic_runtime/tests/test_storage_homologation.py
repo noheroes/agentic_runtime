@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.storage import (
     FilesystemStorage,
     StorageKeys,
     StorageProtocol,
     StorageRegistry,
 )
-from agentic_runtime.contracts.identity import Scope
 
 # ---------------------------------------------------------------------------
 # HOMOLOGADO (passing)
@@ -117,26 +117,34 @@ def test_session_meta_sidecar_store_exists():
 @pytest.mark.xfail(strict=True, reason="FIND-STOR4/StR4: sin persistencia de config (config_key/agent_md/ltm muertos)")
 def test_config_store_exists():
     # StR4: StorageBackedConfigStore (load/save-merge) sobre config_key.
-    from agentic_runtime.storage import StorageBackedConfigStore  # noqa: F401  # target inexistente
+    from agentic_runtime.storage import (
+        StorageBackedConfigStore,  # noqa: F401  # target inexistente
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-STOR5/StR5: sin listado/enriquecimiento de sesiones (sólo list_prefix)")
 def test_session_catalog_list_sessions_exists():
     # StR5: list_sessions(user_id) leyendo sólo el meta sidecar (no descarga transcripts).
-    from agentic_runtime.storage import SessionCatalog  # noqa: F401  # target inexistente
+    from agentic_runtime.storage import (
+        SessionCatalog,  # noqa: F401  # target inexistente
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-STOR13/StR4: cascada de settings de 4+ niveles no portada (ScopedMcpConfigStore es sólo MCP)")
 def test_scoped_config_store_generalized():
     # StR4/FIND-STOR13: `ScopedConfigStore` general (managed/user/project/local/flag) con merge por precedencia
     # + invariante de seguridad (scope `project` no concede privilegio). Hoy sólo existe `ScopedMcpConfigStore`.
-    from agentic_runtime.storage import ScopedConfigStore  # noqa: F401  # target inexistente
+    from agentic_runtime.storage import (
+        ScopedConfigStore,  # noqa: F401  # target inexistente
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-STOR6/StR6: frontera StorageContract↔StorageProtocol implícita; sin adaptador")
 def test_blob_backed_storage_contract_exists():
     # StR6: un StorageContract (01/09) que commitee vía StorageProtocol.upload — mismo MinIO para tools y blobs.
-    from agentic_runtime.tools.fs_env import BlobBackedStorageContract  # noqa: F401  # target inexistente
+    from agentic_runtime.tools.fs_env import (
+        BlobBackedStorageContract,  # noqa: F401  # target inexistente
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-STOR7/StR7: guard prefix-startswith admite hermano-prefijo")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .protocols import AgentMode
 
@@ -19,7 +19,7 @@ class ModeManager:
     def unregister(self, task_id: str) -> None:
         self._modes.pop(task_id, None)
 
-    def get_mode(self, task_id: str) -> Optional[AgentMode]:
+    def get_mode(self, task_id: str) -> AgentMode | None:
         return self._modes.get(task_id)
 
     def set_mode(self, task_id: str, mode: AgentMode) -> None:

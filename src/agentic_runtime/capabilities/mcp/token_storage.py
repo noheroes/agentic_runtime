@@ -28,7 +28,7 @@ class StorageBackedTokenStorage:
     etc.). El runtime solo define este contrato sobre su primitiva de storage.
     """
 
-    def __init__(self, storage: "StorageProtocol", server_name: str, *, scope: Scope) -> None:
+    def __init__(self, storage: StorageProtocol, server_name: str, *, scope: Scope) -> None:
         # `C9`/`ID-3`: aquí vivía `user_id: str = "mcp"`. Con ese default —que el factory
         # nunca sobrescribía— TODOS los usuarios colisionaban en `mcp/mcp/<srv>` y el
         # token OAuth de A era legible bajo B. `Scope` es obligatorio y sin default: la
@@ -58,20 +58,20 @@ class StorageBackedTokenStorage:
         except Exception as exc:  # noqa: BLE001
             logger.warning("mcp oauth: no se pudo guardar %s: %s", key, exc)
 
-    async def get_tokens(self) -> "OAuthToken | None":
+    async def get_tokens(self) -> OAuthToken | None:
         from mcp.shared.auth import OAuthToken
 
         return await self._load(self._tokens_key, OAuthToken)
 
-    async def set_tokens(self, tokens: "OAuthToken") -> None:
+    async def set_tokens(self, tokens: OAuthToken) -> None:
         await self._save(self._tokens_key, tokens)
 
-    async def get_client_info(self) -> "OAuthClientInformationFull | None":
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
         from mcp.shared.auth import OAuthClientInformationFull
 
         return await self._load(self._client_key, OAuthClientInformationFull)
 
-    async def set_client_info(self, client_info: "OAuthClientInformationFull") -> None:
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
         await self._save(self._client_key, client_info)
 
 

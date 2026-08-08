@@ -20,11 +20,8 @@ import asyncio
 
 import pytest
 
-from agentic_runtime.contracts.abort import AbortController
-
 from agentic_runtime.capabilities.skills import (
     SkillDefinition,
-    SkillFrontmatter,
     SkillsProvider,
     SkillsState,
     SkillTool,
@@ -38,8 +35,9 @@ from agentic_runtime.capabilities.skills import (
 )
 from agentic_runtime.capabilities.skills.store import StorageBackedSkillStore
 from agentic_runtime.context.tool_use import ToolUseContext
-from agentic_runtime.tools.deferred import is_deferred_tool
+from agentic_runtime.contracts.abort import AbortController
 from agentic_runtime.contracts.identity import Scope
+from agentic_runtime.tools.deferred import is_deferred_tool
 
 
 def _ctx(**kw) -> ToolUseContext:
@@ -66,6 +64,9 @@ def test_frontmatter_tolerant_and_identity_from_dir():
     """Frontmatter corrupto → defaults; la identidad la garantiza el nombre del dir."""
     front, body = parse_frontmatter("---\nname: [oops]\n---\ncuerpo")
     assert front.name is None  # valor no-string degrada a None, no a error
+    # `body` se desempaquetaba y no se miraba: el test decía «→ defaults» sin comprobar
+    # que el cuerpo SOBREVIVE al frontmatter corrupto, que es la mitad de la tolerancia.
+    assert body == "cuerpo"
     skill = load_skill_text("dirname", "---\n: : :\n---\nHola mundo")
     assert skill.name == "dirname"  # identidad ← dir aunque el frontmatter falle
 
@@ -274,7 +275,9 @@ def test_skill_hooks_parsed():
 
 @pytest.mark.xfail(strict=True, reason="FIND-SKILL12 (=GAP-SKILL3): skills condicionales por paths")
 def test_conditional_skills_by_paths():
-    from agentic_runtime.capabilities.skills import activate_conditional_skills_for_paths  # noqa: F401
+    from agentic_runtime.capabilities.skills import (
+        activate_conditional_skills_for_paths,  # noqa: F401
+    )
 
     skill = load_skill_text("a", "---\npaths: 'src/**'\n---\nb")
     assert skill.paths == ["src"]
@@ -296,7 +299,9 @@ def test_record_and_score_usage():
 
 @pytest.mark.xfail(strict=True, reason="FIND-SKILL15: bundled skills programáticos")
 def test_register_bundled_skill():
-    from agentic_runtime.capabilities.skills.bundled import register_bundled_skill  # noqa: F401
+    from agentic_runtime.capabilities.skills.bundled import (
+        register_bundled_skill,  # noqa: F401
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-SKILL16: resolución por alias / namespaced / strip-slash")

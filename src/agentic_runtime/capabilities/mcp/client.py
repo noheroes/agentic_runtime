@@ -35,7 +35,7 @@ def _http_client_factory(ssl_verify: bool) -> Callable[..., httpx.AsyncClient]:
 
     def factory(
         headers: Any = None, timeout: Any = None, auth: Any = None
-    ) -> "httpx.AsyncClient":
+    ) -> httpx.AsyncClient:
         kwargs: dict[str, Any] = {"follow_redirects": True, "verify": ssl_verify}
         if headers is not None:
             kwargs["headers"] = headers
@@ -90,7 +90,7 @@ class McpClient:
     startup/shutdown del provider) — el SDK usa anyio cancel scopes por tarea.
     """
 
-    def __init__(self, config: McpServerConfig, *, auth_deps: "AuthDeps | None" = None) -> None:
+    def __init__(self, config: McpServerConfig, *, auth_deps: AuthDeps | None = None) -> None:
         self._config = config
         self._auth_deps = auth_deps
         self._stack: AsyncExitStack | None = None

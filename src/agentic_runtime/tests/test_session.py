@@ -21,9 +21,17 @@ def test_session_id_is_attributed_never_invented():
     que protegía el defecto.
     """
     import pytest
+    from pydantic import ValidationError
 
-    with pytest.raises(Exception):
+    # No basta `pytest.raises(Exception)`: eso pasaba con CUALQUIER fallo —un `TypeError`
+    # por una firma rota, un import muerto— sin acreditar nada. Se exige el tipo Y que el
+    # error sea exactamente «falta `session_id`», que es la propiedad que el test dice medir.
+    with pytest.raises(ValidationError) as exc:
         Session()  # type: ignore[call-arg]
+    faltantes = [
+        e["loc"][0] for e in exc.value.errors() if e["type"] == "missing"
+    ]
+    assert faltantes == ["session_id"], exc.value.errors()
 
     s = Session(session_id="opaque-token-from-integrator")
     assert s.session_id == "opaque-token-from-integrator"

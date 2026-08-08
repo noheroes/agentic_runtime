@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from ..contracts import CapabilitySummary
 from .loader import (
@@ -50,7 +51,7 @@ class SkillsProvider:
         self,
         state: SkillsState | None = None,
         *,
-        skill_store: "SkillStore | None" = None,
+        skill_store: SkillStore | None = None,
         is_enabled: Callable[[SkillDefinition], bool] | None = None,
     ) -> None:
         self._state = state or SkillsState()
@@ -82,7 +83,7 @@ class SkillsProvider:
         self._state.set_skill(skill)
         return skill
 
-    def process_slash_command(self, text: str, context: "ToolUseContext") -> str | None:
+    def process_slash_command(self, text: str, context: ToolUseContext) -> str | None:
         """Procesa `/<skill> args` (S4): activa la skill en el contexto y devuelve sus
         instrucciones, o None si no aplica. El loop NO importa esto — lo usa el integrador."""
         from .commands import process_slash_command
@@ -115,12 +116,12 @@ class SkillsProvider:
     async def startup(self) -> None:
         """Carga los skills persistidos en el store (si hay). Aislamiento por ítem."""
         if self._skill_store is None:
-            return None
+            return
         try:
             names = await self._skill_store.list()
         except Exception as exc:  # noqa: BLE001
             logger.warning("skills: no se pudo listar el store: %s", exc)
-            return None
+            return
         for name in names:
             try:
                 content = await self._skill_store.read(name)
@@ -128,12 +129,12 @@ class SkillsProvider:
                     self.add_skill_text(name, content)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("skills: no se pudo cargar %r del store: %s", name, exc)
-        return None
+        return
 
     async def shutdown(self) -> None:
         return None
 
-    def catalog(self, context: "ToolUseContext") -> list[CapabilitySummary]:
+    def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
         return [
             CapabilitySummary(
                 name=skill.name,
@@ -146,7 +147,7 @@ class SkillsProvider:
             if self._is_enabled(skill)
         ]
 
-    def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
+    def tools(self, context: ToolUseContext) -> list[ToolProtocol]:
         # La tool `Skill` (invocación) solo si hay skills HABILITADAS que invocar (S1):
         # si todas están deshabilitadas, no se ofrece una tool que rechazaría todo.
         if not any(self._is_enabled(s) for s in self._state.all_skills()):
@@ -155,7 +156,7 @@ class SkillsProvider:
 
         return [SkillTool(self._state, is_enabled=self._is_enabled)]
 
-    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         """Skills activas en este contexto → mensajes 'continúa siguiendo' (S3).
 
         Scoped por agente: lee `app_state.capabilities['active_skills']` del ctx, que
@@ -175,7 +176,7 @@ class SkillsProvider:
             })
         return messages
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         """Tras compactación: preservar skills activas como 'continue to follow' (S5).
 
         Mismo aporte que `active_context` — el contenido de la skill sobrevive a la

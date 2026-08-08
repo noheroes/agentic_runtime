@@ -35,7 +35,12 @@ import pytest
 
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
-from agentic_runtime.factory import CapabilitiesConfig, RuntimeConfig, StorageConfig, create_runtime
+from agentic_runtime.factory import (
+    CapabilitiesConfig,
+    RuntimeConfig,
+    StorageConfig,
+    create_runtime,
+)
 
 # Gating: sin las deps de las skills no hay nada real que ejecutar.
 docx = pytest.importorskip("docx", reason="falta python-docx (grupo skills-e2e)")

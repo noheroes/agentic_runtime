@@ -64,4 +64,4 @@ class Session(BaseModel):
         return self.usage.output_tokens
 
 
-__all__ = ["Session", "SessionMetadata", "BackgroundTaskRef", "Usage"]
+__all__ = ["BackgroundTaskRef", "Session", "SessionMetadata", "Usage"]

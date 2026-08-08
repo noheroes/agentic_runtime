@@ -15,12 +15,17 @@ from __future__ import annotations
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent, ToolCallEvent
 from agentic_runtime.execution.fork import ForkSnapshot
-from agentic_runtime.factory import RuntimeConfig, StorageConfig, ToolsConfig, create_runtime
+from agentic_runtime.factory import (
+    RuntimeConfig,
+    StorageConfig,
+    ToolsConfig,
+    create_runtime,
+)
 from agentic_runtime.tools import ToolCategory, ToolResult
-from agentic_runtime.contracts.identity import Scope
 
 
 def _make_caller(*events):
@@ -37,7 +42,7 @@ class ProbeTool:
     """Tool que registra lo que ve en su ctx (native + presentation)."""
     name = "probe"
     description = "probe"
-    input_schema: dict = {"type": "object", "properties": {}}
+    input_schema: dict = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True

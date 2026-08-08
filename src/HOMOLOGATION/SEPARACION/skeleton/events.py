@@ -45,7 +45,7 @@ class EventBus:
                 continue
             try:
                 handler(event)
-            except Exception:  # noqa: BLE001 — 07·A4: aislar el handler, no tumbar el canal.
+            except Exception:  # noqa: BLE001,S110 — 07·A4: aislar el handler, no tumbar el canal.
                 # En el runtime real esto va a un `ErrorEvent`/log del propio bus;
                 # en el spike basta con no propagar (evidencia: el turno no se rompe).
                 pass

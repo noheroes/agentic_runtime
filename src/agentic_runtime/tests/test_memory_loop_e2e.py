@@ -22,8 +22,8 @@ from agentic_runtime.capabilities.memory import (
     MemoryProvider,
 )
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
-from agentic_runtime.tools.fs_env import ConfinedFilesystem
 from agentic_runtime.events import DoneEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.factory import (
     CapabilitiesConfig,
@@ -31,7 +31,7 @@ from agentic_runtime.factory import (
     StorageConfig,
     create_runtime,
 )
-from agentic_runtime.contracts.identity import Scope
+from agentic_runtime.tools.fs_env import ConfinedFilesystem
 
 _PROMPT = "necesito arreglar el login de sesión otra vez"
 

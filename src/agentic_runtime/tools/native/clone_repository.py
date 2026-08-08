@@ -58,7 +58,7 @@ def _normalize(repository: str) -> tuple[str, str, str]:
             raise ValueError(f"repositorio no soportado: {repository!r} (usa owner/repo o URL https)")
         host = parsed.netloc
         path = parsed.path.lstrip("/")
-    path = path[:-4] if path.endswith(".git") else path
+    path = path.removesuffix(".git")
     if not path:
         raise ValueError(f"no se pudo derivar el path del repo de {repository!r}")
     name = path.rstrip("/").split("/")[-1]
@@ -72,7 +72,7 @@ class CloneRepositoryTool:
         "Accepts 'owner/repo' (GitHub) or a full https URL. Private repos are authenticated "
         "automatically; do not put tokens in the URL."
     )
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "repository": {
@@ -91,7 +91,7 @@ class CloneRepositoryTool:
     safe_for_background = True
     timeout_seconds = 120.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         repository = (input.get("repository") or "").strip()
         if not repository:
             return ToolResult.error(self.name, "repository es obligatorio")
@@ -137,7 +137,7 @@ class CloneRepositoryTool:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_seconds)
         except FileNotFoundError:
             return ToolResult.error(self.name, "git no está disponible en el entorno del runtime")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResult.error(self.name, f"git clone excedió {self.timeout_seconds:.0f}s")
 
         # `S12`: el path host absoluto viaja en el `argv` de git, así que git lo IMPRIME

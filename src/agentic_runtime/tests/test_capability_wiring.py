@@ -5,6 +5,8 @@ ctx.tool_pool, deriva los schemas de él y el dispatcher ejecuta desde el MISMO 
 (findToolByName). Verifica que una tool de capability (MCP/skill) se anuncia Y se
 ejecuta en un turno real, sin registrarla en el ToolRegistry nativo.
 """
+from typing import ClassVar
+
 from agentic_runtime.capabilities import CapabilityManager
 from agentic_runtime.capabilities.mcp import McpProvider, McpServerConfig
 from agentic_runtime.context.tool_use import AppState, ToolUseContext
@@ -25,7 +27,7 @@ def _ctx_allowing(*names: str) -> ToolUseContext:
 class _NativeEcho:
     name = "echo"
     description = "native echo"
-    input_schema: dict = {"type": "object", "properties": {}}
+    input_schema: dict = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -57,7 +59,7 @@ class _FakeMcpClient:
 
 def _make_caller(*events):
     class StubCaller:
-        captured_tools: list[dict] = []
+        captured_tools: ClassVar[list[dict]] = []
 
         async def complete(self, messages, tools, *, stop=None, model_id=""):
             StubCaller.captured_tools = list(tools)
@@ -143,7 +145,7 @@ def test_factory_builds_runtime_with_capability_manager(tmp_path):
     mgr = runtime._capability_manager
     assert mgr is not None
     # el provider MCP quedó registrado con su server (sin conectar aún)
-    mcp = [p for p in mgr.providers if p.name == "mcp"][0]
+    mcp = next(p for p in mgr.providers if p.name == "mcp")
     assert "srv" in mcp.state.servers
 
 
@@ -157,6 +159,6 @@ async def test_runtime_startup_connects_capability_providers(tmp_path):
     runtime = create_runtime(config=config)
     await runtime.startup()
 
-    mcp = [p for p in runtime._capability_manager.providers if p.name == "mcp"][0]
+    mcp = next(p for p in runtime._capability_manager.providers if p.name == "mcp")
     assert mcp.state.connected_servers() == ["srv"]
     await runtime.shutdown()

@@ -49,7 +49,7 @@ EXPLORE_AGENT_TYPE = "Explore"
 PLAN_AGENT_TYPE = "Plan"
 
 
-def get_plan_file_path(ctx: "ToolUseContext") -> str:
+def get_plan_file_path(ctx: ToolUseContext) -> str:
     """Token del plan-file de la sesión. Homólogo de `getPlanFilePath` (plans.ts:119).
 
     Root: `/plans/plan.md`. Subagente: `/plans/plan-agent-{agent_id}.md`. El discriminador es
@@ -67,7 +67,7 @@ def is_session_plan_file(token: str) -> bool:
     return token.startswith(f"{_PLAN_TOKEN_PREFIX}/") and token.endswith(".md")
 
 
-def plan_file_exists(ctx: "ToolUseContext") -> bool:
+def plan_file_exists(ctx: ToolUseContext) -> bool:
     """¿Existe ya el plan-file localmente? Chequeo SYNC (para el reminder activo del provider).
 
     Durante planning el archivo recién escrito por el modelo está materializado local, así que
@@ -77,11 +77,11 @@ def plan_file_exists(ctx: "ToolUseContext") -> bool:
         return False
     try:
         return bool(storage.real_path(get_plan_file_path(ctx)).exists())
-    except Exception:
+    except Exception:  # noqa: BLE001 — sondeo de existencia: cualquier fallo es 'no hay plan'
         return False
 
 
-async def get_plan(ctx: "ToolUseContext") -> str | None:
+async def get_plan(ctx: ToolUseContext) -> str | None:
     """Contenido del plan-file vía storage inyectado, o None si no existe.
 
     Homólogo de `getPlan` (plans.ts:135), leyendo del blob per-sesión (con materialización local)
@@ -112,14 +112,14 @@ async def get_plan(ctx: "ToolUseContext") -> str | None:
 
 
 __all__ = [
-    "_PLAN_MODE_KEY",
-    "_PLAN_EXIT_PENDING_KEY",
-    "_PLAN_KEY",
-    "_PLAN_FULL_SHOWN_KEY",
     "EXPLORE_AGENT_TYPE",
     "PLAN_AGENT_TYPE",
+    "_PLAN_EXIT_PENDING_KEY",
+    "_PLAN_FULL_SHOWN_KEY",
+    "_PLAN_KEY",
+    "_PLAN_MODE_KEY",
+    "get_plan",
     "get_plan_file_path",
     "is_session_plan_file",
     "plan_file_exists",
-    "get_plan",
 ]

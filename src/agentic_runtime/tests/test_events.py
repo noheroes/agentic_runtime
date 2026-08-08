@@ -1,4 +1,6 @@
 """Tests para runtime/events/ — Event, tipos concretos, EventBus."""
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from agentic_runtime.events import (
@@ -12,14 +14,16 @@ from agentic_runtime.events import (
 )
 from agentic_runtime.events.event_types import Usage
 
-
 # ---------------------------------------------------------------------------
 # Event es frozen
 # ---------------------------------------------------------------------------
 
 def test_event_is_frozen():
     ev = TokenEvent(content="hello")
-    with pytest.raises(Exception):  # FrozenInstanceError o AttributeError
+    # `FrozenInstanceError` y no `Exception`: con `Exception` este test seguía verde si
+    # la asignación fallaba por CUALQUIER otro motivo —un `AttributeError` porque el
+    # campo se renombró, por ejemplo—, es decir, acreditaba la inmutabilidad sin medirla.
+    with pytest.raises(FrozenInstanceError):
         ev.content = "world"  # type: ignore
 
 

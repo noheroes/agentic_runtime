@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .protocol import ToolProtocol
 
 
-def _base_schema(tool: "ToolProtocol") -> dict[str, Any]:
+def _base_schema(tool: ToolProtocol) -> dict[str, Any]:
     return {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
 
 
@@ -46,7 +46,7 @@ class TurnToolPlan:
 
 @runtime_checkable
 class DeferredToolStrategy(Protocol):
-    def prepare_turn(self, ctx: "ToolUseContext", pool: list["ToolProtocol"]) -> TurnToolPlan:
+    def prepare_turn(self, ctx: ToolUseContext, pool: list[ToolProtocol]) -> TurnToolPlan:
         """Decide schemas (con/sin `defer_loading`) y anuncios a partir del pool ensamblado."""
         ...
 
@@ -54,7 +54,7 @@ class DeferredToolStrategy(Protocol):
 class SimulatedDeferredStrategy:
     """Fallback client-side — comportamiento vigente encapsulado (ver módulo)."""
 
-    def prepare_turn(self, ctx: "ToolUseContext", pool: list["ToolProtocol"]) -> TurnToolPlan:
+    def prepare_turn(self, ctx: ToolUseContext, pool: list[ToolProtocol]) -> TurnToolPlan:
         deferred_names = {t.name for t in pool if is_deferred_tool(t)}
         tool_search_active = bool(deferred_names)
         discovered = discovered_tool_names(ctx)
@@ -83,7 +83,7 @@ class SimulatedDeferredStrategy:
 class NativeDeferredStrategy:
     """Rama nativa Responses — el provider resuelve el tool-search server-side."""
 
-    def prepare_turn(self, ctx: "ToolUseContext", pool: list["ToolProtocol"]) -> TurnToolPlan:
+    def prepare_turn(self, ctx: ToolUseContext, pool: list[ToolProtocol]) -> TurnToolPlan:
         schemas: list[dict[str, Any]] = []
         for tool in pool:
             if tool.name == TOOL_SEARCH_TOOL_NAME:

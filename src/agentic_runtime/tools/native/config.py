@@ -43,7 +43,7 @@ settings, or when adjusting a setting would benefit them.
 - Get theme: { "setting": "theme" }
 - Set dark theme: { "setting": "theme", "value": "dark" }
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "setting": {
@@ -61,7 +61,7 @@ settings, or when adjusting a setting would benefit them.
     safe_for_background = True
     timeout_seconds = 5.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         setting = input.get("setting", "")
         if not setting:
             return ToolResult.error(self.name, "setting is required.")
@@ -90,7 +90,7 @@ settings, or when adjusting a setting would benefit them.
         value = input["value"]
         previous = config.get(setting)
 
-        def modifier(c: "ToolUseContext") -> "ToolUseContext":
+        def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native.setdefault(_CONFIG_KEY, {})[setting] = value
             return c
 

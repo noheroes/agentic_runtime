@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from ..contracts import CapabilitySummary
 
 
-def _last_user_text(context: "ToolUseContext") -> str:
+def _last_user_text(context: ToolUseContext) -> str:
     """Último texto del usuario, ignorando los recordatorios inyectados por el loop.
 
     El recall se rinde como `role:"user"` envuelto en `<system-reminder>`; la query de
@@ -51,7 +51,7 @@ class MemoryProvider:
         self._store = store
 
     @staticmethod
-    def _scope(context: "ToolUseContext") -> str:
+    def _scope(context: ToolUseContext) -> str:
         """Clave de scope de la memoria: `<scope>/<agente>`.
 
         Se scopea primero por el `Scope` opaco del integrador (`C9`/`ID-3`) para que un
@@ -84,20 +84,20 @@ class MemoryProvider:
 
     async def shutdown(self) -> None: ...
 
-    def catalog(self, context: "ToolUseContext") -> list["CapabilitySummary"]:
+    def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
         return []
 
-    def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
+    def tools(self, context: ToolUseContext) -> list[ToolProtocol]:
         return []
 
-    def system_prompt_section(self, context: "ToolUseContext") -> str | None:
+    def system_prompt_section(self, context: ToolUseContext) -> str | None:
         """Bloque de activación (instrucciones + índice) scopeado por agente."""
         agent = self._scope(context)
         memory_dir = self._store.ensure_dir(agent)
         index = self._store.read_index(agent)
         return build_memory_activation(str(memory_dir), index)
 
-    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         """Recall: ≤5 memorias relevantes al último texto del usuario.
 
         Scoped por agente (un subagente no ve memorias de otro). Excluye `MEMORY.md`
@@ -108,7 +108,7 @@ class MemoryProvider:
         ranked = rank_memories(headers, _last_user_text(context))
         return [{"role": "system", "content": _render_recall(header)} for header in ranked]
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         """Tras compactación: mismas memorias relevantes (sobreviven al recorte)."""
         return self.active_context(context)
 

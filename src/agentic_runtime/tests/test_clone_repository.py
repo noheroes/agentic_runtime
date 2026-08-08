@@ -5,7 +5,10 @@ import pytest
 
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.tools.fs_env import ConfinedFilesystem
-from agentic_runtime.tools.native.clone_repository import CloneRepositoryTool, _normalize
+from agentic_runtime.tools.native.clone_repository import (
+    CloneRepositoryTool,
+    _normalize,
+)
 
 
 class _FakeProc:

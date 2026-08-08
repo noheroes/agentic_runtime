@@ -26,7 +26,7 @@ class SpeechToTextProtocol(Protocol):
     El integrador la implementa con su motor STT. El runtime entrega la
     transcripción como prompt del turno (espejo de `RuntimeTask.prompt`)."""
 
-    async def transcribe(self, audio: AudioInput, ctx: "ToolUseContext") -> str: ...
+    async def transcribe(self, audio: AudioInput, ctx: ToolUseContext) -> str: ...
 
 
 @runtime_checkable
@@ -38,9 +38,9 @@ class TextToSpeechProtocol(Protocol):
     turno de habla para que el integrador vacíe/cierre. El texto llega ya saneado
     por `PathPresentation` (nunca se leen en voz alta rutas reales de infra)."""
 
-    async def speak(self, text: str, ctx: "ToolUseContext") -> None: ...
+    async def speak(self, text: str, ctx: ToolUseContext) -> None: ...
 
-    async def flush(self, ctx: "ToolUseContext") -> None: ...
+    async def flush(self, ctx: ToolUseContext) -> None: ...
 
 
 __all__ = ["AudioInput", "SpeechToTextProtocol", "TextToSpeechProtocol"]

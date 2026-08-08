@@ -53,7 +53,7 @@ class McpServerConfig(BaseModel):
     enabled: bool = True
 
     @model_validator(mode="after")
-    def _validate_identity_and_auth(self) -> "McpServerConfig":
+    def _validate_identity_and_auth(self) -> McpServerConfig:
         kind = (self.type or "").lower().strip() or None
         if kind is not None and kind not in _TRANSPORTS:
             raise ValueError(
@@ -122,7 +122,7 @@ def load_server_configs(raw: dict[str, dict[str, Any]]) -> list[McpServerConfig]
     for name, cfg in raw.items():
         try:
             configs.append(parse_server_config(name, cfg))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — un server con config inválida se omite; los demás cargan
             logger.warning("mcp: config inválida para server %r — omitido: %s", name, exc)
     return configs
 

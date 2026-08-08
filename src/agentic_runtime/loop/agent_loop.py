@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable, Coroutine
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Any
 
 from ..capabilities.resolver import CapabilitiesResolver
 from ..context.tool_use import ToolUseContext
@@ -90,21 +91,21 @@ class AgentLoop:
     def __init__(
         self,
         *,
-        model_caller: Optional[ModelCallerProtocol] = None,
-        tool_registry: "Optional[ToolRegistry]" = None,
-        capability_manager: "Optional[CapabilityManager]" = None,
-        capabilities_resolver: Optional[CapabilitiesResolver] = None,
-        tool_dispatcher: Optional[ToolDispatcher] = None,
-        event_bus: Optional[EventBus] = None,
-        hook_runner: Optional[Any] = None,
+        model_caller: ModelCallerProtocol | None = None,
+        tool_registry: ToolRegistry | None = None,
+        capability_manager: CapabilityManager | None = None,
+        capabilities_resolver: CapabilitiesResolver | None = None,
+        tool_dispatcher: ToolDispatcher | None = None,
+        event_bus: EventBus | None = None,
+        hook_runner: Any | None = None,
         model_id: str = "",
         system_prompt_override: str = "",
         agent_allowed_tools: tuple[str, ...] = (),
-        deferred_strategy: "Optional[DeferredToolStrategy]" = None,
-        model_options: Optional[ModelOptions] = None,
-        input_processor: Optional[UserInputProcessor] = None,
-        notification_sink: Optional[NotificationSink] = None,
-        max_turns: Optional[int] = None,
+        deferred_strategy: DeferredToolStrategy | None = None,
+        model_options: ModelOptions | None = None,
+        input_processor: UserInputProcessor | None = None,
+        notification_sink: NotificationSink | None = None,
+        max_turns: int | None = None,
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -128,7 +129,7 @@ class AgentLoop:
         # consumidor); si no, se resuelve una vez por la capability del modelo activo
         # (nativa si el provider la soporta, simulada en caso contrario).
         self._deferred_strategy_override = deferred_strategy
-        self._deferred_strategy_cached: "Optional[DeferredToolStrategy]" = None
+        self._deferred_strategy_cached: DeferredToolStrategy | None = None
         self._turn_start_hooks: list[Callable[[], Coroutine[Any, Any, None]]] = []
         # Contador del sumidero (`_emit`). Divergencia declarada frente a A, que no
         # tiene `seq` porque ordena por cadena `parentUuid` + timestamp ISO.
@@ -150,7 +151,7 @@ class AgentLoop:
         """Ensambla el pool del turno (= `assembleToolPool`): native (filtrado por
         kind) + capability. El registry nativo es solo input; un subagente unattended
         recibe solo tools `safe_for_background` (B3)."""
-        native: list["ToolProtocol"] = []
+        native: list[ToolProtocol] = []
         if self._tool_registry is not None:
             mode = "background" if ctx.is_subagent else "foreground"
             native = self._tool_registry.list_available(mode=mode)
@@ -237,7 +238,7 @@ class AgentLoop:
             await self._append(ctx, {"role": "user", "content": rendered}, origin="recall")
             existing.add(rendered)
 
-    def _resolve_deferred_strategy(self) -> "DeferredToolStrategy":
+    def _resolve_deferred_strategy(self) -> DeferredToolStrategy:
         """Estrategia diferida del loop. Inyectada → se usa tal cual; si no, se resuelve
         UNA vez por la capability del modelo activo: nativa si el caller declara
         `supports_native_tool_search(model_id)`, simulada en caso contrario (default seguro
@@ -407,7 +408,7 @@ class AgentLoop:
             return LoopOutcome(LoopEndReason.NO_MODEL_CALLER, ctx.turn_count)
 
         reason = LoopEndReason.COMPLETED
-        detail: Optional[str] = None
+        detail: str | None = None
 
         for _turn in range(self._max_turns):
             if _aborted(ctx):
@@ -496,8 +497,8 @@ class AgentLoop:
             # Consume eventos del stream
             token_buffer: list[str] = []
             tool_calls: list[ToolCallEvent] = []
-            done: Optional[DoneEvent] = None
-            error: Optional[ErrorEvent] = None
+            done: DoneEvent | None = None
+            error: ErrorEvent | None = None
 
             aborted_mid_stream = False
             async for event in stream:

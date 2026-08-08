@@ -5,22 +5,18 @@ Regression: test_fork_skill.py and test_subagent_depth_guard.py must continue pa
 """
 from __future__ import annotations
 
-import asyncio
-
 import pytest
-
-from agentic_runtime.contracts.abort import AbortController
 from pydantic import ValidationError
 
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.abort import AbortController
+from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.execution.fork import (
     ForkContext,
     ForkPolicy,
     ForkSnapshot,
     RuntimeContextForker,
 )
-from agentic_runtime.contracts.permissions import PermissionContext
-
 
 # ---------------------------------------------------------------------------
 # ToolUseContext.agent_id
@@ -62,7 +58,10 @@ def test_fork_context_instantiates_with_required_fields():
 def test_fork_snapshot_rejects_mutation():
     """ForkSnapshot raises on direct field assignment (frozen model)."""
     snap = ForkSnapshot(session_id="s1", messages=({"role": "user", "content": "hi"},))
-    with pytest.raises(Exception):
+    # `ValidationError` —que este fichero YA importaba en :12 y no usaba aquí— y no
+    # `Exception`: con `Exception` el test pasaba también si el modelo dejaba de ser
+    # pydantic, o si `messages` desaparecía y la asignación reventaba por otra vía.
+    with pytest.raises(ValidationError):
         snap.messages = ()  # type: ignore[misc]
 
 
@@ -243,7 +242,12 @@ def test_forker_does_not_mutate_snapshot():
 @pytest.mark.asyncio
 async def test_nested_fork_grandchild_gets_own_unique_agent_id():
     """Each nested fork gets a unique agent_id from RuntimeContextForker."""
-    from agentic_runtime.execution.fork import ForkContext, ForkPolicy, ForkSnapshot, RuntimeContextForker
+    from agentic_runtime.execution.fork import (
+        ForkContext,
+        ForkPolicy,
+        ForkSnapshot,
+        RuntimeContextForker,
+    )
 
     snap_a = ForkSnapshot(session_id="parent-a", subagent_depth=0)
     snap_b = ForkSnapshot(session_id="parent-b", subagent_depth=1)

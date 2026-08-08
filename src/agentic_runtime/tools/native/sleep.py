@@ -23,7 +23,7 @@ Use this when you are waiting for something and have nothing else to do.
 
 Prefer this over running `sleep` through the bash tool — it doesn't hold a shell process.
 Do not use it to poll: if there is a check you can run, run the check instead."""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "duration": {
@@ -38,7 +38,7 @@ Do not use it to poll: if there is a check you can run, run the check instead.""
     safe_for_background = True
     timeout_seconds = 90.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         duration = float(input.get("duration", 0))
         duration = max(0.0, min(duration, 60.0))
         await asyncio.sleep(duration)

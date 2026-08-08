@@ -16,21 +16,18 @@ Primera pasada: solo documentar — no se ajusta el runtime para hacerlos pasar.
 """
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from agentic_runtime.contracts.abort import AbortController
-
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.abort import AbortController
 from agentic_runtime.contracts.user_input import ProcessedInput
 from agentic_runtime.events import DoneEvent, ErrorEvent, TokenEvent, ToolCallEvent
 from agentic_runtime.events.event_types import MessageEvent, TurnStartEvent
-from agentic_runtime.loop.outcome import LoopEndReason
 from agentic_runtime.hooks import HookEvent
 from agentic_runtime.hooks.protocol import HookDecision
 from agentic_runtime.hooks.runner import HookRunner
 from agentic_runtime.loop.agent_loop import AgentLoop
+from agentic_runtime.loop.outcome import LoopEndReason
 from agentic_runtime.tools import ToolCategory, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
 from agentic_runtime.tools.pool import ToolPool
@@ -87,7 +84,6 @@ class RecordingSink:
 
     async def handle(self, event: HookEvent, payload: dict) -> None:
         self.events.append(event)
-        return None
 
 
 class RecordingTool:
@@ -98,7 +94,7 @@ class RecordingTool:
     requires_permission = False
     safe_for_background = True
     timeout_seconds = 5.0
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
 
     def __init__(self, name: str = "echo") -> None:
         self.name = name

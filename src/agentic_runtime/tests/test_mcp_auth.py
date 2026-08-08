@@ -18,7 +18,6 @@ from agentic_runtime.capabilities.mcp import (
 )
 from agentic_runtime.contracts.identity import Scope
 
-
 # ---------------------------------------------------------------------------
 # Registro y extensibilidad
 # ---------------------------------------------------------------------------

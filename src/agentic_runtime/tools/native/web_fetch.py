@@ -266,7 +266,7 @@ Usage notes:
 - When a URL redirects to a different host, the tool does NOT follow it: it reports the
   redirect URL and you should make a new WebFetch request with that URL
 - For GitHub URLs, prefer the `gh` CLI via the bash tool (e.g. gh pr view, gh issue view)"""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "url": {
@@ -315,7 +315,7 @@ Usage notes:
             return ToolResult.error(self.name, f"HTTP {e.code}: {e.reason}")
         except urllib.error.URLError as e:
             return ToolResult.error(self.name, f"URL error: {e.reason}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — tras los errores HTTP/URL nombrados; el resto también se reporta
             return ToolResult.error(self.name, f"Fetch failed: {e}")
 
         if isinstance(resultado, _Redirect):

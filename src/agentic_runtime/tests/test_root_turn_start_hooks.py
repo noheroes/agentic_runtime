@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import pytest
 
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.contracts.runtime import RuntimeTask
 from agentic_runtime.events import DoneEvent
 from agentic_runtime.execution.fork import ForkSnapshot
 from agentic_runtime.factory import RuntimeConfig, StorageConfig, create_runtime
-from agentic_runtime.contracts.identity import Scope
 
 
 def _make_caller(*events):

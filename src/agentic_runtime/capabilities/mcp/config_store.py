@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .scope import McpScope, ScopedConfig, assert_mutable, merge_scoped
 
@@ -33,7 +34,7 @@ class StorageBackedMcpConfigStore:
     Mismo patrón que `StorageBackedTokenStorage`: el runtime ofrece un default usable;
     el integrador puede inyectar el suyo (DB, archivo propio, etc.)."""
 
-    def __init__(self, storage: "StorageProtocol", *, key: str = "mcp/servers.json") -> None:
+    def __init__(self, storage: StorageProtocol, *, key: str = "mcp/servers.json") -> None:
         self._storage = storage
         self._key = key
 
@@ -71,25 +72,25 @@ class ScopedMcpConfigStore:
     Homologado a `getMcpConfigsByScope`/`addMcpServerToScope` del canónico."""
 
     def __init__(
-        self, producers: "dict[McpScope, McpConfigStore] | None" = None
+        self, producers: dict[McpScope, McpConfigStore] | None = None
     ) -> None:
         self._producers: dict[McpScope, McpConfigStore] = dict(producers or {})
 
     @classmethod
     def from_flat(
-        cls, store: "McpConfigStore", *, scope: McpScope = McpScope.USER
-    ) -> "ScopedMcpConfigStore":
+        cls, store: McpConfigStore, *, scope: McpScope = McpScope.USER
+    ) -> ScopedMcpConfigStore:
         """Envuelve un store plano (legacy) como el productor de un único scope."""
         return cls({scope: store})
 
-    def set_producer(self, scope: McpScope, store: "McpConfigStore") -> None:
+    def set_producer(self, scope: McpScope, store: McpConfigStore) -> None:
         self._producers[scope] = store
 
     @property
     def scopes(self) -> set[McpScope]:
         return set(self._producers)
 
-    def _producer(self, scope: McpScope) -> "McpConfigStore":
+    def _producer(self, scope: McpScope) -> McpConfigStore:
         store = self._producers.get(scope)
         if store is None:
             raise ValueError(f"no hay productor registrado para scope {scope.value!r}")
@@ -133,7 +134,7 @@ class McpConfigWatcher(Protocol):
     como `skillChangeDetector`). El provider lo arranca en `startup()` con su
     callback `reconcile` y lo apaga en `shutdown()`."""
 
-    async def start(self, on_change: "Callable[[], Awaitable[Any]]") -> None: ...
+    async def start(self, on_change: Callable[[], Awaitable[Any]]) -> None: ...
     async def stop(self) -> None: ...
 
 

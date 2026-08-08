@@ -1,9 +1,11 @@
 """Tests para runtime/tools/ — ToolProtocol, ToolRegistry, ToolDispatcher."""
 import asyncio
+
 import pytest
 
+from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.abort import AbortController
-
+from agentic_runtime.contracts.permissions import PermissionContext
 from agentic_runtime.tools import (
     ToolCategory,
     ToolDispatcher,
@@ -12,9 +14,6 @@ from agentic_runtime.tools import (
     ToolResult,
 )
 from agentic_runtime.tools.pool import ToolPool
-from agentic_runtime.context.tool_use import ToolUseContext
-from agentic_runtime.contracts.permissions import PermissionContext
-
 
 # ---------------------------------------------------------------------------
 # Helpers — stubs de tools
@@ -23,7 +22,7 @@ from agentic_runtime.contracts.permissions import PermissionContext
 class FastTool:
     name = "fast_tool"
     description = "Does nothing quickly"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -36,7 +35,7 @@ class FastTool:
 class SlowTool:
     name = "slow_tool"
     description = "Sleeps forever"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = False
@@ -50,7 +49,7 @@ class SlowTool:
 class PermissionedTool:
     name = "permissioned_tool"
     description = "Requires explicit permission"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.SYSTEM
     requires_permission = True
     safe_for_background = True
@@ -203,7 +202,7 @@ class _BlockingTool:
 
     name = "blocking_tool"
     description = "bloquea el event loop"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.NETWORK
     requires_permission = False
     safe_for_background = True

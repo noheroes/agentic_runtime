@@ -37,7 +37,6 @@ from agentic_runtime.loop import AgentLoop
 from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.tools.dispatcher import ToolDispatcher
 
-
 # --- Contraparte canónica: los 28 eventos de HOOK_EVENTS (coreTypes.ts:25) ---
 CANONICAL_HOOK_EVENTS = {
     "PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification",
@@ -76,7 +75,7 @@ def _make_caller(*events):
 class RecordingTool:
     name = "echo"
     description = "Echoes input"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -132,7 +131,6 @@ async def test_pretooluse_is_the_only_gate_fired_in_loop():
 
     async def handler(event, payload):
         seen.append(payload)
-        return None
 
     runner = HookRunner()
     runner.register(HookEvent.PRE_TOOL_USE, handler)
@@ -179,7 +177,6 @@ async def test_posttooluse_fires_after_tool():
 
     async def handler(event, payload):
         fired.append(payload)
-        return None
 
     runner = HookRunner()
     runner.register(HookEvent.POST_TOOL_USE, handler)
@@ -198,7 +195,6 @@ async def test_stop_hook_fires_at_turn_end():
 
     async def handler(event, payload):
         fired.append(payload)
-        return None
 
     runner = HookRunner()
     runner.register(HookEvent.STOP, handler)

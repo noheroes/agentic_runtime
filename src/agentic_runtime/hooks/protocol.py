@@ -9,9 +9,10 @@ Taxonomía tomada del proyecto canónico
 """
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 class HookEvent(str, Enum):
@@ -41,32 +42,32 @@ class HookDecision:
 
     block: bool = False
     stop: bool = False
-    message: Optional[str] = None
-    modified_input: Optional[dict[str, Any]] = None
-    additional_context: Optional[str] = None
+    message: str | None = None
+    modified_input: dict[str, Any] | None = None
+    additional_context: str | None = None
 
     @classmethod
-    def allow(cls) -> "HookDecision":
+    def allow(cls) -> HookDecision:
         return cls()
 
     @classmethod
-    def blocked(cls, message: str) -> "HookDecision":
+    def blocked(cls, message: str) -> HookDecision:
         return cls(block=True, message=message)
 
     @classmethod
-    def stopped(cls, message: str) -> "HookDecision":
+    def stopped(cls, message: str) -> HookDecision:
         return cls(stop=True, message=message)
 
 
 # Un handler recibe el payload del punto de ciclo y opcionalmente devuelve una decisión.
-HookHandler = Callable[[HookEvent, dict[str, Any]], Awaitable[Optional[HookDecision]]]
+HookHandler = Callable[[HookEvent, dict[str, Any]], Awaitable[HookDecision | None]]
 
 
 @runtime_checkable
 class HookSinkProtocol(Protocol):
     """Contrato que cualquier consumidor implementa para recibir hooks."""
 
-    async def handle(self, event: HookEvent, payload: dict[str, Any]) -> Optional[HookDecision]: ...
+    async def handle(self, event: HookEvent, payload: dict[str, Any]) -> HookDecision | None: ...
 
 
-__all__ = ["HookEvent", "HookDecision", "HookHandler", "HookSinkProtocol"]
+__all__ = ["HookDecision", "HookEvent", "HookHandler", "HookSinkProtocol"]

@@ -23,7 +23,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping
 
-from skeleton.battery_compaction import SimpleCompactionBattery  # ← ÚNICO import de la battery
+from skeleton.battery_compaction import (
+    SimpleCompactionBattery,  # ← ÚNICO import de la battery
+)
 from skeleton.contracts import (
     CompactBoundaryEvent,
     Event,

@@ -1,11 +1,12 @@
 """Tests para runtime/models/caller.py — ModelCallerProtocol, ModelRequest."""
 import inspect
+from dataclasses import FrozenInstanceError
+
 import pytest
 
+from agentic_runtime.events import DoneEvent, TokenEvent
 from agentic_runtime.models import ModelCallerProtocol, ModelRequest
 from agentic_runtime.models.protocol import ModelOptions
-from agentic_runtime.events import DoneEvent, TokenEvent
-
 
 # ---------------------------------------------------------------------------
 # ModelRequest es frozen
@@ -13,7 +14,8 @@ from agentic_runtime.events import DoneEvent, TokenEvent
 
 def test_model_request_is_frozen():
     req = ModelRequest(messages=[{"role": "user", "content": "hi"}], tools=[], model_id="gpt-4.1")
-    with pytest.raises(Exception):
+    # `FrozenInstanceError`, no `Exception`: ver la nota en `test_events.py`.
+    with pytest.raises(FrozenInstanceError):
         req.model_id = "other"  # type: ignore
 
 

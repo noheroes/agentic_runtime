@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 # La capa plan-file (token + lectura vía storage inyectado) vive en un módulo hoja para que tanto
 # esta tool como el `PlanModeProvider` la importen sin ciclo. Re-exportados aquí por compat.
-from ...capabilities.plan.plan_file import (  # noqa: F401
+from ...capabilities.plan.plan_file import (
     _PLAN_EXIT_PENDING_KEY,
     _PLAN_FULL_SHOWN_KEY,
     _PLAN_KEY,
@@ -124,7 +124,7 @@ User: "What files handle routing?"
 than to redo work
 - Users appreciate being consulted before significant changes are made to their codebase
 """
-    input_schema = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.SYSTEM
     requires_permission = False
     safe_for_background = False
@@ -155,7 +155,7 @@ than to redo work
     def is_enabled(self) -> bool:
         return self._interactive
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         # El discriminador de subagente es `is_subagent`, no `agent_id` (que también se
         # asigna al contexto raíz como identidad). Mismo criterio que el resto del runtime
         # (resolver/agent_loop/runtime). Canónico: EnterPlanMode es root-only.
@@ -164,7 +164,7 @@ than to redo work
                 self.name, "EnterPlanMode cannot be used inside a subagent."
             )
 
-        def modifier(c: "ToolUseContext") -> "ToolUseContext":
+        def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native[_PLAN_MODE_KEY] = True
             # Reinicia la cadencia: la primera iteración del nuevo plan mode rinde el reminder full.
             c.app_state.native.pop(_PLAN_FULL_SHOWN_KEY, None)
@@ -225,7 +225,7 @@ approach.
     # Sin arg `plan`: el plan se lee del plan-file (fuente de verdad que el modelo escribió durante
     # plan mode). Homólogo de `ExitPlanModeV2Tool` (inputSchema interno sin `plan`, plan leído de
     # disco vía `getPlan`). Schema vacío = el modelo lo llama sin argumentos.
-    input_schema = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.SYSTEM
     requires_permission = False
     safe_for_background = False
@@ -239,7 +239,7 @@ approach.
     def is_enabled(self) -> bool:
         return self._interactive
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         plan = await get_plan(ctx)
         if not plan or not plan.strip():
             return ToolResult.error(
@@ -249,7 +249,7 @@ approach.
             )
         plan = plan.strip()
 
-        def modifier(c: "ToolUseContext") -> "ToolUseContext":
+        def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native.pop(_PLAN_MODE_KEY, None)
             c.app_state.native.pop(_PLAN_FULL_SHOWN_KEY, None)
             # Cachea el plan leído del plan-file para el one-shot de salida del provider (sync),

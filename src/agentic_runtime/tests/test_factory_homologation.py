@@ -18,7 +18,6 @@ from agentic_runtime.factory import (
     create_runtime,
 )
 
-
 # --------------------------------------------------------------------------
 # Deuda A propia de 18
 # --------------------------------------------------------------------------
@@ -31,7 +30,9 @@ from agentic_runtime.factory import (
     "Passing = fail-fast al ensamblar (RuntimeConfigError).",
 )
 def test_create_runtime_fails_fast_without_model_caller(tmp_path):
-    from agentic_runtime.factory import RuntimeConfigError  # aún no existe → parte del target
+    from agentic_runtime.factory import (
+        RuntimeConfigError,  # aún no existe → parte del target
+    )
 
     with pytest.raises(RuntimeConfigError):
         create_runtime(config=RuntimeConfig(

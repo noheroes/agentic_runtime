@@ -1,11 +1,11 @@
 """Tests para runtime/capabilities/ — CapabilitiesResolver."""
 import asyncio
+
 import pytest
 
 from agentic_runtime.capabilities import CapabilitiesResolver, ResolvedCapabilities
-from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 from agentic_runtime.context.tool_use import ToolUseContext
-
+from agentic_runtime.tools import ToolCategory, ToolRegistry, ToolResult
 
 # ---------------------------------------------------------------------------
 # Stub tools
@@ -14,7 +14,7 @@ from agentic_runtime.context.tool_use import ToolUseContext
 class NativeTool:
     name = "native_tool"
     description = "A native tool"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True
@@ -27,7 +27,7 @@ class NativeTool:
 class PermissionedNativeTool:
     name = "permissioned_native"
     description = "Requires permission"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.SYSTEM
     requires_permission = True
     safe_for_background = True
@@ -153,7 +153,9 @@ async def test_resolver_without_skill_catalog():
 
 def test_resolver_does_not_import_skills_module():
     # importar capabilities no debe traer skills.* en su source
-    import agentic_runtime.capabilities as caps_module
     import inspect
+    from pathlib import Path
+
+    import agentic_runtime.capabilities as caps_module
     source_file = inspect.getfile(caps_module)
-    assert "skills" not in open(source_file).read()
+    assert "skills" not in Path(source_file).read_text()

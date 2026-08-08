@@ -1,9 +1,9 @@
-from .status import TaskStatus
 from .registry import InMemoryTaskRegistry, TaskRecord, TaskRegistryProtocol
+from .status import TaskStatus
 
 __all__ = [
     "InMemoryTaskRegistry",
-    "TaskStatus",
     "TaskRecord",
     "TaskRegistryProtocol",
+    "TaskStatus",
 ]

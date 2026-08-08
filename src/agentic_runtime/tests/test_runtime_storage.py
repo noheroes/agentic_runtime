@@ -1,10 +1,9 @@
 """Tests para runtime/storage/ — StorageProtocol, FilesystemStorage, StorageRegistry."""
 import pytest
 
-from agentic_runtime.storage import StorageProtocol, StorageKeys, StorageRegistry
-from agentic_runtime.storage.filesystem import FilesystemStorage
 from agentic_runtime.contracts.identity import Scope
-
+from agentic_runtime.storage import StorageKeys, StorageProtocol, StorageRegistry
+from agentic_runtime.storage.filesystem import FilesystemStorage
 
 # ---------------------------------------------------------------------------
 # FilesystemStorage roundtrip

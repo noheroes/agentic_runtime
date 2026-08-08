@@ -181,7 +181,7 @@ def test_provider_uses_server_timeout_for_tools():
 class _NativeTool:
     name = "read"
     description = "native"
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True

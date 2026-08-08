@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
+from typing import Any, ClassVar
 
 from agentic_runtime import (
     AppState,
@@ -11,15 +11,15 @@ from agentic_runtime import (
     ToolUseContext,
     apply_context_modifier_compat,
     assemble_tool_pool,
-    sync_session_from_tool_use_context,
     collect_compaction_context,
+    sync_session_from_tool_use_context,
     tool_use_context_from_session,
 )
 from agentic_runtime.tools.protocol import ToolCategory, ToolResult
 
 
 class _FakeTool:
-    input_schema: dict = {}
+    input_schema: dict = {}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission: bool = False
     safe_for_background: bool = True
@@ -115,9 +115,9 @@ def test_runtime_contract_modules_do_not_import_skill_or_mcp_packages():
 
 def test_session_adapter_builds_tool_use_context_without_provider_state():
     class _Metadata:
-        permission_grants = ["read_file"]
-        invoked_skills = ["drawio-diagrams"]
-        discovered_deferred_tools = ["drawio__create_drawio_diagram"]
+        permission_grants: ClassVar[list[Any]] = ["read_file"]
+        invoked_skills: ClassVar[list[Any]] = ["drawio-diagrams"]
+        discovered_deferred_tools: ClassVar[list[Any]] = ["drawio__create_drawio_diagram"]
 
     class _Session:
         session_id = "s1"
@@ -142,7 +142,7 @@ def test_session_adapter_builds_tool_use_context_without_provider_state():
 
 def test_sync_session_from_tool_use_context_updates_legacy_permission_grants():
     class _Metadata:
-        permission_grants = []
+        permission_grants: ClassVar[list[Any]] = []
 
     class _Session:
         metadata = _Metadata()
@@ -158,7 +158,7 @@ def test_sync_session_from_tool_use_context_updates_legacy_permission_grants():
 
 def test_apply_context_modifier_compat_supports_new_tool_use_context_modifiers():
     class _Metadata:
-        permission_grants = []
+        permission_grants: ClassVar[list[Any]] = []
 
     class _Session:
         metadata = _Metadata()
@@ -179,7 +179,7 @@ def test_apply_context_modifier_compat_supports_new_tool_use_context_modifiers()
 
 def test_apply_context_modifier_compat_supports_legacy_session_modifiers():
     class _Metadata:
-        permission_grants = []
+        permission_grants: ClassVar[list[Any]] = []
 
     class _Session:
         metadata = _Metadata()

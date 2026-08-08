@@ -43,7 +43,7 @@ Usage:
 - Patterns match within a single line only
 - Results are capped at 250 matching lines by default: use a more specific pattern or path,
   `offset` to paginate, or `head_limit=0` for everything (sparingly — it costs context)"""
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "pattern": {"type": "string"},
@@ -68,7 +68,7 @@ Usage:
     safe_for_background = True
     timeout_seconds = 15.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         try:
             base = ctx.fs.resolve(input.get("path", "."), for_write=False)
         except PathOutsideWorkspace as exc:
@@ -106,5 +106,5 @@ Usage:
             return ToolResult(tool_name=self.name, output=output)
         except re.error as exc:
             return ToolResult.error(self.name, f"invalid regex: {exc}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — tras `re.error`: cualquier otro fallo también vuelve al modelo
             return ToolResult.error(self.name, str(exc))

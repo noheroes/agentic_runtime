@@ -41,14 +41,14 @@ class CapabilityManager:
         for provider in self._providers:
             await provider.shutdown()
 
-    def catalog(self, context: "ToolUseContext") -> list[CapabilitySummary]:
+    def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
         entries: list[CapabilitySummary] = []
         for provider in self._providers:
             entries.extend(provider.catalog(context))
         return entries
 
-    def tools(self, context: "ToolUseContext") -> list["ToolProtocol"]:
-        result: list["ToolProtocol"] = []
+    def tools(self, context: ToolUseContext) -> list[ToolProtocol]:
+        result: list[ToolProtocol] = []
         seen: set[str] = set()
         for provider in self._providers:
             for tool in provider.tools(context):
@@ -60,9 +60,9 @@ class CapabilityManager:
 
     def build_tool_pool(
         self,
-        native_tools: list["ToolProtocol"],
-        context: "ToolUseContext",
-    ) -> "ToolPool":
+        native_tools: list[ToolProtocol],
+        context: ToolUseContext,
+    ) -> ToolPool:
         """Punto de convergencia native + capability — el resultado que el runtime consume.
 
         Es el análogo de `assembleToolPool(permissionContext, mcpTools)` del canónico: el
@@ -78,7 +78,7 @@ class CapabilityManager:
             capability_tools=self.tools(context),
         )
 
-    def system_prompt_sections(self, context: "ToolUseContext") -> list[str]:
+    def system_prompt_sections(self, context: ToolUseContext) -> list[str]:
         """Secciones de system prompt aportadas por los providers, en orden de registro.
 
         Tolerante con terceros: un provider que no implemente `system_prompt_section`
@@ -95,13 +95,13 @@ class CapabilityManager:
                 sections.append(section)
         return sections
 
-    def active_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         for provider in self._providers:
             messages.extend(provider.active_context(context))
         return messages
 
-    def compact_context(self, context: "ToolUseContext") -> list[dict[str, Any]]:
+    def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         for provider in self._providers:
             messages.extend(provider.compact_context(context))

@@ -54,7 +54,7 @@ def _validate_slug(name: str) -> str | None:
 
 
 async def _run(
-    ctx: "ToolUseContext", argv: list[str], *, cwd: str, timeout: float
+    ctx: ToolUseContext, argv: list[str], *, cwd: str, timeout: float
 ) -> tuple[int, str]:
     """Lanza `argv` por el `ToolExecEnvironment` inyectado. Devuelve (rc, salida combinada).
 
@@ -113,7 +113,7 @@ specifically mention worktrees
 
 - `name` (optional): A name for the worktree. If not provided, a random name is generated.
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "name": {
@@ -131,7 +131,7 @@ specifically mention worktrees
     safe_for_background = False
     timeout_seconds = 30.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         # Esta tool SIEMPRE lanza git; sin costura de ejecución no hay nada que hacer.
         try:
             require_exec_env(ctx)
@@ -173,7 +173,7 @@ specifically mention worktrees
 
         shown = ctx.presentation.to_llm(worktree_path)
 
-        def modifier(c: "ToolUseContext") -> "ToolUseContext":
+        def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native[_WORKTREE_KEY] = {
                 "path": str(worktree_path),
                 "relative": relative,
@@ -232,7 +232,7 @@ with the user before re-invoking with `discard_changes: true`.
 - Restores the session's working directory to where it was before EnterWorktree
 - Once exited, EnterWorktree can be called again to create a fresh worktree
 """
-    input_schema = {
+    input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -255,7 +255,7 @@ with the user before re-invoking with `discard_changes: true`.
     safe_for_background = False
     timeout_seconds = 30.0
 
-    async def execute(self, input: dict[str, Any], ctx: "ToolUseContext") -> ToolResult:
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         session = ctx.app_state.native.get(_WORKTREE_KEY)
         if not session:
             return ToolResult.error(self.name, "Not currently in a worktree session.")
@@ -298,7 +298,7 @@ with the user before re-invoking with `discard_changes: true`.
                     ctx, ["git", "branch", "-D", branch], cwd=root, timeout=self.timeout_seconds
                 )
 
-        def modifier(c: "ToolUseContext") -> "ToolUseContext":
+        def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native.pop(_WORKTREE_KEY, None)
             return c
 

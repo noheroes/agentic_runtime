@@ -6,8 +6,8 @@ from .local.notification import (
     drain_notifications,
     put_notification,
 )
-from .runner import LocalSubagentRunner, SubagentRunnerProtocol, SubagentSpec
 from .local.summarizer import summarize_if_needed
+from .runner import LocalSubagentRunner, SubagentRunnerProtocol, SubagentSpec
 
 __all__ = [
     "BackgroundNotification",

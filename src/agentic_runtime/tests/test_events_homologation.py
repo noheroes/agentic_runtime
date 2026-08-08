@@ -76,7 +76,7 @@ def _make_caller(*events):
 class RecordingTool:
     name = "echo"
     description = "Echoes input"
-    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}
+    input_schema: dict = {"type": "object", "properties": {"text": {"type": "string"}}}  # noqa: RUF012
     category = ToolCategory.UTILITY
     requires_permission = False
     safe_for_background = True

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Awaitable, Callable, Type, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from .protocol import Event, EventHandler
 
@@ -20,10 +21,10 @@ class EventBus:
     """
 
     def __init__(self) -> None:
-        self._handlers: dict[Type[Event], list[EventHandler]] = defaultdict(list)
+        self._handlers: dict[type[Event], list[EventHandler]] = defaultdict(list)
         self._global_handlers: list[EventHandler] = []
 
-    def subscribe(self, event_type: Type[T], handler: Callable[[T], Awaitable[None]]) -> None:
+    def subscribe(self, event_type: type[T], handler: Callable[[T], Awaitable[None]]) -> None:
         # El registro es homogéneo en runtime (se invoca por tipo exacto); el cast
         # implícito a EventHandler es seguro porque `emit` solo entrega `event_type`.
         self._handlers[event_type].append(handler)  # type: ignore[arg-type]
