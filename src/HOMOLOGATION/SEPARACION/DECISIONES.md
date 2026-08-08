@@ -464,3 +464,29 @@ siguientes — **entra con su caso de efecto y su caso de conducción, o no entr
   temprano aunque su número diga otra cosa.
 - **Dónde se aplica:** `SEPARACION/VALIDACION-AGENTIC-CODE.md` (método + listado + cola de ataque),
   que pasa a ser el guion vivo junto a `TRAMO-1.md`.
+
+### Adenda a `D-15` (2026-08-08, 21ª ventana) — el paso (3) es PUERTA DE CIERRE, no intención
+
+**Motivo de la adenda: la incumplí.** El usuario lo tuvo que repetir al cierre de la 21ª («conforme
+se vayan cerrando ajustes en `agentic_runtime` y `agentic_models` hay que cablearlos en
+`agentic_code`, para poder probarlos; una prueba manual real es más enriquecedora que sólo pruebas
+sintéticas»). No es una decisión nueva —es literalmente el paso (3) de `D-15`— y llevaba varias
+ventanas sin aplicarse. `FIND-CODE-SKILL-1` no es un hallazgo: es el **residuo acumulado** de no
+aplicarla, y de ahí que `agentic_code` no tenga hoy ni una referencia a skills ni a subagentes.
+
+- **Alcance: TRES repos, no dos.** Vale igual para `agentic_runtime` **y `agentic_models`**. Lo que
+  se cierra en cualquiera de los dos núcleos se cablea en `agentic_code`.
+- **La regla, ahora como puerta:** una capacidad **no se declara cerrada** en la ventana que la paga
+  si el consumidor real no la ejercita. Test verde del propio sujeto ≠ cerrada. Mientras no haya
+  cableado, el rótulo honesto es 🟡 con la carencia nombrada, nunca ✅.
+- **El criterio de cierre es el `.jsonl`, no que compile.** Ya está en `D-15`: la traza real es lo
+  único que alcanza a lo que ningún unitario ve. Un cableado que no se puede ver operar en una
+  sesión real no ha cerrado el ciclo de cuatro pasos, lo ha dejado en tres.
+- **Por qué la prueba manual real gana, dicho por el usuario y ya evidenciado varias veces en este
+  esfuerzo:** el test sintético mide lo que yo pensé al escribirlo; la sesión real mide lo que el
+  sistema hace. Las cuatro inyecciones NACIDAS VERDES de la 21ª son exactamente eso — tests que
+  pasaban sin medir nada. La operación real no tiene esa forma de mentir.
+- **Lo que la adenda NO deroga:** el encuadre vinculante sigue intacto — **el núcleo se mantiene
+  GENÉRICO y el integrador se adapta a él, nunca al revés**. Cablear en `agentic_code` no es licencia
+  para doblar el runtime hacia el integrador. Y `D-08` sigue mandando: el consumidor DETECTA, el
+  canónico DICTA.
