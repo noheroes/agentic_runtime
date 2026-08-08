@@ -351,8 +351,10 @@ es el punto exacto que cambia.
 **Deuda cero neta por diff**, medida contra el árbol sin el arreglo, no contra una cifra recordada:
 `ruff` 510 → 510 (los 2 `RUF012` que introduje se limpiaron con `ClassVar`), `mypy --strict` 135/52.
 
-**No pagado y dicho — `FIND-PLAN-FILE-1`:** el apagado headless saca a plan mode de la medición, pero
-**no cablea el plan-file**. Con un host interactivo, `provider.py:41` sigue ordenando escribir en
+**No pagado y dicho — `FIND-PLAN-FILE-1`, y ES LO SIGUIENTE, no un ítem más de la cola:** el apagado
+headless saca a plan mode de la medición, pero **no cablea el plan-file**. Hasta hoy era latente porque
+`ExitPlanMode` era inalcanzable en la práctica; con `ToolsConfig.interactive` **basta que un host declare
+`True` para que pase a fallo ACTIVO**, y su habilitador es `FIND-CODE-HITL-1`, que va antes o a la vez. Con un host interactivo, `provider.py:41` sigue ordenando escribir en
 `/plans/plan.md` y `is_session_plan_file` (`plan_file.py:58-63`) no tiene consumidor fuera de tests en
 ninguno de los dos repos. Queda abierto y nombrado, no cerrado por efecto lateral.
 
