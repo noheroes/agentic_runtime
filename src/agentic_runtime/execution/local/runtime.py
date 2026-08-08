@@ -501,6 +501,11 @@ class LocalAgentRuntime:
                 max_turns=task.max_turns,
                 system_prompt_override=system_prompt_override,
                 agent_allowed_tools=agent_allowed_tools,
+                # `FIND-AGENT-LIST-1`: el mismo resolver, ahora también para ENUMERAR el
+                # catálogo y anunciárselo al modelo. Va en TODO loop, no sólo en la raíz:
+                # el canónico lo cablea en `allThreadAttachments` (`attachments.ts:851-853`),
+                # así que un subagente que puede lanzar subagentes también recibe el listado.
+                agent_resolver=self._agent_resolver,
             )
 
             # Hooks de inicio de run per-request del consumidor — SOLO en la raíz (los

@@ -25,14 +25,27 @@ class SkillFrontmatter(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
+    #: Nombre de PRESENTACIÓN, nunca identidad (`FIND-SKILL-20`): el canónico lo mete en
+    #: `displayName` y sólo lo lee `userFacingName()` (`loadSkillsDir.ts:238-239`,
+    #: `:337-339`). La identidad es el nombre del directorio (`:452`).
     name: str | None = None
     description: str | None = None
+    #: `when_to_use` del canónico (`loadSkillsDir.ts:252`): CUÁNDO usar la skill. Se
+    #: concatena a la descripción en el listado (`SkillTool/prompt.ts:43-50`).
+    when_to_use: str | None = None
     allowed_tools: list[str] = Field(default_factory=list, alias="allowed-tools")
     model: str | None = None
     enabled: bool = True
+    #: `disable-model-invocation` (`loadSkillsDir.ts:255-257`): la skill sigue siendo del
+    #: usuario (`/nombre`) pero el MODELO no la ve ni puede invocarla. Distinto de
+    #: `enabled: false`, que la retira para todos.
+    disable_model_invocation: bool = Field(default=False, alias="disable-model-invocation")
+    #: `arguments` (`loadSkillsDir.ts:249-251`): nombres POSICIONALES para los placeholders
+    #: `$nombre` del cuerpo. Lista o cadena separada por espacios; vacío = sólo indexados.
+    arguments: list[str] = Field(default_factory=list)
     version: str = ""
 
-    @field_validator("name", "description", "model", mode="before")
+    @field_validator("name", "description", "when_to_use", "model", mode="before")
     @classmethod
     def _coerce_optional_str(cls, value: object) -> str | None:
         # Un valor no-string (p.ej. `name: [x]`) degrada a None, no a error de tipo.
@@ -49,6 +62,28 @@ class SkillFrontmatter(BaseModel):
         if isinstance(value, str):
             return value.strip().lower() not in {"false", "0", "no"}
         return True
+
+    @field_validator("disable_model_invocation", mode="before")
+    @classmethod
+    def _coerce_disable_model_invocation(cls, value: object) -> bool:
+        # Espejo EXACTO de `parseBooleanFrontmatter` (`frontmatterParser.ts:332-334`):
+        # sólo `true` literal (bool o string) activa. La asimetría con `enabled` —que
+        # degrada a habilitado— es deliberada y es la misma que la de A: el default
+        # seguro de una RESTRICCIÓN es no restringir, el de una PUBLICACIÓN es publicar.
+        return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _coerce_arguments(cls, value: object) -> list[str]:
+        # Delegado en el mismo parser que usa A (`parseArgumentNames`), para que el
+        # descarte de vacíos y numéricos puros viva en UN sitio y no en dos.
+        from .arguments import parse_argument_names
+
+        if isinstance(value, str):
+            return parse_argument_names(value)
+        if isinstance(value, list):
+            return parse_argument_names([str(v) for v in value])
+        return []
 
     @field_validator("version", mode="before")
     @classmethod

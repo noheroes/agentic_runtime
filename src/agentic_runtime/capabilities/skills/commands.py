@@ -62,7 +62,11 @@ def process_slash_command(
     from .skill_tool import build_skill_context_modifier, render_skill
 
     build_skill_context_modifier(skill)(ctx)  # muta ctx in-place: activa la skill
-    return render_skill(skill)
+    # `parsed.args` es `""` cuando el usuario escribe `/skill` a secas, y eso es
+    # significativo: A distingue «sin argumentos» (vacía los placeholders, no apendiza)
+    # de «no se pasaron» (`undefined`, contenido intacto). Por esta vía SIEMPRE hay
+    # cadena, luego nunca es `None` (`LAT-SKILL1`).
+    return render_skill(skill, parsed.args, session_id=ctx.session_id)
 
 
 __all__ = ["SlashCommand", "parse_slash_command", "process_slash_command"]

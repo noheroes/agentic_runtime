@@ -21,6 +21,11 @@ class CapabilitySummary(BaseModel):
     when_to_use: str = ""
     provider: str = ""
     deferred: bool = False
+    #: Ámbito de origen declarado por el provider (`SettingSource` del canónico:
+    #: managed/user/project/bundled/…). Passthrough OPACO: el runtime NO interpreta la
+    #: taxonomía del host salvo en el único punto en que A la interpreta — las entradas
+    #: `bundled` quedan exentas del recorte del listado (`SkillTool/prompt.ts:97`).
+    source: str = ""
 
 
 class CapabilityActivation(BaseModel):

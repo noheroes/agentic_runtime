@@ -29,12 +29,25 @@ class AgentTool:
     #   · la continuación vía `SendMessage` (`:267`): esa tool no está en el censo de B
     #   · el `concurrencyNote` por tipo de suscripción (`:245-249`)
     #
-    # ⚠ HUECO CONOCIDO Y NO TAPADO AQUÍ: el `agentListSection` (`:196-199`), que es lo
-    # único que le dice al modelo QUÉ subagentes existen. B no tiene ni la enumeración
-    # ni el listado, y por eso NO se escribe aquí la frase de A «Available agent types
-    # are listed in <system-reminder> messages»: en B sería FALSA. Es `FIND-AGENT-LIST-1`
-    # y se paga entero y aparte; taparlo con una frase sería fabricar una coartada.
+    # `agentListSection` (`:196-199`) — `FIND-AGENT-LIST-1` PAGADO. A resuelve el listado
+    # por una de DOS vías y la elige `shouldInjectAgentListInMessages()` (`:52-58`): inline
+    # en esta descripción, o por `<system-reminder>` con la frase de abajo. B toma la
+    # segunda. B implementa por tanto la rama `listViaAttachment` de A, no una vía inventada
+    # — pero la rama que A trae por DEFECTO es la otra (`getFeatureValue(..., false)`), así
+    # que la elección se justifica o no vale:
+    #   · En A la descripción es un ACCESSOR (`prompt()`) evaluado por llamada; en B es un
+    #     atributo que cada consumidor lee directo (la asimetría que ya dictó `FIND-DEFER-2`).
+    #   · Y la instancia de la tool la comparten TODAS las sesiones del runtime, que es
+    #     multi-sesión por arquitectura donde A es single-user global. Recomponer el atributo
+    #     por turno filtraría el catálogo de una sesión al schema de otra. La vía inline no es
+    #     «más trabajo» en B: es incorrecta mientras la tool sea compartida.
+    #   · La razón que A escribe para su propia vía de attachment (`:48-58`) apunta al mismo
+    #     sitio: un catálogo que muta invalida la caché del schema entero.
+    # La frase de abajo sólo es legítima porque B EMITE el anuncio: `tools/agent_listing_delta.py`
+    # + `AgentLoop._announce_agent_listing`. Si dejara de emitirse, hay test que se pone rojo.
     description = """Launch a new agent to handle complex, multi-step tasks autonomously.
+
+Available agent types are listed in <system-reminder> messages in the conversation.
 
 The Agent tool launches specialized agents (subprocesses) that autonomously handle complex tasks. \
 Each agent type has specific capabilities and tools available to it.

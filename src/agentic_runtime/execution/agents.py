@@ -4,13 +4,17 @@ from __future__ import annotations
 from ..contracts.agents import (
     INHERIT,
     AgentDefinition,
+    AgentDefinitionCatalog,
     AgentDefinitionResolver,
+    enumerate_agent_definitions,
     resolve_subagent_model,
 )
 
 __all__ = [
     "INHERIT",
     "AgentDefinition",
+    "AgentDefinitionCatalog",
     "AgentDefinitionResolver",
+    "enumerate_agent_definitions",
     "resolve_subagent_model",
 ]

@@ -14,6 +14,7 @@ padre por defecto, como `getAgentModel` (cuyo default `getDefaultSubagentModel()
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -60,6 +61,33 @@ class AgentDefinitionResolver(Protocol):
     def resolve(self, subagent_type: str) -> AgentDefinition | None: ...
 
 
+@runtime_checkable
+class AgentDefinitionCatalog(Protocol):
+    """ENUMERA el catálogo de subagentes (espejo de `agentDefinitions.activeAgents`).
+
+    Va aparte de `AgentDefinitionResolver` a propósito: añadirle un método a un Protocol
+    `runtime_checkable` ya publicado rompería el `isinstance` de todo host que ya lo
+    implemente, que es exactamente la razón por la que `tool_is_enabled` quedó como
+    helper y no como miembro del `ToolProtocol` (`FIND-POOL-1`). Un host que sólo resuelve
+    sigue siendo válido: entonces no hay listado y se dice, no se inventa."""
+
+    def list_agents(self) -> Sequence[AgentDefinition]: ...
+
+
+def enumerate_agent_definitions(resolver: object | None) -> tuple[AgentDefinition, ...]:
+    """Catálogo del host, o vacío si su resolver no sabe enumerar.
+
+    Sin esto el runtime tiene la LLAVE (`resolve`) y ningún modo de saber qué llaves
+    existen — el hueco de `FIND-AGENT-LIST-1`. El helper es el único punto que decide si
+    un host enumera, y devuelve tupla para que el llamante no pueda mutar el catálogo."""
+    if resolver is None:
+        return ()
+    lister = getattr(resolver, "list_agents", None)
+    if not callable(lister):
+        return ()
+    return tuple(lister())
+
+
 def resolve_subagent_model(
     agent_model: str | None, parent_model: str, model_override: str | None = None
 ) -> str:
@@ -78,6 +106,8 @@ def resolve_subagent_model(
 __all__ = [
     "INHERIT",
     "AgentDefinition",
+    "AgentDefinitionCatalog",
     "AgentDefinitionResolver",
+    "enumerate_agent_definitions",
     "resolve_subagent_model",
 ]

@@ -10,7 +10,9 @@ from .abort import AbortController, AbortReason, AbortSignal
 from .agents import (
     INHERIT,
     AgentDefinition,
+    AgentDefinitionCatalog,
     AgentDefinitionResolver,
+    enumerate_agent_definitions,
     resolve_subagent_model,
 )
 from .compaction import CompactionProvider, collect_compaction_context
@@ -47,6 +49,7 @@ __all__ = [
     "AbortReason",
     "AbortSignal",
     "AgentDefinition",
+    "AgentDefinitionCatalog",
     "AgentDefinitionResolver",
     "AgentRuntime",
     "AudioInput",
@@ -80,5 +83,6 @@ __all__ = [
     "Usage",
     "UserInputProcessor",
     "collect_compaction_context",
+    "enumerate_agent_definitions",
     "resolve_subagent_model",
 ]

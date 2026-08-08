@@ -20,6 +20,10 @@ import asyncio
 
 import pytest
 
+from agentic_runtime.capabilities.skill_listing_delta import (
+    SKILL_LISTING_KEY,
+    compute_skill_listing_delta,
+)
 from agentic_runtime.capabilities.skills import (
     SkillDefinition,
     SkillsProvider,
@@ -192,8 +196,8 @@ def test_store_backed_roundtrip_and_unregister():
 # Gaps FIND-SKILL — xfail(strict): fallan HOY, su fallo ES la evidencia
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="FIND-SKILL2: when_to_use separado de description")
 def test_when_to_use_separate_from_description():
+    """`FIND-SKILL2` (parte `when_to_use`) — PAGADO en la 21ª ventana. Era xfail(strict)."""
     skill = load_skill_text("a", "---\ndescription: D\nwhen_to_use: usar cuando X\n---\nbody")
     assert skill.when_to_use == "usar cuando X"
     assert skill.description == "D"
@@ -216,11 +220,20 @@ def test_two_enablement_axes_orthogonal():
     assert skill.is_hidden is True
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-SKILL4: substitución de $ARGUMENTS/$1/${CLAUDE_SKILL_DIR}")
 def test_render_substitutes_arguments_and_vars():
+    """`FIND-SKILL4` — PAGADO en la 21ª ventana (`LAT-SKILL1` + las dos variables).
+
+    ⚠ Este xfail rotulaba `${CLAUDE_SKILL_DIR}` y **no lo aseveraba**: al XPASSar por el
+    pago de los args habría acreditado en falso unas variables que B no sustituía en
+    ningún sitio (`H-L4`). La aserción se completa aquí; el detalle vive en
+    `test_skill_arguments.py`.
+    """
     skill = load_skill_text("a", "---\narguments: [name]\n---\nHola $name / $ARGUMENTS")
-    rendered = render_skill(skill, "Ruben")  # render_skill(skill) es la firma actual (1 arg)
+    rendered = render_skill(skill, "Ruben")
     assert "Hola Ruben" in rendered and "$ARGUMENTS" not in rendered
+
+    con_vars = load_skill_text("b", "---\ndescription: d\n---\nS=${CLAUDE_SESSION_ID}")
+    assert "S=s-7" in render_skill(con_vars, "", session_id="s-7")
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-SKILL5 (=GAP-SKILL1/Deuda-B): gate de permisos ausente")
@@ -247,15 +260,34 @@ def test_context_modifier_applies_model_and_effort():
     assert ctx.app_state.effort_value == "high"
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-SKILL9/17: skill_listing incremental por-agente + budget")
 def test_skill_listing_incremental_per_agent():
+    """`FIND-SKILL9/17` — PAGADO en la 21ª ventana, y el xfail estaba mal escrito.
+
+    ⚠ `H-L4`: aseveraba una FIRMA (`prov.skill_listing(ctx)`, un método del provider) y
+    seguía rojo por el NOMBRE mientras la capacidad ya existía por otra costura —el loop,
+    que es el único punto por el que pasan hilo principal y subagentes. Un xfail así
+    acredita en falso en las dos direcciones: rojo cuando está pagado, y verde en cuanto
+    alguien añada el método aunque no anuncie nada.
+
+    Reescrito a CONDUCTA sobre el eje que ningún otro test mide: el scope POR AGENTE
+    (`attachments.ts:2599`). Cada agente reconstruye lo anunciado de SU `ctx.messages`,
+    así que el anuncio del hilo principal no deja mudo al subagente.
+    """
     prov = SkillsProvider()
     prov.add_skill_text("greet", _SKILL_MD)
-    ctx = _ctx(agent_id="A")
-    first = prov.skill_listing(ctx)
-    assert first  # initial batch
-    second = prov.skill_listing(ctx)
-    assert second == []  # ya enviada → sólo deltas
+    entries = [e for e in prov.catalog(_ctx()) if e.kind == "skill"]
+
+    principal: list[dict] = []
+    primero = compute_skill_listing_delta(entries, principal, skill_tool_available=True)
+    assert primero is not None and "greet" in primero.names
+    principal.append({"role": "user", "content": "…", SKILL_LISTING_KEY: {"names": ["greet"]}})
+
+    # mismo agente, segundo turno: ya anunciado → sin delta
+    assert compute_skill_listing_delta(entries, principal, skill_tool_available=True) is None
+
+    # otro agente: historia propia ⇒ recibe su lote inicial completo
+    subagente = compute_skill_listing_delta(entries, [], skill_tool_available=True)
+    assert subagente is not None and "greet" in subagente.names
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-SKILL10: cleanup selectivo por agent + skillPath")
@@ -313,16 +345,42 @@ def test_find_skill_by_alias():
     assert state.get("hi") is not None  # hoy sólo resuelve nombre exacto
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-SKILL17: catalog excluye disable-model-invocation")
 def test_catalog_excludes_disable_model_invocation():
+    """`FIND-SKILL17` — PAGADO en la 21ª ventana. Era xfail(strict)."""
     prov = SkillsProvider()
     prov.add_skill_text("hidden", "---\ndisable-model-invocation: true\n---\nb")
     names = [c.name for c in prov.catalog(_ctx())]
     assert "hidden" not in names
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-SKILL18: prompt de la tool con BLOCKING REQUIREMENT")
+def test_disable_model_invocation_tambien_cierra_la_tool():
+    """Espejo del `errorCode` 4 de `validateInput` (`SkillTool.ts:412-418`).
+
+    ⚠ Sin este test la guarda **no la medía nadie** (`INY-130` salió VERDE al arrancarla):
+    sólo estaba acreditado el filtro del LISTADO. Y filtrar el listado no basta —es lo que
+    dice el propio comentario del fuente—: el modelo puede nombrar la skill igual, porque
+    la vio en un `/comando` del usuario o porque la adivinó.
+
+    Los dos ejes van juntos: cerrada para el MODELO, abierta para el USUARIO.
+    """
+    state = SkillsState()
+    state.set_skill(load_skill_text("hidden", "---\ndescription: d\ndisable-model-invocation: true\n---\ncuerpo"))
+    ctx = _ctx()
+
+    resultado = asyncio.run(SkillTool(state).execute({"command": "hidden"}, ctx))
+    assert resultado.is_error
+    assert "disable-model-invocation" in resultado.output
+
+    # control positivo: la skill EXISTE y está habilitada — el error no es «no encontrada»
+    assert state.get("hidden") is not None
+    assert "no encontrada" not in resultado.output
+
+    # …y sigue siendo del usuario por su vía
+    assert process_slash_command("/hidden", state, ctx) is not None
+
+
 def test_skill_tool_prompt_blocking_requirement():
+    """`FIND-SKILL18` — PAGADO en la 21ª ventana. Era xfail(strict)."""
     assert "BLOCKING REQUIREMENT" in SkillTool(SkillsState()).description
 
 

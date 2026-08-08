@@ -8,7 +8,14 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities.resolver import CapabilitiesResolver
+from ..capabilities.skill_listing_delta import (
+    SKILL_LISTING_KEY,
+    SKILL_TOOL_NAME,
+    compute_skill_listing_delta,
+    render_skill_listing_delta,
+)
 from ..context.tool_use import ToolUseContext
+from ..contracts.agents import enumerate_agent_definitions
 from ..contracts.notifications import NotificationSink, apply_notification
 from ..contracts.user_input import NoopUserInputProcessor, UserInputProcessor
 from ..events.bus import EventBus
@@ -24,7 +31,13 @@ from ..events.event_types import (
 )
 from ..hooks import HookEvent
 from ..models.protocol import ModelCallerProtocol, ModelOptions
+from ..tools.agent_listing_delta import (
+    ANNOUNCED_KEY,
+    compute_agent_listing_delta,
+    render_agent_listing_delta,
+)
 from ..tools.dispatcher import ToolDispatcher
+from ..tools.native.agent import AGENT_TOOL_NAME
 from ..tools.pool import ToolPool
 from .outcome import LoopEndReason, LoopOutcome
 
@@ -106,6 +119,7 @@ class AgentLoop:
         input_processor: UserInputProcessor | None = None,
         notification_sink: NotificationSink | None = None,
         max_turns: int | None = None,
+        agent_resolver: Any | None = None,
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -146,6 +160,10 @@ class AgentLoop:
         # existía en el contrato **sin llegar a ningún sitio** (`05·FIND-EXEC5`). Ahora entra
         # por constructor; `None` = el techo de seguridad por defecto.
         self._max_turns = max_turns if max_turns is not None else _MAX_TURNS
+        # `FIND-AGENT-LIST-1`: el MISMO resolver que traduce `subagent_type`→definición,
+        # aquí para ENUMERAR el catálogo y anunciárselo al modelo. Un host que sólo
+        # implemente `resolve` no enumera y no hay anuncio (ver `enumerate_agent_definitions`).
+        self._agent_resolver = agent_resolver
 
     def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
         """Ensambla el pool del turno (= `assembleToolPool`): native (filtrado por
@@ -160,6 +178,75 @@ class AgentLoop:
         else:
             pool = ToolPool(native_tools=native)
         return self._restrict_to_agent_tools(pool)
+
+    async def _announce_agent_listing(
+        self, ctx: ToolUseContext, published_names: frozenset[str]
+    ) -> None:
+        """Anuncia el catálogo de subagentes al modelo (`FIND-AGENT-LIST-1`).
+
+        Espejo de `getAgentListingDeltaAttachment` (`utils/attachments.ts:1490-1556`), que
+        el canónico cablea en `allThreadAttachments` (`:851-853`) y NO en los del hilo
+        principal: un subagente que puede lanzar subagentes también necesita el listado.
+        Por eso va aquí, en el loop, que es el único punto por el que pasan los dos.
+
+        El mensaje lleva el delta como DATO en el sidecar, además del texto: es lo que
+        permite recomputar sin re-parsear lo rendido (ver `agent_listing_delta`)."""
+        definitions = enumerate_agent_definitions(self._agent_resolver)
+        delta = compute_agent_listing_delta(
+            definitions,
+            ctx.messages,
+            agent_tool_available=AGENT_TOOL_NAME in published_names,
+        )
+        if delta is None:
+            return
+        await self._append(
+            ctx,
+            {
+                "role": "user",
+                "content": _as_reminder(render_agent_listing_delta(delta)),
+                ANNOUNCED_KEY: {
+                    "added_types": list(delta.added_types),
+                    "removed_types": list(delta.removed_types),
+                },
+            },
+            origin="agent_listing_delta",
+        )
+
+    async def _announce_skill_listing(
+        self, ctx: ToolUseContext, published_names: frozenset[str]
+    ) -> None:
+        """Anuncia el catálogo de skills al modelo (`FIND-SKILL9/17`).
+
+        Espejo de `getSkillListingAttachments` (`utils/attachments.ts:2596-2765`). Va en
+        el loop, junto al listado de subagentes, por la misma razón: es el único punto
+        por el que pasan tanto el hilo principal como los subagentes, y en A el
+        `sentSkillNames` está scopeado POR AGENTE (`:2599`, con el comentario que explica
+        que sin ese scope el hilo principal deja a cada subagente con un listado vacío).
+        Aquí el scope sale gratis y es más fuerte: lo anunciado se reconstruye de
+        `ctx.messages`, que ya es propio de cada agente.
+
+        El catálogo se pide al MANAGER, no al provider de skills: cualquier provider que
+        declare `kind="skill"` entra en el listado — incluidas las skills de MCP, que en A
+        se funden con las locales antes de formatear (`:2724-2727`)."""
+        if self._capability_manager is None:
+            return
+        entries = [e for e in self._capability_manager.catalog(ctx) if e.kind == "skill"]
+        delta = compute_skill_listing_delta(
+            entries,
+            ctx.messages,
+            skill_tool_available=SKILL_TOOL_NAME in published_names,
+        )
+        if delta is None:
+            return
+        await self._append(
+            ctx,
+            {
+                "role": "user",
+                "content": _as_reminder(render_skill_listing_delta(delta)),
+                SKILL_LISTING_KEY: {"names": list(delta.names)},
+            },
+            origin="skill_listing_delta",
+        )
 
     def _restrict_to_agent_tools(self, pool: ToolPool) -> ToolPool:
         """Restringe el pool al subconjunto de un subagente especializado (espejo de
@@ -424,9 +511,11 @@ class AgentLoop:
             # derivan de él; la ejecución (dispatcher) resuelve del MISMO pool.
             deferred_names: tuple[str, ...] = ()
             announcements: list[str] = []
+            published_names: frozenset[str] = frozenset()
             if self._tool_registry is not None or self._capability_manager is not None:
                 ctx.tool_pool = self._build_tool_pool(ctx)
                 pool = ctx.tool_pool.assemble(ctx.permission_context)
+                published_names = frozenset(t.name for t in pool)
                 plan = self._resolve_deferred_strategy().prepare_turn(ctx, pool)
                 tool_schemas = plan.tool_schemas
                 deferred_names = plan.deferred_names
@@ -458,6 +547,8 @@ class AgentLoop:
                     {"role": "user", "content": _as_reminder(announcement)},
                     origin="deferred_delta",
                 )
+            await self._announce_agent_listing(ctx, published_names)
+            await self._announce_skill_listing(ctx, published_names)
 
             # Secciones de system prompt aportadas por los providers (memoria, etc.):
             # el runtime las ensambla; el caller las concatena al system prompt base.

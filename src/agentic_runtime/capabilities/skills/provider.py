@@ -135,16 +135,30 @@ class SkillsProvider:
         return None
 
     def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
+        """Catálogo VISIBLE AL MODELO — aquí vive la elegibilidad de `FIND-SKILL17`.
+
+        El predicado de A (`getSkillToolCommands`, `commands.ts:563-581`) mira campos del
+        `Command`, que en B son campos de la `SkillDefinition`, así que el filtro va donde
+        vive el dato y no en el módulo que rinde el listado. Dos criterios:
+
+        - enablement (ya estaba), y
+        - `disable_model_invocation` (`commands.ts:568`), que retira la skill del modelo
+          **sin** retirársela al usuario: sigue siendo invocable por `/nombre`.
+
+        `when_to_use` se emite ya como campo propio; antes se rellenaba con la misma
+        `description`, así que no aportaba nada — era un duplicado con nombre de otro dato.
+        """
         return [
             CapabilitySummary(
                 name=skill.name,
                 kind="skill",
                 description=skill.description,
-                when_to_use=skill.description,
+                when_to_use=skill.when_to_use,
                 provider=self.name,
+                source=skill.source,
             )
             for skill in self._state.all_skills()
-            if self._is_enabled(skill)
+            if self._is_enabled(skill) and not skill.disable_model_invocation
         ]
 
     def tools(self, context: ToolUseContext) -> list[ToolProtocol]:

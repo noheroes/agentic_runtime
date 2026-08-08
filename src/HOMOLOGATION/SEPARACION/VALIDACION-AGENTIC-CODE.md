@@ -551,6 +551,72 @@ sería cableado que parece existir (`L09`). Guion manual `PRUEBAS-MANUALES.md §
 
 ---
 
+## 2 sexies · La pata de skills — `FIND-SKILL9/17`, `-20`, `-21` y `FIND-SKILL2/4/17/18` (21ª ventana)
+
+Todo lo de esta sección es el **mismo patrón único** que el barrido EOF tipificó: *B tiene el dato
+cargado y no lo pone en ninguna lista que el modelo vea*. `SkillsProvider.catalog()` existía, estaba
+probado, y **no lo consumía nadie en producción**: el único `.catalog(` fuera de `capabilities/`
+vivía en ficheros de test. El único camino por el que un nombre de skill alcanzaba al modelo era el
+mensaje de **ERROR** de `skill_tool.py` — o sea, el modelo sólo podía aprender el catálogo
+**fallando primero**, y para fallar tenía que haber adivinado un nombre.
+
+**Corrección de premisa, dicha primero.** El encargo (y esta misma tabla) repetía que A tiene «dos
+vías» para el listado. Es **falso** y lo desmiente el fuente: `SkillTool.getPrompt` no lleva
+listado alguno y `getSessionSpecificGuidanceSection` sólo aporta una viñeta de guía. A tiene **una**
+vía real, el attachment `skill_listing`. La premisa vieja habría hecho fabricar una segunda entrega
+que en A no existe.
+
+**Corrección de inventario, mía.** Abrí `LAT-SKILL1` como latente nuevo. No lo era: es
+`FIND-SKILL4`, que llevaba abierto desde el censo con su `xfail(strict)` puesto. Es la **segunda
+vez** que abro por duplicado algo ya censado (la primera fue `FIND-TOOL-ENABLED-1` sobre
+`FIND-POOL-1`, 18ª ventana). Se unifican bajo `FIND-SKILL4`; el ID `LAT-SKILL1` se conserva en la
+tabla sólo porque los tests y los commits ya lo citan.
+
+### Los tres `xfail` que acreditaban en falso, y el que rotulaba de más
+
+Al pagarse, cuatro `xfail(strict)` se pusieron rojos por **XPASS** — la señal funcionando. Uno de
+ellos, el de `FIND-SKILL4`, **rotulaba `${CLAUDE_SKILL_DIR}` en su `reason` y no lo aseveraba en
+ninguna línea**: retirarlo por XPASS habría dado por pagadas unas variables que B no sustituía en
+ningún sitio. Es `H-L4` en su forma más silenciosa —el rótulo cubriendo más superficie que la
+aserción— y por eso las dos variables (`${CLAUDE_SKILL_DIR}`, `${CLAUDE_SESSION_ID}`,
+`loadSkillsDir.ts:356-369`) se pagaron también, con su guarda de `base_dir` incluida.
+
+Un quinto xfail, `test_skill_listing_incremental_per_agent`, aseveraba una **FIRMA** (`prov.skill_listing(ctx)`,
+un método del provider) y seguía rojo **por el nombre** mientras la capacidad ya existía por otra
+costura. Un xfail así miente en las dos direcciones: rojo cuando está pagado, y verde en cuanto
+alguien añada el método aunque no anuncie nada. Reescrito a conducta sobre el eje que ningún otro
+test medía: el **scope por agente**.
+
+### Acreditación — `INY-120..138`
+
+**19 inyecciones válidas: 15 rojas a la primera, y CUATRO que nacieron VERDES — que son el hallazgo.**
+(`INY-121`, `INY-122`, `INY-130`, `INY-135b`. La cifra se corrige aquí: la primera redacción decía
+TRES y la tabla de abajo ya listaba cuatro — el recuento correcto es el de la tabla.)
+
+| # | Inyección | Resultado |
+|---|---|---|
+| `INY-121` | se arranca la guarda `skill_tool_available` | **VERDE** ⇒ el test montaba un provider con TODAS las skills deshabilitadas: sin tool **y sin catálogo**, el delta salía `None` por «nada que anunciar», no por la guarda. Remontado con catálogo LLENO y la tool fuera del pool (subagente restringido, el caso real) + control positivo ⇒ `INY-121b` roja |
+| `INY-122` | el delta se reconstruye RE-PARSEANDO el texto rendido | **VERDE** ⇒ **dos** tests débiles a la vez: el del sidecar aseveraba que se ESCRIBE, y el defecto está en la LECTURA (mitades independientes); y el de la descripción multilínea usaba `"linea1\nlinea2"`, con la que el re-parseo **converge igual** porque sólo la primera línea empieza por `- `. El caso adversarial de verdad es una descripción con una **viñeta**. Corregidos los dos ⇒ `INY-122b` → 2 rojas |
+| `INY-130` | se arranca la guarda `errorCode`-4 de `SkillTool.execute` | **VERDE** ⇒ sólo estaba acreditado el filtro del LISTADO. Filtrar el listado no basta —lo dice el propio comentario del fuente—: el modelo puede nombrar la skill igual. Test nuevo con los dos ejes (cerrada al modelo, abierta al usuario) ⇒ `INY-130b` roja |
+| `INY-135b` | la sustitución alcanza también el MARCO del runtime | **VERDE** ⇒ el marco no contiene placeholders, así que sustituir de más es **idempotente y no se nota**. La frontera sólo es observable por la rama de apéndice: aplicada al todo, apendiza dos veces y **detrás de la coleta**. Aserción reescrita a eso ⇒ `INY-135c` roja |
+
+Rojas a la primera: `120` (el loop deja de anunciar) · `123` (sin caída a sólo-nombres) · `124`
+(las bundled pierden la exención del recorte) · `125` (sin re-anuncio íntegro tras una baja) ·
+`126` (`when_to_use` no se concatena) · `127` (sin tope de 250) · `128` (`disable-model-invocation`
+deja de filtrar el catálogo) · `129` (`when_to_use` vuelve a duplicar la `description`) · `131` (el
+frontmatter recupera la identidad) · `132` (los args se vuelven a tirar) · `133` (se sustituye
+`${CLAUDE_SKILL_DIR}` sin `base_dir`) · `134` (la tool no pasa el `session_id`) · `136` (last-wins) ·
+`137` (sin dedup por identidad real de fichero) · `138` (el slash command tira sus args).
+
+`INY-135` se **descarta y se dice**: la inyección era sintácticamente inválida y murió en
+colección. Un error de colección no acredita nada — no distingue «el test ve el defecto» de «el
+fichero no importa».
+
+Reversión desde copia propia con `sha256sum -c` → **7 OK** en cada ronda
+(`agent_loop · skill_listing_delta · provider · skill_tool · state · loader · commands`).
+
+---
+
 ## 3 · Cosecha del barrido EOF (10ª ventana) — entra en la misma cola
 
 Hallazgos del barrido del canónico sobre las LISTAS de tools (nativas, MCP diferidas, skills). No los
@@ -560,10 +626,14 @@ produjo `agentic_code`, pero son de la misma familia y se atacan con el mismo in
 |---|---|---|
 | `FIND-DEFER-1` | El delta de diferidas se reconstruye RE-PARSEANDO el texto rendido; un `\n` en el nombre anuncia una tool inexistente, pierde la real y **el delta no converge nunca** | ✅ **PAGADO** (13ª ventana) — saneado en el INGRESO como A, `remote_name` para el transporte; 6 tests nacidos rojos |
 | `FIND-DEFER-2` | Sin cap de descripción de terceros (60 000 ch medidos vs `MAX_MCP_DESCRIPTION_LENGTH = 2048` de A) | ✅ **PAGADO** (14ª ventana) — cap en el constructor de `McpTool`, el único punto que ningún consumidor esquiva; 7 tests nacidos rojos, `INY-65..72` |
-| `FIND-AGENT-LIST-1` | Al modelo no le llega **ningún listado de subagentes**; `AgentDefinition.description` es campo muerto y `AgentDefinitionResolver` **no tiene enumeración** | ⛔ abierto |
-| `FIND-SKILL9/17` | Reclasificado: al modelo **no le llega ningún listado de skills**, por ninguna de las **dos** vías de A (description de `Skill` + attachment `skill_listing` incremental) | ⛔ abierto — **primero de la pata de skills** |
-| `FIND-SKILL-20` | El frontmatter PISA la identidad de la skill (A: siempre el nombre del directorio) | ⛔ abierto |
-| `FIND-SKILL-21` | Sin dimensión de fuente ni precedencia; `last-wins` donde A tiene `first-wins` por identidad de fichero real | ⛔ abierto |
+| `FIND-AGENT-LIST-1` | Al modelo no le llega **ningún listado de subagentes**; `AgentDefinition.description` es campo muerto y `AgentDefinitionResolver` **no tiene enumeración** | ✅ **PAGADO** (21ª ventana) — enumeración + listado por el loop; `INY-109..119` → 11 rojas |
+| `FIND-SKILL9/17` | Al modelo **no le llega ningún listado de skills**. ⚠ **Corrección de premisa**: NO son «dos vías». `SkillTool.getPrompt` no lleva listado y `getSessionSpecificGuidanceSection` sólo lleva una viñeta de guía; A tiene UNA vía real, el attachment `skill_listing` incremental | ✅ **PAGADO** (21ª ventana) — `capabilities/skill_listing_delta.py` + `AgentLoop._announce_skill_listing`, con las 3 ramas de presupuesto y sidecar estructurado; `INY-120..127` |
+| `FIND-SKILL-20` | El frontmatter PISA la identidad de la skill (A: siempre el nombre del directorio) | ✅ **PAGADO** (21ª ventana) — identidad ← directorio, `name:` a `display_name`/`user_facing_name`; `INY-131` |
+| `FIND-SKILL-21` | Sin dimensión de fuente ni precedencia; `last-wins` donde A tiene `first-wins` por identidad de fichero real | ✅ **PAGADO** (21ª ventana) — `source`/`loaded_from` passthrough opaco, `add_skills` first-wins + dedup por identidad real de fichero; `INY-136`/`INY-137` |
+| `FIND-SKILL2` · `FIND-SKILL4` · `FIND-SKILL17` · `FIND-SKILL18` | `when_to_use` fundido con `description` · sin sustitución de argumentos ni variables · `catalog` sin filtro de `disable-model-invocation` · descripción de la tool sin BLOCKING REQUIREMENT | ✅ **PAGADOS** (21ª ventana) — sus `xfail(strict)` se pusieron rojos por **XPASS** al pagarse. ⚠ El de `FIND-SKILL4` **rotulaba `${CLAUDE_SKILL_DIR}` y no lo aseveraba**: retirarlo por XPASS habría acreditado en falso unas variables que B no sustituía en ningún sitio (`H-L4`) — se pagaron también |
+| `LAT-SKILL1` | `SkillTool.input_schema` anuncia `args` y la descripción homologada pone un ejemplo con args; `execute()` los **descartaba en silencio**, igual por la vía del slash command. Un `$ARGUMENTS` de una skill escrita para A se quedaba LITERAL, sin error y sin señal. ⚠ **No era latente nuevo: es `FIND-SKILL4`**, que ya estaba abierto — lo abrí por duplicado y se unifican | ✅ **PAGADO** (21ª ventana) — `capabilities/skills/arguments.py` espejo de `argumentSubstitution.ts`; 30 tests; `INY-132..135c`, `INY-138` |
+| `FIND-E2G-3` **NUEVO** (21ª ventana) | El `E2g` exige el centinela ENTERO (`PADRON-55B48CEFB2`) en la respuesta. Medida una corrida en la que el modelo alcanzó la tool oculta y respondió **`55B48CEFB2`** — los 10 hex inadivinables, o sea la propiedad bajo prueba SÍ se cumplió— y el caso salió rojo por el prefijo literal, que es decoración. Mismo modo de fallo que el confundidor de la «clave» ya documentado en el fuente: rojo por algo que no es la propiedad. Arreglo indicado, **por atrezo y no por listón** (precedente del propio fichero): centinela de UN solo token sin guion, para que citar «el código» obligue a citarlo entero | ⛔ **abierto, NO pagado y dicho.** Fuera del encargo, y el diagnóstico se apoya en **una** observación: cambiar un gate ajeno con n=1 tiene la forma exacta de bajar el listón. Se nombra con su evidencia para que lo pague quien toque `E2g` |
+| `FIND-SKILL-22` **NUEVO** (21ª ventana) | `getPromptForCommand` cierra ejecutando los comandos de shell EMBEBIDOS en el markdown de la skill (`` !`…` ``, `loadSkillsDir.ts:374-396`), con las `allowedTools` de la skill injertadas como reglas de permiso, y **exentando a las de MCP porque son remotas y no confiables**. B no ejecuta nada: el `` !`…` `` se queda literal. No es sólo una capacidad ausente — es una **frontera de confianza** que B no tiene dónde declarar el día que la implemente | ⛔ **abierto, NO pagado y dicho.** Fuera del encargo de la ventana (`L07`: fuera-de-alcance ≠ trocear). Se nombra al descubrirlo, no se difiere en silencio |
 | `FIND-STREAM-1` | **Los 5 campos de identidad del evento llegan VACÍOS al `.jsonl`**: `task_id: ""`, `agent_id: ""`, `session_id: ""`, `seq: 0`, `ts: 0.0`. **Ampliado en la 12ª ventana: es UNIVERSAL** (medido en `ToolCallEvent`, `DoneEvent` y `ToolResultEvent`), no sólo el último; ningún sitio de producción de `src/` poblaba identidad. Sin `seq`/`ts` no se ordena ni se fecha una traza, y sin `task_id`/`agent_id` no se separa agente de subagente. Se pagó con el **#10** (mismo seam) | ✅ **PAGADO** (12ª ventana) |
 | `FIND-POOL-1` | Sin predicado de enablement por tool (`Tool.isEnabled()`); el integrador ha de negar POR NOMBRE, mezclando política con disponibilidad | ✅ **PAGADO** (18ª ventana) — ver **§ 2 quater**. Absorbe el `FIND-TOOL-ENABLED-1` que abrí por duplicado desde el `E2g`; 13 tests nacidos rojos, `INY-73..80` |
 | `FIND-CODE-HITL-1` | `agentic_code` no resuelve ninguna tool de puerta única: el mismo driver headless sirve al REPL y a `--print`, sin detección del `tool_call` ni reinyección de la respuesta | ✅ **PAGADO** (19ª ventana) — `hitl.py` + `repl._resolve_single_door_tools`; `interactive` lo decide el MODO (`not --print`); `INY-94..100` → 7 rojas. Escrito antes que sus tests, dicho |

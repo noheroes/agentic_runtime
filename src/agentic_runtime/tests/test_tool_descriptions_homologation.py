@@ -18,10 +18,12 @@ la vía más fácil de reintroducir ese fallo, porque los prompts de A describen
 """
 from __future__ import annotations
 
+import inspect
 import re
 
 import pytest
 
+from agentic_runtime.loop import agent_loop
 from agentic_runtime.tools.native.agent import AgentTool
 from agentic_runtime.tools.native.config import ConfigTool
 from agentic_runtime.tools.native.plan_mode import EnterPlanModeTool, ExitPlanModeTool
@@ -159,23 +161,41 @@ def test_ninguna_quedo_en_una_linea(cls):
 # Marcadores por tool: que se portó la rama y el contenido que toca
 # ===========================================================================
 
-def test_agent_no_promete_el_listado_de_subagentes_que_b_no_tiene():
-    """`FIND-AGENT-LIST-1` no se tapa con una frase.
+def test_agent_anuncia_el_listado_por_la_via_que_b_emite_de_verdad():
+    """`FIND-AGENT-LIST-1` PAGADO — y la frase sólo vale si el emisor existe.
 
-    A resuelve el listado por una de dos vías (`AgentTool/prompt.ts:196-199`): inline en
-    la descripción, o la frase «Available agent types are listed in <system-reminder>
-    messages» cuando el listado viaja como attachment. B **no tiene ninguna de las dos**.
-    Escribir esa frase en B sería mandar al modelo a buscar una lista que no existe:
-    una coartada, no un pago. Este test la prohíbe hasta que el listado exista de verdad.
+    Este test era el guardián inverso: prohibía la frase «Available agent types are
+    listed in <system-reminder> messages» mientras B no emitiera nada, porque escribirla
+    sin emisor manda al modelo a buscar una lista inexistente. Ahora que B toma la vía de
+    attachment de A (`AgentTool/prompt.ts:196-199`), la frase es obligatoria — pero la
+    aserción que carga el peso es la SEGUNDA: que el emisor siga cableado. Aseverar sólo
+    la frase acreditaría en falso exactamente igual que antes, al revés (`H-L4`).
     """
     texto = AgentTool.description
-    assert "Available agent types are listed in" not in texto, (
-        "se anunció el listado de subagentes por attachment sin que B lo emita "
-        "(`FIND-AGENT-LIST-1` sigue ABIERTO)"
+    assert "Available agent types are listed in <system-reminder> messages" in texto
+
+    # El emisor, por su cableado real: el loop lo llama en el turno, no basta que el
+    # módulo exista (`L09`).
+    fuente_loop = inspect.getsource(agent_loop)
+    assert "_announce_agent_listing" in fuente_loop
+    assert fuente_loop.count("_announce_agent_listing") >= 2, (
+        "el método existe pero nadie lo llama: la frase de la descripción sería falsa"
     )
-    # Lo que sí debe estar: el when-NOT-to-use, que es lo que evita que el modelo
-    # delegue en un subagente lo que resuelve leyendo un fichero (`:235-239`).
+
+    # Lo que ya estaba: el when-NOT-to-use, que evita que el modelo delegue en un
+    # subagente lo que resuelve leyendo un fichero (`:235-239`).
     assert "When NOT to use the Agent tool:" in texto
+
+
+def test_agent_conserva_la_instruccion_de_paralelismo():
+    """Contrapartida declarada de la nota de concurrencia que B NO emite.
+
+    A la mete en el attachment (`messages.ts:4207-4211`) condicionada al tipo de
+    suscripción, que es política del host y el runtime no puede conocer. El efecto que
+    persigue lo produce en B esta instrucción incondicional de la descripción; si
+    desaparece, la divergencia declarada se convierte en hueco y este test lo dice.
+    """
+    assert 'run agents "in parallel"' in AgentTool.description
 
 
 def test_task_update_no_promete_transiciones_de_estado():

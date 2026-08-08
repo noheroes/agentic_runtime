@@ -137,6 +137,13 @@ class FakeCapabilityManager:
     def active_context(self, ctx) -> list[dict]:
         return list(self._recall)
 
+    def catalog(self, ctx) -> list:
+        # Miembro del contrato (`capabilities/contracts.py:76`), no un extra: el doble lo
+        # omitía porque nadie se lo pedía todavía. El loop lo consume desde
+        # `_announce_skill_listing`, así que un doble sin `catalog` es un doble incompleto
+        # — misma clase de `H-L4` que los xfail que aseveraban sobre `_FakeTool`.
+        return []
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers

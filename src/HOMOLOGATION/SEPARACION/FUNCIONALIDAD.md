@@ -58,7 +58,7 @@ Veredicto por paquete; ✅ = todo comportamiento con prueba de efecto + control;
 | 4 | `execution/local/` | 4 | 681 | ⛔ | — |
 | 5 | `execution/` (+fork, tasks, session, observer, context) | 14 | 604 | ⛔ | — |
 | 6 | `capabilities/mcp/` | 12 | 1592 | ⛔ | — |
-| 7 | `capabilities/skills/` | 8 | 760 | ⛔ | — |
+| 7 | `capabilities/skills/` | 9 | 1149 | 🟡 | **21ª ventana** (`VALIDACION § 2 sexies`): pagados `FIND-SKILL9/17` (el catálogo no llegaba al modelo por NINGUNA vía; A tiene **una**, no dos — premisa corregida), `-20` (identidad ← directorio), `-21` (`source`/`loaded_from` + first-wins con dedup por identidad real de fichero) y los cuatro `xfail` que XPASSaron al pagarse: `FIND-SKILL2`, `FIND-SKILL4` (= `LAT-SKILL1`, abierto por duplicado por mí y unificado), `FIND-SKILL17`, `FIND-SKILL18`. `INY-120..138` → **16 rojas + 3 VERDES que son el hallazgo** (guarda `skill_tool_available` sin medir, sidecar medido sólo en escritura + fixture multilínea que converge igual, guarda `errorCode`-4 sin ningún test, frontera del marco no observable). ⛔ **Abierto y NO pagado: `FIND-SKILL-22`** (A ejecuta el shell embebido en el markdown de la skill, con exención para las de MCP por no confiables — frontera de confianza que B no tiene dónde declarar). ⛔ **Deuda de LECTURA sin pagar**: los 9 módulos no se han recorrido 1→EOF, así que el paquete NO puede pasar a 🟢 (`D-07`) |
 | 8 | `capabilities/memory/` | 5 | 361 | ⛔ | — |
 | 9 | `capabilities/plan/` | 3 | 282 | ⛔ | — |
 | 10 | `capabilities/` | 5 | 309 | ⛔ | — |

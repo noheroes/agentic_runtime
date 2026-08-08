@@ -93,9 +93,20 @@ def test_load_skill_minimal_uses_dir_name_and_derives_description():
     assert skill.model is None  # hereda el modelo del padre
 
 
-def test_load_skill_frontmatter_name_overrides_dir_hint():
+def test_load_skill_frontmatter_name_is_presentation_not_identity():
+    """`FIND-SKILL-20`: el `name:` del frontmatter NO desplaza la identidad.
+
+    Este test aseveraba lo contrario (`skill.name == "explicit"`), que era la conducta
+    de B antes del pago. El canónico fija la identidad en la ESTRUCTURA —
+    `const skillName = entry.name` (`loadSkillsDir.ts:452`)— y mete el declarado en
+    `displayName`, que sólo lee `userFacingName()` (`:238-239`, `:337-339`). Con la
+    conducta vieja, un `SKILL.md` de terceros se declaraba con el nombre de otra skill
+    y le quitaba el sitio en el catálogo, que indexa por este campo.
+    """
     skill = load_skill_text("dir-name", _skill_md("name: explicit\ndescription: d", "b"))
-    assert skill.name == "explicit"
+    assert skill.name == "dir-name"
+    assert skill.display_name == "explicit"
+    assert skill.user_facing_name == "explicit"
     assert skill.description == "d"
 
 
@@ -152,7 +163,13 @@ def test_provider_catalog_emits_skill_summaries(tmp_path: Path):
     assert catalog[0].kind == "skill"
     assert catalog[0].provider == "skills"
     assert catalog[0].description == "dibuja"
-    assert catalog[0].when_to_use == "dibuja"
+    # `FIND-SKILL2`: `when_to_use` es un campo PROPIO (`loadSkillsDir.ts:252`), no un
+    # alias de la descripción. Este test aseveraba la fusión (`== "dibuja"`), que era
+    # justamente el defecto: se concatenan en el listado, no se confunden en el dato.
+    assert catalog[0].when_to_use == ""
+    declarada = load_skill_text("d2", _skill_md("description: dibuja\nwhen_to_use: al pedir un diagrama", "b"))
+    assert declarada.when_to_use == "al pedir un diagrama"
+    assert declarada.description == "dibuja"
 
 
 def test_provider_tool_and_context_depend_on_state():
