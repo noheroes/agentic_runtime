@@ -743,3 +743,115 @@ antes y después con invocación idéntica (`uv run pytest -q -p no:randomly`, e
 worktree del `HEAD` por `PYTHONPATH`, sin revertir nada): **12 rojos antes, 13 después**; el
 único de más, `test_e6_…`, **pasa en aislado** — es gate contra modelo vivo, ruido. `e2c`/`e2e`
 fallan con el **mismo texto y el mismo número** a los dos lados porque fabrican su pool.
+
+## D-20 · Los prompts salen del alcance del canónico: criterio funcional, canónico sustituto y disciplina de capas
+
+**Decisión del usuario, 2026-08-09, tras leer el marcador de `D-19`.** Siete piezas. No es un
+matiz de `D-08`: es un cambio de **criterio de aceptación** para una capa entera.
+
+**1. La homologación de prompts está CERRADA y su evidencia guardada.** `agentic_code`
+`8be6eb5` («Punto de control: system prompt homologado del canónico + hints gpt-5.x»), con
+auditoría mecánica contra `constants/prompts.ts`. Es **línea base alcanzada**, no restricción
+viva. No hay que volver a demostrarla ni preservarla.
+
+**2. Separarse del canónico en prompts es inexorable y está autorizado.** Ejecutamos otra
+familia de modelos. La divergencia de prompt **no es deuda ni regresión: es el trabajo**. Lo
+que se exige de cada separación es **marcador**, no permiso.
+
+**3. El criterio es el punto dulce, y el resultado FUNCIONAL manda sobre el técnico.**
+Agnosticidad del núcleo + **mínimo** alineamiento, tal que (a) el agente **en general** use
+bien las herramientas y (b) el turno cierre **siempre** con el resultado funcional esperado. Un
+turno técnicamente correcto —sin excepciones, llamadas bien formadas, homologado línea a
+línea— que no entrega lo pedido **es un turno fallido**. La capa de hints deja de ser deuda a
+eliminar y pasa a ser **variable a minimizar**; `AGENTIC_CODE_GPT5_HINTS=0` es el **control**
+del marcador, nunca la meta.
+
+**4. Canónico sustituto: OpenAI.** Toda decisión de ajuste de prompt se contrasta **siempre**
+con lo que OpenAI dice de la familia gpt-5.x. Al salir los prompts del alcance de A no queda un
+hueco: queda **otro canónico**, el del fabricante del modelo que ejecutamos. **Escalera de
+fuentes**, en orden: guía de prompting → **documentación completa** (referencia de la Responses
+API, model cards, notas de versión, cookbook) → **artículos oficiales** → sólo entonces
+**decisión propia, rotulada como tal**. Entre «la guía no lo dice» y «probamos» no hay atajo.
+Cada hint queda así con **dos avales independientes**: la fuente que lo justifica *a priori* y
+el marcador que lo acredita *a posteriori*. Donde fuente y marcador se contradigan **manda el
+marcador** —es medida sobre el modelo real— y la contradicción **se registra**.
+
+**5. Aval externo del punto 1, buscado y verificado.** Anthropic **borró más del 80 % del
+system prompt de Claude Code** para la generación Claude 5 *«with no measurable loss on our
+coding evaluations»*, y su diagnóstico es el nuestro: el prompt afinado a mano para la familia
+4.x **estorbaba** a la 5.x
+(<https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models>,
+24 jul 2026). Su cuarta mudanza —*«put instructions on how to use tools in the tool descriptions
+rather than the system prompt»*— **es la pieza 6 de esta decisión, enunciada por el fabricante
+de A**. ⚠ **Alcance, dicho para que nadie lo estire:** es el criterio de Anthropic para SUS
+modelos, **no es transferible por decreto** a `gpt-5.4-mini`; lo que prueba es la lección de
+método —un prompt canónico envejece con la familia para la que se escribió—, y el escalón que
+manda para nosotros sigue siendo el punto 4.
+
+**6. DOGMA, dos prohibiciones sin excepción.** (a) **Jamás referencias a herramientas en el
+prompt ESTÁTICO** —ni nombres, ni «usa X en vez de Y»: el bloque estático no sabe qué
+herramientas existen. (b) **Jamás alineamientos en el DINÁMICO ajustados a que un escenario
+particular salga bien**. No construimos para un caso único: el prompt es **agnóstico por
+naturaleza** y sirve a todos los casos de uso donde la herramienta sirva. *Prueba de admisión
+de un hint: si al enunciarlo hace falta decir «cuando el usuario pida X», está mal ubicado.*
+Esto ata también al ejecutor: los marcadores se apoyan en enunciados concretos (`webdir`,
+`tres`) y **escribir el hint que pone verde ESE enunciado es exactamente lo prohibido** — el
+marcador acredita, no dicta el texto. Aval técnico independiente: un nombre de tool en el
+estático ata el prefijo cacheable al **censo** de herramientas —que varía por `interactive`,
+por MCP, por configuración—, así que cualquier cambio del censo invalida el prefijo entero. Es
+el defecto que `prompts.ts:343-350` advierte, cometido desde dentro. **La regla no cuesta
+caché: la protege.**
+
+**Conflicto conocido, heredado de A:** `system_prompt.py:218` `_using_your_tools_section` (copia
+de `prompts.ts:269-315`) interpola **10 nombres de tools de B** en el bloque **estático**, y
+`_session_guidance_section` recibe `tool_names`. El comentario del módulo que lo defendía
+(`system_prompt.py:53-57`) era correcto bajo el criterio anterior y **queda derogado**.
+**Forma del desmontaje, decidida por el usuario: se suprime del ARMADO, NO se borra el código
+que lo describe** — la sección queda en el fuente con su cita del canónico y sus comentarios,
+sin emitirse, porque es documentación de lo que A hacía y borrarla destruye conocimiento que
+costó homologar. Exige **marcador antes/después propio**: cambia el turno 1.
+
+**7. Disciplina de capas: el arnés no se relaja con la separación.** La **estructura y el orden
+de secciones de A se respetan** —buena práctica, no homenaje: sostienen la frontera cacheable.
+Lo que **no** es obligatorio es conservar contenido que, **medido**, no aporta nada: eso se
+retira con su medición, no se arrastra. Y **cada ajuste va a la SECCIÓN que le corresponde por
+materia, no a la de hints**: la tendencia natural es que todo caiga en
+`_gpt5_alignment_section` hasta volverla un cajón de sastre inauditable, y queda **prohibido
+por defecto** — se reserva para lo que no tiene sección propia en A. La marca de «esto es
+gpt-5.x» debe ser **enumerable mecánicamente** (no un comentario libre), para poder **listar,
+retirar o sustituir** todos los fragmentos de una familia sin releer el módulo. **Propósito
+explícito: que el próximo modelo sea un cambio de capa, no una arqueología.**
+
+### Consecuencias inmediatas sobre la cola de pendientes
+
+- **La cola deja de ordenarse por distancia al canónico y pasa a ordenarse por cuánto mueve el
+  resultado funcional.**
+- **`GAP-PROMPT-1` cambia de enunciado y queda partido por el dogma**: ya no es «descripciones
+  sin homologar» sino **«descripciones que no guían la elección con gpt-5.x» (P4)**, y se cierra
+  con **conducta medida**, no con paridad textual. Su reparto lo dicta la pieza 6: **toda guía
+  que necesite NOMBRAR una tool va a la `description` de esa tool** —donde el dogma y la cuarta
+  mudanza de Anthropic coinciden—, y el **segundo atractor medido** (el cierre en vacío tras
+  `AskUserQuestion`, que ninguna descripción arregló) va al prompt **sólo** como incitador
+  **genérico**, que es admisible precisamente porque no nombra herramienta alguna. Eso concilia
+  el carril ya anotado en `FUNCIONALIDAD.md` con el dogma, sin relajar ninguno de los dos.
+- **`GAP-TOOL3` (precedencia de `isDeferredTool`) baja de prioridad**: con el reparto ya
+  correcto por `D-19`, es fidelidad estructural que no mueve conducta observable. **Se declara
+  y se vigila** (`declarar no es pagar`), no se paga por simetría.
+- **Lo funcional conserva su rango**: abort de `WebFetch`, singleton `RuntimeFactory._modes`.
+  Rompen el turno, no la simetría.
+- **`D-08` conserva su alcance, reducido a lo que era**: ante conducta divergente se lee el
+  fuente de A para **entender** qué hace y por qué; no para obligar a copiarlo en el prompt.
+  La lectura sigue siendo obligatoria; la copia, no.
+
+### Fuente vecina, consultada una sola vez y NO canónica
+
+Pasada de lectura sobre `/home/noheroes/python/openclaw` (`51bae7512`), *agentic OS*
+multimodelo con el mismo origen **PI** que `agentic_models` y más maduro que este desarrollo.
+Producto: **`agentic_models/criterios-prompt-multimodelo.md`**, con cada línea etiquetada
+`OBSERVADO` o `CRITERIO CANDIDATO`. **openclaw NO es un escalón de la escalera del punto 4** y
+nada entra en B por imitación. Hallazgo central: su constructor de prompt son **725 líneas con
+cero ramas por familia de modelo** — la peculiaridad se nombra por **capacidad** (flag resuelto
+fuera, texto genérico dentro: `reasoningTagHint` ← `isReasoningTagProvider`, `attempt.ts:947`)
+y las divergencias de proveedor se pagan en **transporte** (`provider-capabilities.ts`), no en
+prompt. **Y contradice nuestro dogma**: lista el censo de tools con resúmenes dentro del prompt
+(`system-prompt.ts:240-339`) — **no se adopta**, con motivo escrito (§7 de ese documento).
