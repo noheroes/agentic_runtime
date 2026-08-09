@@ -71,6 +71,9 @@ async def _run(
 
 class EnterWorktreeTool:
     name = ENTER_WORKTREE_TOOL_NAME
+    # `searchHint` del canónico, grafía literal (`EnterWorktreeTool.ts:54`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "create an isolated git worktree and switch into it"
     # Homologada contra `EnterWorktreeTool/prompt.ts:2-26` (`getEnterWorktreeToolPrompt()`),
     # `GAP-PROMPT-1`.
     # OMITIDO Y DECLARADO:
@@ -191,6 +194,9 @@ specifically mention worktrees
 
 class ExitWorktreeTool:
     name = EXIT_WORKTREE_TOOL_NAME
+    # `searchHint` del canónico, grafía literal (`ExitWorktreeTool.ts:150`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "exit a worktree session and return to the original directory"
     # Homologada contra `ExitWorktreeTool/prompt.ts:2-31` (`getExitWorktreeToolPrompt()`),
     # `GAP-PROMPT-1`.
     # OMITIDO Y DECLARADO: la sesión tmux (`:29`) — B no la tiene. El resto se porta,

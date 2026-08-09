@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 
 class BashTool:
     name = "bash"
+    # `searchHint` del canónico, grafía literal (`BashTool.tsx:422`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "execute shell commands"
     # Homologada contra `getSimplePrompt()` (`BashTool/prompt.ts:275-369`) — `GAP-PROMPT-1`.
     # El bloque PORTANTE es el de preferencia de tools (`:280-291` + el IMPORTANT de `:359`):
     # es como A DIRIGE la elección hacia las tools dedicadas, y su ausencia en B costaba ~25 %
@@ -19,9 +22,17 @@ class BashTool:
     # A lo emite CONDICIONALMENTE (`:276-286`: lo retira si el build lleva find/grep embebidos),
     # luego es deliberado, no decorativo.
     # OMITIDO A PROPÓSITO lo que B no tiene: `timeout` y `run_in_background` como parámetros
-    # (el timeout aquí es fijo), el sandbox, y el bloque de git/PR de `:42-161` —ese último
-    # describe un flujo del integrador, no del runtime—. Sí se conserva la guía de git de
-    # `:304-308`, que es advertencia de conducta y aplica igual.
+    # (el timeout aquí es fijo) y el sandbox.
+    # OMITIDA TAMBIÉN, y esto NO es una carencia: la frase de A «The shell environment is
+    # initialized from the user's profile (bash or zsh)» (`:357`). Aquí sería FALSA —
+    # `create_subprocess_shell` (`exec_env.py:166`) lanza `sh -c`, ni login ni interactivo,
+    # y ningún perfil se lee. Copiarla era describir un entorno que no existe.
+    # El bloque de git/PR de `:81-160` SÍ entra, contra lo que decía la nota anterior: se
+    # había descartado como «flujo del integrador» y la comprobación dice que **ningún sitio
+    # de B lo lleva** —ni esta descripción ni el prompt del integrador—, así que la conducta
+    # de A ahí no estaba trasladada, estaba perdida. Es la mitad del texto de A en esta tool.
+    # De ese bloque se adapta lo que es de A y no nuestro: la atribución interpolada
+    # (`getAttributionTexts()`, `:79`) es política del integrador y no viaja al núcleo.
     description = """Executes a given shell command and returns its output.
 
 The working directory persists between commands, but shell state does not.
@@ -41,10 +52,11 @@ While this tool can do similar things, the dedicated tools are better: they are 
 the workspace, return structured results, and are easier to review.
 
 # Instructions
-- If your command will create new directories or files, first verify the parent directory
-  exists and is the correct location.
+- If your command will create new directories or files, first use this tool to run `ls` to
+  verify the parent directory exists and is the correct location.
 - Always quote file paths that contain spaces with double quotes.
-- Prefer absolute paths and avoid `cd`, so the working directory stays stable.
+- Try to maintain your current working directory throughout the session by using absolute
+  paths and avoiding usage of `cd`. You may use `cd` if the user explicitly requests it.
 - When issuing multiple commands:
   - If they are independent, make multiple tool calls in a single message so they run in
     parallel.
@@ -58,8 +70,125 @@ the workspace, return structured results, and are easier to review.
   - Never skip hooks (`--no-verify`) or bypass signing unless the user explicitly asked. If a
     hook fails, investigate and fix the underlying issue.
   - Never use interactive flags (`-i`), which cannot work here.
-- Avoid unnecessary `sleep` commands: do not sleep between commands that can run immediately,
-  and do not retry failing commands in a sleep loop — diagnose the root cause instead."""
+- Avoid unnecessary `sleep` commands:
+  - Do not sleep between commands that can run immediately — just run them.
+  - Do not retry failing commands in a sleep loop — diagnose the root cause.
+  - If you must poll an external process, use a check command (e.g. `gh run view`) rather
+    than sleeping first.
+  - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.
+
+# Committing changes with git
+
+Only create commits when requested by the user. If unclear, ask first. When the user asks you
+to create a new git commit, follow these steps carefully:
+
+You can call multiple tools in a single response. When multiple independent pieces of
+information are requested and all commands are likely to succeed, run multiple tool calls in
+parallel for optimal performance. The numbered steps below indicate which commands should be
+batched in parallel.
+
+Git Safety Protocol:
+- NEVER update the git config
+- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore .,
+  clean -f, branch -D) unless the user explicitly requests these actions. Taking unauthorized
+  destructive actions is unhelpful and can result in lost work, so it's best to ONLY run these
+  commands when given direct instructions
+- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
+- NEVER run force push to main/master, warn the user if they request it
+- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests
+  a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would
+  modify the PREVIOUS commit, which may result in destroying work or losing previous changes.
+  Instead, after hook failure, fix the issue, re-stage, and create a NEW commit
+- When staging files, prefer adding specific files by name rather than using "git add -A" or
+  "git add .", which can accidentally include sensitive files (.env, credentials) or large
+  binaries
+- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only
+  commit when explicitly asked, otherwise the user will feel that you are being too proactive
+
+1. Run the following bash commands in parallel, each using this tool:
+  - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as
+    it can cause memory issues on large repos.
+  - Run a git diff command to see both staged and unstaged changes that will be committed.
+  - Run a git log command to see recent commit messages, so that you can follow this
+    repository's commit message style.
+2. Analyze all staged changes (both previously staged and newly added) and draft a commit
+   message:
+  - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature,
+    bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes
+    and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to
+    an existing feature, "fix" means a bug fix, etc.).
+  - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the
+    user if they specifically request to commit those files
+  - Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the
+    "what"
+3. Run the following commands in parallel:
+   - Add relevant untracked files to the staging area.
+   - Create the commit with a message.
+   - Run git status after the commit completes to verify success.
+   Note: git status depends on the commit completing, so run it sequentially after the commit.
+4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit
+
+Important notes:
+- NEVER run additional commands to read or explore code, besides git bash commands
+- NEVER use the TodoWrite or Agent tools
+- DO NOT push to the remote repository unless the user explicitly asks you to do so
+- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since
+  they require interactive input which is not supported.
+- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a
+  valid option for git rebase.
+- If there are no changes to commit (i.e., no untracked files and no modifications), do not
+  create an empty commit
+- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this
+  example:
+<example>
+git commit -m "$(cat <<'EOF'
+   Commit message here.
+   EOF
+   )"
+</example>
+
+# Creating pull requests
+Use the gh command via this tool for ALL GitHub-related tasks including working with issues,
+pull requests, checks, and releases. If given a Github URL use the gh command to get the
+information needed.
+
+IMPORTANT: When the user asks you to create a pull request, follow these steps carefully:
+
+1. Run the following bash commands in parallel using this tool, in order to understand the
+   current state of the branch since it diverged from the main branch:
+   - Run a git status command to see all untracked files (never use -uall flag)
+   - Run a git diff command to see both staged and unstaged changes that will be committed
+   - Check if the current branch tracks a remote branch and is up to date with the remote, so
+     you know if you need to push to the remote
+   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit
+     history for the current branch (from the time it diverged from the base branch)
+2. Analyze all changes that will be included in the pull request, making sure to look at all
+   relevant commits (NOT just the latest commit, but ALL commits that will be included in the
+   pull request!!!), and draft a pull request title and summary:
+   - Keep the PR title short (under 70 characters)
+   - Use the description/body for details, not the title
+3. Run the following commands in parallel:
+   - Create new branch if needed
+   - Push to remote with -u flag if needed
+   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to
+     ensure correct formatting.
+<example>
+gh pr create --title "the pr title" --body "$(cat <<'EOF'
+## Summary
+<1-3 bullet points>
+
+## Test plan
+[Bulleted markdown checklist of TODOs for testing the pull request...]
+EOF
+)"
+</example>
+
+Important:
+- DO NOT use the TodoWrite or Agent tools
+- Return the PR URL when you're done, so the user can see it
+
+# Other common operations
+- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments"""
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"command": {"type": "string"}},

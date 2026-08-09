@@ -76,6 +76,9 @@ def _scoped_get(task_id: str, ctx: ToolUseContext | None) -> Any:
 
 class TaskCreateTool:
     name = "TaskCreate"
+    # `searchHint` del canónico, grafía literal (`TaskCreateTool.ts:50`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "create a task in the task list"
     # Homologada contra `TaskCreateTool/prompt.ts:16-56` (`getPrompt()`), `GAP-PROMPT-1`.
     # OMITIDO Y DECLARADO, porque el esquema de B no lo acepta y anunciarlo repetiría
     # `FIND-E11-3` (el modelo llama con un campo que la tool se traga en silencio):
@@ -151,6 +154,9 @@ All tasks are created with status `pending`.
 
 class TaskGetTool:
     name = "TaskGet"
+    # `searchHint` del canónico, grafía literal (`TaskGetTool.ts:40`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "retrieve a task by ID"
     # Homologada contra `TaskGetTool/prompt.ts:3-22` (`PROMPT`), `GAP-PROMPT-1`.
     # OMITIDO Y DECLARADO: `blocks` / `blockedBy` (`:8`, `:16-17`, `:21`) — B no tiene
     # grafo de dependencias, así que anunciarlos prometería una salida inexistente.
@@ -205,6 +211,9 @@ Returns full task details:
 
 class TaskListTool:
     name = "TaskList"
+    # `searchHint` del canónico, grafía literal (`TaskListTool.ts:35`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "list all tasks"
     # Homologada contra `TaskListTool/prompt.ts:24-49` (`getPrompt()`), `GAP-PROMPT-1`.
     # OMITIDO Y DECLARADO: `owner` y `blockedBy` (`:44-46`) y todo el criterio de
     # «disponible» que se apoya en ellos (`:31`, `:36`) — B no los tiene. También la
@@ -276,6 +285,9 @@ Use TaskGet with a specific task ID to view full details including its result.
 
 class TaskUpdateTool:
     name = "TaskUpdate"
+    # `searchHint` del canónico, grafía literal (`TaskUpdateTool.ts:90`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "update a task"
     # Homologada contra `TaskUpdateTool/prompt.ts:3-84` (`PROMPT`), `GAP-PROMPT-1`.
     #
     # ⚠ Ésta es la más recortada de la familia, y el recorte NO es cosmético: de los
@@ -343,6 +355,9 @@ Rewrite a task's description:
 
 class TaskStopTool:
     name = "TaskStop"
+    # `searchHint` del canónico, grafía literal (`TaskStopTool.ts:41`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "kill a running background task"
     # Homologada contra `TaskStopTool/prompt.ts:3-8` (`DESCRIPTION`), `GAP-PROMPT-1`.
     # Portada LITERAL: es la única de la familia donde la conducta de A y la de B
     # coinciden campo a campo, así que no hay nada que omitir ni que adaptar.

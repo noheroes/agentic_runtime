@@ -104,6 +104,9 @@ _ANNOTATION_SCHEMA: dict[str, Any] = {
 
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
+    # `searchHint` del canónico, grafía literal (`AskUserQuestionTool.tsx:111`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "prompt the user with a multiple-choice question"
     # Mímica de lo que A manda REALMENTE al modelo: `api.ts:171` serializa
     # `description: await tool.prompt(…)`, o sea `ASK_USER_QUESTION_TOOL_PROMPT`
     # (`AskUserQuestionTool/prompt.ts:31-44`), no el `DESCRIPTION` corto —ése es el

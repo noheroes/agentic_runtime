@@ -23,6 +23,9 @@ EXIT_PLAN_MODE_TOOL_NAME = "ExitPlanMode"
 
 class EnterPlanModeTool:
     name = ENTER_PLAN_MODE_TOOL_NAME
+    # `searchHint` del canónico, grafía literal (`EnterPlanModeTool.ts:38`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "switch to plan mode to design an approach before coding"
     # Homologada contra `EnterPlanModeTool/prompt.ts:16-99`, `GAP-PROMPT-1`, rama **EXTERNAL**
     # (`getEnterPlanModeToolPromptExternal`). El selector es `process.env.USER_TYPE ===
     # 'ant'` (`:166-170`): B no es un build interno, así que la rama Ant (`:101-164`),
@@ -183,6 +186,9 @@ than to redo work
 
 class ExitPlanModeTool:
     name = EXIT_PLAN_MODE_TOOL_NAME
+    # `searchHint` del canónico, grafía literal (`ExitPlanModeV2Tool.ts:149`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "present plan for approval and start coding (plan mode only)"
     # Homologada contra `ExitPlanModeTool/prompt.ts:7-27` (`EXIT_PLAN_MODE_V2_TOOL_PROMPT`),
     # `GAP-PROMPT-1`. Portada ÍNTEGRA: el stub externo del canónico ya excluye la sección
     # Ant-only (`:1`), y la conducta de B coincide — el plan se lee del plan-file, no se

@@ -25,6 +25,7 @@ import pytest
 
 from agentic_runtime.loop import agent_loop
 from agentic_runtime.tools.native.agent import AgentTool
+from agentic_runtime.tools.native.bash import BashTool
 from agentic_runtime.tools.native.config import ConfigTool
 from agentic_runtime.tools.native.plan_mode import EnterPlanModeTool, ExitPlanModeTool
 from agentic_runtime.tools.native.task_tools import (
@@ -42,6 +43,10 @@ from agentic_runtime.tools.native.worktree import EnterWorktreeTool, ExitWorktre
 #: (`L10`), no deuda, y meterla aquí la acreditaría como homologada sin serlo.
 PAGADAS = [
     AgentTool,
+    # `bash` se pagó en `ba2ac47` con el bloque de preferencia de tools y entra aquí al
+    # completarse con el protocolo de git de A (`D-18`): el guard de `FIND-E11-3` importa
+    # el doble en la tool cuyo esquema es de UN campo y cuyo canónico anuncia tres.
+    BashTool,
     ConfigTool,
     EnterPlanModeTool,
     ExitPlanModeTool,
@@ -78,6 +83,11 @@ CAMPOS_DE_A_QUE_B_NO_TIENE = {
     "isolation",
     "team_name",
     "taskId",
+    # De `bash`: A los tiene como parámetros (`BashTool/prompt.ts:335`, `:39`), B no —
+    # el timeout es fijo (`timeout_seconds = 30.0`) y no hay ejecución en segundo plano.
+    # Portar esas dos frases prometería palancas que el esquema de un solo campo ignora.
+    "run_in_background",
+    "timeout",
 }
 
 
@@ -250,3 +260,102 @@ def test_enter_worktree_dice_la_ubicacion_real_y_no_la_del_canonico():
     texto = EnterWorktreeTool.description
     assert "`.worktrees/`" in texto
     assert ".claude/worktrees" not in texto
+
+
+def test_bash_lleva_el_protocolo_de_git_de_a():
+    """`D-18`: la mitad del texto de A en `bash` es su bloque de git, y B no lo tenía.
+
+    Se había descartado como «flujo del integrador». La comprobación dice que **ningún
+    sitio de B lo llevaba** —ni esta descripción ni el prompt del integrador—, así que no
+    estaba trasladado: estaba perdido. Es `getCommitAndPRInstructions()` en su rama
+    EXTERNA (`BashTool/prompt.ts:81-160`), la que no depende de `USER_TYPE === 'ant'`.
+
+    Se ancla en los literales que llevan la CONDUCTA, no en la longitud: un umbral de
+    caracteres se pone verde con relleno.
+    """
+    texto = BashTool.description
+
+    # Las cuatro prohibiciones del Git Safety Protocol (`:88-94`).
+    assert "NEVER update the git config" in texto
+    assert "NEVER run destructive git commands" in texto
+    assert "NEVER run force push to main/master" in texto
+    assert "NEVER commit changes unless the user explicitly asks you to" in texto
+    # La regla de `--amend` tras hook fallido (`:92`), que es la que evita perder trabajo.
+    assert "Always create NEW commits rather than amending" in texto
+    assert "the commit did NOT happen" in texto
+    # Los dos flujos numerados (`:96`, `:132`) y el HEREDOC (`:119-125`).
+    assert "# Committing changes with git" in texto
+    assert "# Creating pull requests" in texto
+    assert "ALWAYS pass the commit message via a HEREDOC" in texto
+
+
+def test_bash_no_arrastra_la_atribucion_ni_el_perfil_de_shell():
+    """Las dos adaptaciones de `D-18`, cada una por su motivo, y ninguna por comodidad.
+
+    1. La atribución interpolada de A (`getAttributionTexts()`, `:79`, `:107`, `:122`) es
+       política del INTEGRADOR: qué firma lleva un commit no lo decide el núcleo genérico.
+    2. La frase «The shell environment is initialized from the user's profile» (`:357`)
+       sería FALSA aquí: `create_subprocess_shell` lanza `sh -c`, ni login ni interactivo.
+       Copiar el canónico al pie de la letra también es divergencia cuando el entorno que
+       describe no es el que hay.
+    """
+    texto = BashTool.description
+    assert "Co-Authored-By" not in texto
+    assert "Generated with" not in texto
+    assert "initialized from the user's profile" not in texto
+
+
+#: Las 12 tools donde A declara `searchHint` y B no lo tenía (`D-18`). Se portan con la
+#: grafía literal de A; sólo `Sleep`, `ToolSearch` y `clone_repository` quedan sin hint,
+#: y por razón: A no declara hint para las dos primeras y la tercera no existe en A.
+HINTS_PORTADOS = {
+    "Agent": "delegate work to a subagent",
+    "AskUserQuestion": "prompt the user with a multiple-choice question",
+    "bash": "execute shell commands",
+    "EnterPlanMode": "switch to plan mode to design an approach before coding",
+    "ExitPlanMode": "present plan for approval and start coding (plan mode only)",
+    "EnterWorktree": "create an isolated git worktree and switch into it",
+    "ExitWorktree": "exit a worktree session and return to the original directory",
+    "TaskCreate": "create a task in the task list",
+    "TaskGet": "retrieve a task by ID",
+    "TaskList": "list all tasks",
+    "TaskStop": "kill a running background task",
+    "TaskUpdate": "update a task",
+}
+
+
+def test_el_censo_lleva_el_search_hint_que_a_declara():
+    """`D-18`: el hint es la señal de ranking, y valía +4 donde la descripción vale +2.
+
+    No es cosmético y no es opcional: bajo diferido `tool_search` decide con nombre,
+    descripción y hint, y el ranking BONIFICA a las MCP —12/6 frente a 10/5 por nombre
+    (`tool_search.py:211-213`, calcado de `ToolSearchTool.ts:186-302`)—. Una nativa sin
+    hint entra a esa comparación con 4 puntos menos contra una tool de terceros cuyo
+    texto lo escribe el propio server. 12 de las 25 estaban así.
+    """
+    from agentic_runtime.tools.factory import create_tools
+
+    por_nombre = {t.name: t for t in create_tools().all_tools()}
+    faltan = {
+        nombre: hint
+        for nombre, hint in HINTS_PORTADOS.items()
+        if (getattr(por_nombre[nombre], "search_hint", "") or "") != hint
+    }
+    assert not faltan, f"hints ausentes o alterados respecto a A: {sorted(faltan)}"
+
+
+def test_las_tres_sin_hint_lo_estan_por_razon_y_no_por_olvido():
+    """La contrapartida: sin esta aserción, «faltan 3» y «sobran 12» son el mismo verde.
+
+    `Sleep` y `ToolSearch` no llevan hint porque **A tampoco se lo declara**; hay que ir
+    a inventarlo para ponérselo, y inventar hint es exactamente lo que este tramo evita.
+    `clone_repository` no existe en A: es divergencia declarada (`L10`).
+    """
+    from agentic_runtime.tools.factory import create_tools
+
+    sin_hint = {
+        t.name for t in create_tools().all_tools() if not (getattr(t, "search_hint", "") or "")
+    }
+    assert sin_hint == {"Sleep", "ToolSearch", "clone_repository"}, (
+        f"el censo sin hint cambió: {sorted(sin_hint)}"
+    )

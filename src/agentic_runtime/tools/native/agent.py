@@ -16,6 +16,9 @@ _MAX_SUBAGENT_DEPTH = 5
 
 class AgentTool:
     name = AGENT_TOOL_NAME
+    # `searchHint` del canónico, grafía literal (`AgentTool.tsx:227`). Fuera del contrato T1
+    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
+    search_hint = "delegate work to a subagent"
     # Homologada contra `AgentTool/prompt.ts:66-287` (`getPrompt()`), `GAP-PROMPT-1`, rama NO-coordinator
     # y con `isForkSubagentEnabled()` en falso (`:78`), que es la que corresponde a B:
     # B no forkea omitiendo `subagent_type`, tiene un parámetro propio

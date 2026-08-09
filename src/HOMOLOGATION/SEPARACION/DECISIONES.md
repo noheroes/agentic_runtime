@@ -650,3 +650,38 @@ su segundo sitio: A repite la preferencia contra la fuerza bruta en la **descrip
 
 **Criterio de la prueba.** Cada tramo se mide **contra el literal de A**, nunca contra un mínimo de
 longitud: un umbral de caracteres es el test blando de siempre — se pone verde con relleno.
+
+### Corrección de `D-18` al ejecutarlo: la ratio B/A no medía deuda
+
+La ratio `len(description_B) / prosa_A` con la que se priorizó este tramo **estaba mal como
+métrica**, y se dice aquí porque el cuadro que la usaba ya circuló. Al abrir tool por tool:
+`read_file` 51 %, `Edit` 56 %, `write_file` 69 %, `Config` 35 %, `TaskUpdate` 24 %,
+`TodoWrite` 32 %, `Agent` 37 % — **todas** tienen su omisión OMITIDA Y DECLARADA con cita a
+`prompt.ts:línea`, y todas por carencia estructural real de B: no lee imágenes/PDF/notebooks,
+no tiene `replace_all`, no comprueba lectura previa, no tiene registro de ajustes
+(`FIND-CFG-2`), no mueve estados de tarea (`FIND-TASK-1`). **Contar caracteres contaba la
+adaptación justificada como si fuera deuda.** Una descripción corta porque la tool hace menos
+no es una descripción a medias; escribir texto para subir la ratio sería anunciar palancas
+inexistentes, que es `FIND-E11-3`.
+
+Lo que la ratio **sí** acertó fue un único caso, y por casualidad: `bash` al 26 %, donde el
+26 % era real. Pagado.
+
+### Lo que sí era el hueco: `searchHint`, no la longitud
+
+La preocupación de fondo —que una tool MCP gane la comparación semántica a la nativa que
+debía usarse— **no se resuelve con más texto**: se resuelve donde está el ranking. Y ahí
+había hueco sin declarar.
+
+`tool_search` puntúa nombre, descripción y hint, y **bonifica a las MCP**: 12/6 por nombre
+frente a 10/5 de una nativa (`tool_search.py:211-213`, calcado literal de
+`ToolSearchTool.ts:186-302` — es de A, no divergencia). El `searchHint` vale **+4**, el doble
+que la descripción (+2). **A declara `searchHint` en 13 tools que B tiene; B lo llevaba en 1.**
+12 nativas entraban a esa comparación con 4 puntos menos frente a una tool cuyo texto escribe
+el server de terceros. Portados con la grafía literal de A. Quedan sin hint `Sleep` y
+`ToolSearch` —porque **A tampoco se lo declara**, y ponérselo obligaría a inventarlo— y
+`clone_repository`, que no existe en A (`L10`).
+
+**Consecuencia para el orden de `D-18`:** el vínculo con `GAP-TOOL4` se refuerza, no se
+debilita. El hint sólo puntúa en la vía diferida; pagarlo antes de marcar las 15 diferidas es
+exactamente poner la señal antes que el mecanismo que la usa.
