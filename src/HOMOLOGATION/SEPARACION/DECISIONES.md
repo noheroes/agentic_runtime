@@ -618,3 +618,35 @@ declarar de más también es declarar mal.
 **exceso de información**, benigna y deliberada: el defecto real en las dos direcciones —descartar en
 silencio, conectar en silencio— es el **silencio**, y conectar un proceso de terceros sin que nadie
 lo haya aprobado es exactamente lo que merece quedar dicho.
+
+---
+
+## D-18 · El descriptor precede al diferido, porque es su señal de ranking
+
+**Decisión.** De los cuatro huecos vivos en las superficies de routing, se paga **primero la
+superficie 3** (`function.description` de las nativas) y **después la 2** (marcar diferidas,
+`GAP-TOOL4`). No es preferencia: es dependencia.
+
+**Por qué, en dos razones que se suman.**
+
+1. **Asimetría a favor del tercero.** Una tool MCP llega con el texto que escribe su server,
+   íntegro hasta 2048 caracteres (`tool_adapter.py`, calcado de `client.ts:218`). Una nativa de B
+   llega al **24–56 %** del texto de A en las que importan (`bash` 26 %, `read_file` 51 %,
+   `Edit` 56 %, `Config` 35 %, `TaskUpdate` 24 %). **21 de las 25 nativas caben por debajo del cap
+   de MCP.** La comparación semántica que decide qué tool se invoca la gana el texto más largo y
+   más específico, y hoy ése puede ser el del tercero. Es P2 medido en su forma peor: no «falta
+   contrato», sino «el contrato del tercero pesa más que el nuestro».
+
+2. **Bajo diferido el descriptor ES el ranking.** `tool_search` casa la query contra nombre +
+   descripción y no hay cuerpo que mirar. Diferir las 15 «meta» con las descripciones a medias
+   mide `GAP-TOOL4` sobre una señal ya corrompida, y el marcador antes/después no separaría el
+   efecto del diferido del efecto del texto ausente. **Primero la señal, luego el mecanismo que
+   la usa.**
+
+**Alcance.** Vive entero en `agentic_runtime/.../tools/native/`: es del núcleo y no se mueve al
+integrador, que sería invertir la relación. `bash` va primero porque además paga `GAP-PROMPT-1` en
+su segundo sitio: A repite la preferencia contra la fuerza bruta en la **descripción de `bash`**
+(`BashTool/prompt.ts:275-291`), no sólo en el prompt, y B tenía cero ahí.
+
+**Criterio de la prueba.** Cada tramo se mide **contra el literal de A**, nunca contra un mínimo de
+longitud: un umbral de caracteres es el test blando de siempre — se pone verde con relleno.
