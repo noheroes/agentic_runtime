@@ -490,3 +490,70 @@ aplicarla, y de ahí que `agentic_code` no tenga hoy ni una referencia a skills 
   GENÉRICO y el integrador se adapta a él, nunca al revés**. Cablear en `agentic_code` no es licencia
   para doblar el runtime hacia el integrador. Y `D-08` sigue mandando: el consumidor DETECTA, el
   canónico DICTA.
+
+---
+
+## `D-16` · El prompt se homologa TAL CUAL y los hints son UNA sección; el TRAMO se detiene para validar lo ya cableado (2026-08-09)
+
+- **Fecha:** 2026-08-09, 22ª ventana, tras la primera prueba E2E real con enunciado sin alineamiento.
+- **Qué la originó.** La prueba no midió lo que se quería: el server MCP se cayó del censo en
+  silencio y el modelo se quedó sin vía hacia el destino pedido. Al preguntar el usuario *«¿cómo
+  respondería el canónico?»*, el fuente contestó algo que no estaba previsto: la conducta observada
+  **la prescribía el prompt de producto de `agentic_code`**, que prohíbe en términos casi literales
+  las dos salidas razonables (decir que no se puede, preguntar). `settings.py:41-60` es texto libre
+  sin contraparte en A, y en dos puntos **contradice** al canónico (`prompts.ts:232`, que permite
+  declararse atascado tras investigar).
+
+### Vocabulario: se retira «dos capas»
+
+Se había propuesto separar «capa 1 homologada» y «capa 2 de hints». **Se retira por confundente**,
+por indicación del usuario. Hay **un solo prompt**, con una sección más.
+
+### La regla
+
+1. **El system prompt de `agentic_code` homologa el de A TAL CUAL**, secciones estáticas y
+   **también las dinámicas**. No es una reescritura inspirada: es homologación, y se audita por
+   diff contra el canónico como todo lo demás, cada sección citando su línea.
+2. **Los hints de alineamiento a gpt-5.x son UNA sección, la ÚLTIMA antes de las dinámicas.**
+   Posición exacta: cola del bloque estático, inmediatamente antes de las secciones dinámicas.
+3. **Se prueba con eso.** No se teoriza más sobre la colocación: se monta, se ejercita en sesión
+   real y se mide.
+
+**Por qué esa posición es también la correcta para el canónico, y no sólo una preferencia:** A parte
+el prompt con `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` justo entre lo estático (cacheable) y lo dinámico
+(`prompts.ts:560-575`), y documenta en `:343-350` que cada bit condicional colocado antes de la
+frontera multiplica las variantes del prefijo de caché. Un bloque de hints **estable por familia de
+modelo** pertenece al lado estático; ponerlo entre las dinámicas rompería el prefijo cada turno.
+
+### Qué gobierna el contenido de la sección de hints
+
+`agentic_models/gpt-5.x-conducta-vs-claude.md`: catálogo medido de peculiaridades (P1–P9), las cinco
+superficies en orden (`instructions` → nombre → `function.description` → schema → `tool_choice`) y
+las hipótesis ya refutadas. Cada hint declara **qué P ataca** y **con qué marcador antes/después**.
+Un hint sin medición es una opinión y se rotula como tal. No se duplican ahí las descripciones de las
+tools: eso es la superficie 3 y duplicarla arriba no ayuda al routing.
+
+### Cambio de fase: el TRAMO se detiene
+
+- **Se DETIENE el avance del plano principal de homologación por TRAMOS.** No se abandona: se
+  suspende. Sigue en pie lo abierto (`FIND-SKILL-22`, `FIND-E2G-3`, deuda de lectura de
+  `capabilities/skills/`, bloques A y B del inventario) y se retoma por decisión explícita del
+  usuario, no por deriva.
+- **La fase vigente pasa a ser: probar y ajustar TODO lo ya cableado desde `agentic_code` hacia
+  `agentic_runtime` y `agentic_models`.**
+- **Razón, y es el criterio de esta decisión:** es la única forma de decir si lo avanzado cumple o no
+  cumple **funcionalmente** la forma como opera el canónico — **en los dos lados, el núcleo y el
+  implementador**. Homologar por diff prueba forma; sólo la operación real prueba función.
+
+### Lo que NO deroga
+
+`D-08` (el consumidor DETECTA, el canónico DICTA) · `D-15` y su adenda (ciclo de cuatro pasos, el
+`.jsonl` como criterio de cierre) · `L10` (divergencia deliberada se rotula, no se cuela) · y el
+encuadre vinculante: **el núcleo se mantiene GENÉRICO y el integrador se adapta a él, nunca al
+revés**. La sección de hints vive en el **integrador**, no en el runtime, precisamente por esto.
+
+### Guion vivo
+
+`SEPARACION/VALIDACION-AGENTIC-CODE.md` (inventario de costuras) y
+`agentic_code/PRUEBAS-E2E-HOMOLOGACION.md` (bitácora de sesiones reales con enunciados sin
+alineamiento).

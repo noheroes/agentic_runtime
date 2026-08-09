@@ -115,13 +115,13 @@ async def test_deferred_mcp_tool_hidden_until_discovered():
         model_caller=caller, tool_registry=reg, capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     await loop.run("hola", ctx)
 
     announced = {t["name"] for t in type(caller).captured}
     assert "echo" in announced
     assert "ToolSearch" in announced       # hay diferidas → ToolSearch visible
-    assert "drawio_create" not in announced  # diferida no descubierta → oculta
+    assert "mcp__srv__drawio_create" not in announced  # diferida no descubierta → oculta
 
 
 async def test_discovered_deferred_tool_is_announced():
@@ -136,12 +136,12 @@ async def test_discovered_deferred_tool_is_announced():
         model_caller=caller, tool_registry=reg, capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("drawio_create")
-    mark_tools_discovered(ctx, ["drawio_create"])  # ya descubierta
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
+    mark_tools_discovered(ctx, ["mcp__srv__drawio_create"])  # ya descubierta
     await loop.run("hola", ctx)
 
     announced = {t["name"] for t in type(caller).captured}
-    assert "drawio_create" in announced
+    assert "mcp__srv__drawio_create" in announced
 
 
 async def test_tool_search_hidden_when_no_deferred_tools():
@@ -167,29 +167,29 @@ async def test_tool_search_hidden_when_no_deferred_tools():
 async def test_tool_search_discovers_and_returns_schema():
     provider = await _connected_provider()
     manager = CapabilityManager([provider])
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     ctx.tool_pool = manager.build_tool_pool([ToolSearchTool()], ctx)
 
-    result = await ToolSearchTool().execute({"query": "select:drawio_create"}, ctx)
+    result = await ToolSearchTool().execute({"query": "select:mcp__srv__drawio_create"}, ctx)
     payload = json.loads(result.output)
 
-    assert [m["name"] for m in payload["matches"]] == ["drawio_create"]
+    assert [m["name"] for m in payload["matches"]] == ["mcp__srv__drawio_create"]
     assert payload["matches"][0]["description"] == "create a drawio diagram"
     assert payload["total_deferred_tools"] == 1
     # quedó descubierta en el estado del contexto
-    assert "drawio_create" in discovered_tool_names(ctx)
+    assert "mcp__srv__drawio_create" in discovered_tool_names(ctx)
 
 
 async def test_tool_search_keyword_only_matches_deferred():
     provider = await _connected_provider()
     manager = CapabilityManager([provider])
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     # native echo en el pool no debe aparecer como match (no es diferida)
     ctx.tool_pool = manager.build_tool_pool([_NativeEcho(), ToolSearchTool()], ctx)
 
     result = await ToolSearchTool().execute({"query": "diagram"}, ctx)
     names = [m["name"] for m in json.loads(result.output)["matches"]]
-    assert names == ["drawio_create"]
+    assert names == ["mcp__srv__drawio_create"]
 
 
 # ---------------------------------------------------------------------------
@@ -203,14 +203,14 @@ async def test_deferred_tool_executable_from_pool_even_if_not_announced():
     reg.register(ToolSearchTool())
 
     caller = _make_caller(
-        ToolCallEvent(tool_name="drawio_create", tool_input={"k": 1}, call_id="c1"),
+        ToolCallEvent(tool_name="mcp__srv__drawio_create", tool_input={"k": 1}, call_id="c1"),
         DoneEvent(stop_reason="stop"),
     )
     loop = AgentLoop(
         model_caller=caller, tool_registry=reg, capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("drawio_create")  # permitida pero NO descubierta
+    ctx = _ctx_allowing("mcp__srv__drawio_create")  # permitida pero NO descubierta
     await loop.run("usa drawio", ctx)
 
     tool_msgs = [m for m in ctx.messages if m.get("role") == "tool"]

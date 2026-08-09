@@ -91,7 +91,7 @@ async def test_connect_discovers_tools_and_marks_connected():
     assert ok is True
     assert provider.state.status("srv") is ServerStatus.CONNECTED
     tool_names = [t.name for t in provider.tools(_ctx())]
-    assert tool_names[:2] == ["alpha", "beta"]  # tools del server como prefijo
+    assert tool_names[:2] == ["mcp__srv__alpha", "mcp__srv__beta"]  # tools del server como prefijo
     # con resources presentes, el provider añade además las resource tools (M4)
     assert {"ListMcpResources", "ReadMcpResource"} <= set(tool_names)
     assert provider.resources(_ctx()) == [{"uri": "mcp://r", "server": "srv"}]
@@ -122,7 +122,7 @@ async def test_failed_server_is_isolated_and_recorded():
     assert provider.state.status("bad") is ServerStatus.FAILED
     assert "transporte caído" in provider.state.failed_servers()["bad"]
     # las tools del bueno siguen expuestas; ninguna del malo
-    assert [t.name for t in provider.tools(_ctx())] == ["good_t"]
+    assert [t.name for t in provider.tools(_ctx())] == ["mcp__good__good_t"]
 
 
 # ---------------------------------------------------------------------------

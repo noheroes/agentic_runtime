@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...contracts.identity import Scope
 from ..contracts import CapabilitySummary
-from .client import McpClient
+from .client import McpClient, describe_exception
 from .config import McpServerConfig, load_server_configs, parse_server_config
 from .config_store import ScopedMcpConfigStore
 from .reconcile import ReconcilePlan, apply_reconcile, plan_reconcile
@@ -167,8 +167,9 @@ class McpProvider:
             tool_specs = await client.list_tools()
             resources = await client.list_resources()
         except Exception as exc:  # noqa: BLE001 — aislamiento por ítem
-            logger.warning("mcp: server %r falló al conectar — aislado: %s", name, exc)
-            self._state.set_status(name, ServerStatus.FAILED, error=str(exc))
+            motivo = describe_exception(exc)
+            logger.warning("mcp: server %r falló al conectar — aislado: %s", name, motivo)
+            self._state.set_status(name, ServerStatus.FAILED, error=motivo)
             try:
                 await client.aclose()
             except Exception as close_exc:  # noqa: BLE001

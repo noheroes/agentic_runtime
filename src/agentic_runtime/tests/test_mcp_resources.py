@@ -58,7 +58,7 @@ async def _provider(client_cls) -> McpProvider:
 async def test_resource_tools_exposed_when_resources_present():
     provider = await _provider(_ClientWithResources)
     names = [t.name for t in provider.tools(_ctx())]
-    assert "do_thing" in names
+    assert "mcp__srv__do_thing" in names
     assert "ListMcpResources" in names
     assert "ReadMcpResource" in names
 

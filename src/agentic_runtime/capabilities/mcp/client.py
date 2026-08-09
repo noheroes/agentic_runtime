@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from contextlib import AsyncExitStack
@@ -126,14 +128,78 @@ def _text_from_content(content: Any) -> str:
     return "\n".join(parts)
 
 
+def describe_exception(exc: BaseException) -> str:
+    """Mensaje legible de una excepción, APLANANDO los `ExceptionGroup`.
+
+    `str()` sobre un grupo devuelve «unhandled errors in a TaskGroup (1 sub-exception)»
+    y **borra la causa**: es literalmente lo que veía el usuario en `/mcp` en lugar del
+    error real. Los transportes del SDK corren dentro de un `anyio.TaskGroup`, así que
+    aquí el grupo es la forma NORMAL de fallar, no un caso raro. Se recorre en
+    profundidad, se conserva el tipo de cada hoja y se unen con `; ` cuando hay varias
+    —perder las hermanas sería cambiar un mensaje pobre por otro—.
+    """
+    subs = getattr(exc, "exceptions", None)
+    if subs:
+        base = "; ".join(describe_exception(sub) for sub in subs)
+    else:
+        texto = str(exc).strip()
+        base = f"{type(exc).__name__}: {texto}" if texto else type(exc).__name__
+    # `__notes__` es el mecanismo de la stdlib (PEP 678) para enriquecer una excepción
+    # con contexto que sólo conoce quien la deja pasar; `str()` no las incluye, así que
+    # aplanarlas aquí es la única forma de que lleguen a quien lee el mensaje.
+    notas = getattr(exc, "__notes__", None)
+    if notas:
+        return " · ".join([base, *(str(nota) for nota in notas)])
+    return base
+
+
+def _anotar_tls(exc: BaseException, transport: str) -> None:
+    """Añade a un fallo de verificación TLS qué material de confianza se usó.
+
+    Un `CERTIFICATE_VERIFY_FAILED` no dice si el CA extra estaba activo, y ésa es
+    justo la pregunta que hay que responder para arreglarlo: sin el dato, «falla el
+    TLS» y «no se cargó la CA» son indistinguibles desde fuera. La nota se cuelga con
+    `add_note` (PEP 678), así que no cambia el tipo ni el mensaje de la excepción — sólo
+    viaja con ella hasta `describe_exception`.
+    """
+    if transport == "stdio":
+        return
+    if "CERTIFICATE_VERIFY_FAILED" not in describe_exception(exc):
+        return
+    from ...tls import EXTRA_CA_CERTS_ENV, extra_ca_certs_path
+
+    ruta = extra_ca_certs_path()
+    exc.add_note(
+        f"CA extra ({EXTRA_CA_CERTS_ENV}): {ruta}"
+        if ruta
+        else f"sin CA extra: {EXTRA_CA_CERTS_ENV} no está en el entorno"
+    )
+
+
 class McpClient:
     """Cliente de UN server MCP — encapsula transporte + sesión + ciclo de vida.
 
     Patrón del canónico (`appState.mcp` con clients por server): el provider posee
     los clients; no hay globals. El transporte se elige por la identidad ya validada
-    de `McpServerConfig` (`command` → stdio; `url` → streamable HTTP). `connect()` y
-    `aclose()` deben correr en el mismo contexto async (el integrador controla
-    startup/shutdown del provider) — el SDK usa anyio cancel scopes por tarea.
+    de `McpServerConfig` (`command` → stdio; `url` → streamable HTTP).
+
+    **El ciclo de vida vive en una TASK PROPIA (`FIND-MCP-LIFECYCLE-1`).** Los tres
+    transportes del SDK (`streamable_http_client`, `sse_client`, `stdio_client`) abren
+    por dentro un `anyio.TaskGroup`, y un cancel scope de anyio **sólo puede salirse en
+    la misma task en la que se entró**. Aquí decía «`connect()` y `aclose()` deben correr
+    en el mismo contexto async», y eso era declarar la restricción en vez de pagarla
+    (`D-07`): ningún host real puede garantizarla. `agentic_code` es el contraejemplo —
+    Textual corre cada comando en su propia task, así que al aprobar un server el
+    `reconcile()` cierra, desde la task del comando, clientes abiertos en la del arranque;
+    el cierre reventaba con `RuntimeError: Attempted to exit cancel scope in a different
+    task than it was entered in`, que anyio envuelve y llega al usuario como
+    `unhandled errors in a TaskGroup (1 sub-exception)` — y el server queda `failed`.
+
+    La corrección no relaja nada del SDK: **respeta su regla confinando el stack**. Una
+    task dueña abre el transporte, publica el resultado y se queda esperando la señal de
+    cierre; `connect()`/`aclose()` pasan a ser mensajes hacia ella y pueden llamarse desde
+    cualquier task. Las llamadas de datos (`list_tools`, `call`, …) sí son cross-task por
+    diseño en anyio: lo que ata a una task es el cancel scope, no los streams.
     """
 
     def __init__(self, config: McpServerConfig, *, auth_deps: AuthDeps | None = None) -> None:
@@ -141,6 +207,8 @@ class McpClient:
         self._auth_deps = auth_deps
         self._stack: AsyncExitStack | None = None
         self._session: Any = None
+        self._owner: asyncio.Task[None] | None = None
+        self._closing: asyncio.Event | None = None
 
     @property
     def config(self) -> McpServerConfig:
@@ -151,6 +219,70 @@ class McpClient:
         return self._session is not None
 
     async def connect(self) -> None:
+        """Abre transporte y sesión en una task DUEÑA, y espera a que esté lista.
+
+        Los fallos de conexión se propagan tal cual al llamante — la task dueña muere
+        con el stack ya cerrado, así que no queda nada abierto. Ese contrato es el que
+        `McpProvider.connect_server` usa para aislar el server sin propagar.
+        """
+        if self._owner is not None:
+            return
+        listo: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._closing = asyncio.Event()
+        self._owner = asyncio.create_task(
+            self._own_session(listo), name=f"mcp-session:{self._config.name}"
+        )
+        try:
+            await listo
+        except BaseException:
+            # La task dueña ya cerró su propio stack antes de publicar el fallo; sólo
+            # queda esperarla para no dejarla huérfana y volver al estado desconectado.
+            owner, self._owner = self._owner, None
+            self._closing = None
+            with contextlib.suppress(BaseException):
+                await owner
+            raise
+
+    async def _own_session(self, listo: asyncio.Future[None]) -> None:
+        """Dueña del `AsyncExitStack`: lo abre, publica el resultado y espera el cierre.
+
+        Todo el ciclo del cancel scope ocurre DENTRO de esta task, que es la regla que
+        anyio impone y que antes se le trasladaba al integrador (`FIND-MCP-LIFECYCLE-1`).
+        """
+        try:
+            stack, session = await self._open()
+        except BaseException as exc:  # noqa: BLE001 — la task dueña no puede dejar
+            # escapar NADA: si el fallo no viaja al futuro, `connect()` espera para
+            # siempre. Se publica y se vuelve al estado desconectado.
+            #
+            # La nota se pone AQUÍ y no dentro de `_open`: lo que allí se captura suele
+            # ser el `CancelledError` del scope de anyio, y la causa real llega después,
+            # dentro del grupo que lanza el propio `aclose()` del stack. Éste es el
+            # único punto por el que pasa la excepción que de verdad se propaga.
+            _anotar_tls(exc, self._config.resolved_transport())
+            if not listo.done():
+                listo.set_exception(exc)
+            else:  # el llamante se fue antes; el fallo no puede perderse en silencio
+                logger.warning("mcp: %r falló al conectar sin nadie esperando: %s",
+                               self._config.name, exc)
+            return
+        self._stack = stack
+        self._session = session
+        if listo.done():  # `connect()` fue cancelado mientras abríamos: no dejar el stack
+            await stack.aclose()
+            self._stack = None
+            self._session = None
+            return
+        listo.set_result(None)
+        try:
+            assert self._closing is not None
+            await self._closing.wait()
+        finally:
+            self._session = None
+            self._stack = None
+            await stack.aclose()
+
+    async def _open(self) -> tuple[AsyncExitStack, Any]:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -222,8 +354,7 @@ class McpClient:
             await stack.aclose()
             raise
 
-        self._stack = stack
-        self._session = session
+        return stack, session
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Specs crudos de tools (name/description/inputSchema/annotations) para `build_mcp_tool`."""
@@ -277,10 +408,27 @@ class McpClient:
         return _text_from_content(getattr(result, "contents", None))
 
     async def aclose(self) -> None:
-        if self._stack is not None:
-            await self._stack.aclose()
-        self._stack = None
-        self._session = None
+        """Pide el cierre a la task dueña y la espera. Idempotente y cross-task."""
+        owner, self._owner = self._owner, None
+        closing, self._closing = self._closing, None
+        if owner is None:
+            self._stack = None
+            self._session = None
+            return
+        if closing is not None:
+            closing.set()
+        try:
+            await owner
+        except asyncio.CancelledError:
+            # La dueña pudo ser cancelada por el cierre del host; eso no es un fallo del
+            # cierre, y re-lanzarlo aquí abortaría el shutdown del resto de servers.
+            if asyncio.current_task() is not None and getattr(
+                asyncio.current_task(), "cancelling", lambda: 0
+            )():
+                raise
+        finally:
+            self._stack = None
+            self._session = None
 
 
 def _annotations_dict(tool: Any) -> dict[str, Any]:
@@ -294,4 +442,4 @@ def _annotations_dict(tool: Any) -> dict[str, Any]:
     return dump() if callable(dump) else {}
 
 
-__all__ = ["McpClient", "McpToolError"]
+__all__ = ["McpClient", "McpToolError", "describe_exception"]

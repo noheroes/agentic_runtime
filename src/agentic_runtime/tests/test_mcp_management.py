@@ -49,7 +49,7 @@ async def _provider() -> McpProvider:
 async def test_add_and_connect_updates_state_only():
     provider = await _provider()
     assert provider.state.connected_servers() == ["srv"]
-    assert [t.name for t in provider.tools(_ctx())] == ["srv_t"]
+    assert [t.name for t in provider.tools(_ctx())] == ["mcp__srv__srv_t"]
 
 
 async def test_disconnect_closes_client_keeps_config():
@@ -80,4 +80,4 @@ async def test_reconnect_server_refreshes_client_and_tools():
     assert len(_FakeClient.instances) == 2
     assert _FakeClient.instances[0].closed is True
     assert provider.state.status("srv") is ServerStatus.CONNECTED
-    assert [t.name for t in provider.tools(_ctx())] == ["srv_t"]
+    assert [t.name for t in provider.tools(_ctx())] == ["mcp__srv__srv_t"]

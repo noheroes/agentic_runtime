@@ -88,7 +88,7 @@ def _make_caller(*events, native: bool):
 # ── Rama simulada (comportamiento vigente) ────────────────────────────────────
 
 async def test_simulated_hides_undiscovered_and_announces_names():
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     pool = await _pool_with_mcp(ctx)
 
     plan = SimulatedDeferredStrategy().prepare_turn(ctx, pool)
@@ -96,31 +96,31 @@ async def test_simulated_hides_undiscovered_and_announces_names():
 
     assert "echo" in names
     assert TOOL_SEARCH_TOOL_NAME in names          # hay diferidas → ToolSearch visible
-    assert "drawio_create" not in names            # oculta hasta descubrir
+    assert "mcp__srv__drawio_create" not in names            # oculta hasta descubrir
     assert not any("defer_loading" in s for s in plan.tool_schemas)
-    assert plan.announcements and "drawio_create" in plan.announcements[0]
+    assert plan.announcements and "mcp__srv__drawio_create" in plan.announcements[0]
 
 
 async def test_simulated_discovered_tool_becomes_visible():
-    ctx = _ctx_allowing("drawio_create")
-    mark_tools_discovered(ctx, ["drawio_create"])
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
+    mark_tools_discovered(ctx, ["mcp__srv__drawio_create"])
     pool = await _pool_with_mcp(ctx)
 
     plan = SimulatedDeferredStrategy().prepare_turn(ctx, pool)
-    assert "drawio_create" in {s["name"] for s in plan.tool_schemas}
+    assert "mcp__srv__drawio_create" in {s["name"] for s in plan.tool_schemas}
 
 
 # ── Rama nativa (Responses server-side) ───────────────────────────────────────
 
 async def test_native_includes_all_marks_deferred_and_drops_client_search():
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     pool = await _pool_with_mcp(ctx)
 
     plan = NativeDeferredStrategy().prepare_turn(ctx, pool)
     by_name = {s["name"]: s for s in plan.tool_schemas}
 
     # todas incluidas sin filtrar; la diferida marcada; la nativa no
-    assert by_name["drawio_create"]["defer_loading"] is True
+    assert by_name["mcp__srv__drawio_create"]["defer_loading"] is True
     assert "defer_loading" not in by_name["echo"]
     # el tool_search client-side no se anuncia (el provider añade el suyo server-side)
     assert TOOL_SEARCH_TOOL_NAME not in by_name
@@ -144,11 +144,11 @@ async def test_loop_selects_native_when_caller_declares_capability():
         model_caller=caller, tool_registry=reg, capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     await loop.run("hola", ctx)
 
     by_name = {t["name"]: t for t in type(caller).captured}
-    assert by_name["drawio_create"]["defer_loading"] is True  # diferida anunciada + marcada
+    assert by_name["mcp__srv__drawio_create"]["defer_loading"] is True  # diferida anunciada + marcada
     assert TOOL_SEARCH_TOOL_NAME not in by_name
     # ningún reminder de nombres inyectado
     assert not any(
@@ -210,7 +210,7 @@ async def test_native_branch_executes_deferred_tool_never_discovered():
     caller = _scripted_caller(
         [
             [
-                ToolCallEvent(tool_name="drawio_create", tool_input={"k": 1}, call_id="c1"),
+                ToolCallEvent(tool_name="mcp__srv__drawio_create", tool_input={"k": 1}, call_id="c1"),
                 DoneEvent(stop_reason="tool_calls"),  # `agent_loop.py:537`: sin esto no hay 2º turno
             ],
             [DoneEvent(stop_reason="stop")],
@@ -221,11 +221,11 @@ async def test_native_branch_executes_deferred_tool_never_discovered():
         model_caller=caller, tool_registry=reg, capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("drawio_create")
+    ctx = _ctx_allowing("mcp__srv__drawio_create")
     await loop.run("dibuja", ctx)
 
     # el runtime no descubrió nada: en esta rama no hay ToolSearch client-side que lo haga
-    assert discovered_tool_names(ctx) == set() or "drawio_create" not in discovered_tool_names(ctx)
+    assert discovered_tool_names(ctx) == set() or "mcp__srv__drawio_create" not in discovered_tool_names(ctx)
     # y aun así la tool SE EJECUTÓ: el resultado real del cliente MCP está en la conversación
     tool_msgs = [m for m in ctx.messages if m.get("role") == "tool"]
     assert tool_msgs, "la diferida no se ejecutó en la rama nativa: el despacho la gateó"
@@ -252,13 +252,13 @@ async def test_simulated_branch_full_cycle_hidden_search_announced_executed():
             [
                 ToolCallEvent(
                     tool_name=TOOL_SEARCH_TOOL_NAME,
-                    tool_input={"query": "select:drawio_create"},
+                    tool_input={"query": "select:mcp__srv__drawio_create"},
                     call_id="s1",
                 ),
                 DoneEvent(stop_reason="tool_calls"),
             ],
             [
-                ToolCallEvent(tool_name="drawio_create", tool_input={"k": 1}, call_id="c1"),
+                ToolCallEvent(tool_name="mcp__srv__drawio_create", tool_input={"k": 1}, call_id="c1"),
                 DoneEvent(stop_reason="tool_calls"),
             ],
             [DoneEvent(stop_reason="stop")],
@@ -269,20 +269,20 @@ async def test_simulated_branch_full_cycle_hidden_search_announced_executed():
         model_caller=caller, tool_registry=reg, capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("drawio_create", TOOL_SEARCH_TOOL_NAME)
+    ctx = _ctx_allowing("mcp__srv__drawio_create", TOOL_SEARCH_TOOL_NAME)
     await loop.run("dibuja", ctx)
 
     turnos = caller.announced_per_turn
     assert len(turnos) >= 3, f"no se completaron los tres turnos: {len(turnos)}"
     t1 = {t["name"] for t in turnos[0]}
-    assert "drawio_create" not in t1 and TOOL_SEARCH_TOOL_NAME in t1  # oculta, buscable
-    assert "drawio_create" in {t["name"] for t in turnos[1]}          # descubierta → anunciada
+    assert "mcp__srv__drawio_create" not in t1 and TOOL_SEARCH_TOOL_NAME in t1  # oculta, buscable
+    assert "mcp__srv__drawio_create" in {t["name"] for t in turnos[1]}          # descubierta → anunciada
 
     # el schema COMPLETO viajó en el resultado de ToolSearch (sin él no es invocable)
     tool_msgs = [m for m in ctx.messages if m.get("role") == "tool"]
     assert len(tool_msgs) >= 2, f"faltan resultados de tool: {len(tool_msgs)}"
     payload = json.loads(tool_msgs[0]["content"])
-    assert [m["name"] for m in payload["matches"]] == ["drawio_create"]
+    assert [m["name"] for m in payload["matches"]] == ["mcp__srv__drawio_create"]
     assert "parameters" in payload["matches"][0]
     # y la invocación posterior se ejecutó de verdad
     assert "drew:" in tool_msgs[1]["content"]

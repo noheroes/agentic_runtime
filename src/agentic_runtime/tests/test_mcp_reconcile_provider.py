@@ -79,7 +79,7 @@ async def test_startup_loads_scoped_registry_and_connects_enabled():
 
     assert provider.state.status("on") is ServerStatus.CONNECTED
     assert provider.state.status("off") is ServerStatus.CONFIGURED
-    assert [t.name for t in provider.tools(_ctx())] == ["on_t"]
+    assert [t.name for t in provider.tools(_ctx())] == ["mcp__on__on_t"]
     await provider.shutdown()
 
 

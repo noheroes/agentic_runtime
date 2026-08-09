@@ -690,7 +690,7 @@ Lo que NO está verificado para todos los ítems es si el hueco es DEUDA o **div
 
 | # | Costura vacía | Qué queda inalcanzable | Clasificación |
 |---|---|---|---|
-| B1 | `CapabilitiesConfig.memory_root` · `memory_store` | El `MemoryProvider` **no se registra nunca** (`factory.py:227`): el producto no tiene memoria de agente | ❌ deuda, salvo prueba en contra |
+| B1 | `CapabilitiesConfig.memory_root` · `memory_store` | El `MemoryProvider` **no se registra nunca** (`factory.py:227`): el producto no tiene memoria de agente. Es la auto-memoria (memdir), **no** el fichero de proyecto — ése es `FIND-CODE-MEM-1`, § 4 ter, y se paga junto con éste | ❌ deuda, salvo prueba en contra |
 | B2 | `mcp_oauth_redirect_handler` · `mcp_oauth_callback_handler` | **Todo server MCP con OAuth es inalcanzable desde el producto.** Y el contrato dice por qué duele aquí: «el runtime headless no abre navegador» (`factory.py:60-62`) — `agentic_code` es justamente quien tiene persona y navegador delante | ❌ deuda |
 | B3 | `mcp_config_watcher` | Vector 2 de recarga dinámica muerto. El contrato **NOMBRA a este integrador** como su implementador: «`agentic_code`: inotify» (`factory.py:51-54`). Campo designado por escrito y vacío | ❌ deuda |
 | B4 | `task_registry` (`S19`) **+** `root_turn_start_hooks` | Van en PAREJA: sin registry no hay tareas en background, y sin los hooks de turn-start no se drenan sus notificaciones (`factory.py:129-135` lo dice: el consumidor no alcanza el loop, así que las inyecta ahí). Cablear uno solo deja el ciclo a medias | ❌ deuda, y **acoplada** |
@@ -788,3 +788,64 @@ MCP está acreditada por medición directa, no por una traza en la que el modelo
 No es que compile ni que la suite siga verde: **es el `.jsonl` de sesión real** (`D-15`, paso 4). Un
 cableado que no se puede ver operar en una traza no ha cerrado el ciclo, lo ha dejado en tres pasos.
 Y el encuadre no se toca: se adapta el INTEGRADOR al núcleo, nunca al revés.
+
+### § 4 ter · `FIND-CODE-MEM-1` — el fichero de memoria de proyecto (`AGENT.md`) ❌ ABIERTO, DIFERIDO
+
+**Encargo del usuario, 22ª ventana, y su origen:** entró por un hallazgo lateral de la homologación
+del system prompt. Al auditar frase a frase contra el canónico apareció que A dice «durable
+instructions like **CLAUDE.md** files» (`prompts.ts:258`) y yo había cortado en «durable
+instructions», porque `agentic_code` no tiene fichero de memoria. El usuario levantó que ese fichero
+**es parte de la homologación** y que para este producto se llama **`AGENT.md`**, no `CLAUDE.md`.
+Decisión suya al ver el alcance: **se documenta ahora y se implementa después del congelamiento del
+TRAMO, cuando concluyan las pruebas de `agentic_code`.** No se toca código en esta ventana.
+
+**La premisa con la que se abrió el tema era MÍA y era incorrecta.** Yo lo trataba como «una sección
+más del system prompt». No lo es, y eso cambia dónde se paga:
+
+| | Subsistema 1 — ficheros de memoria | Subsistema 2 — auto-memoria / memdir |
+|---|---|---|
+| Fuente en A | `utils/claudemd.ts` (1479 L) | `utils/memdir/` |
+| Unidad | `CLAUDE.md` por directorio | un hecho por fichero + índice `MEMORY.md` |
+| Cómo llega al modelo | **mensaje de usuario sintético** `isMeta: true` en `<system-reminder>`, antepuesto (`prependUserContext`, `utils/api.ts:449-473`) | sección del system prompt |
+| Estado en el runtime | **NO EXISTE** | existe: `capabilities/memory/` |
+| Estado en `agentic_code` | no existe | existe pero **sin cablear** (= `B1`) |
+
+Lo que dicta A, leído (`claudemd.ts:1-25`, su propia cabecera):
+
+- **Cuatro tipos en orden de carga**, de menor a mayor prioridad: managed (`/etc/claude-code/CLAUDE.md`)
+  → user (`~/.claude/CLAUDE.md`) → project (`CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`)
+  → local (`CLAUDE.local.md`). *«Files are loaded in reverse order of priority»* — el último pesa más.
+- **Descubrimiento caminando de cwd hacia la raíz**; más cerca del cwd ⇒ más prioridad.
+- **Directiva `@include`**: `@path`, `@./rel`, `@~/home`, `@/abs`; sólo en nodos de texto hoja (no
+  dentro de bloques de código), ciclos prevenidos, inexistentes ignorados en silencio.
+- Cabecera fija al inyectar (`claudemd.ts:88-89`): *«Codebase and user instructions are shown below.
+  Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default
+  behavior and you MUST follow them exactly as written.»* Cada fichero se rinde como
+  `Contents of <path> (<descripción por tipo>):` (`getClaudeMds`, `:1153-1195`).
+- `MAX_MEMORY_CHARACTER_COUNT = 40000` (`:92`), recomendado, no duro.
+
+**Dos consecuencias que NO son obvias y hay que respetar al pagarlo:**
+
+1. **Sobrevive a `--system-prompt`.** En `queryContext.ts:61-72`, con `customSystemPrompt` definido el
+   prompt por defecto se vacía pero **`getUserContext()` se sigue cargando**. Si esto se implementara
+   como sección del prompt, un `--system-prompt` borraría la memoria del proyecto — divergencia
+   silenciosa. Es meta-mensaje justamente por eso.
+2. **Queda FUERA del prefijo cacheable**, a diferencia del memdir. Colocarlo en el bloque estático
+   metería contenido volátil por proyecto en el prefijo (`prompts.ts:343-350`).
+
+**Reparto, por el encuadre vinculante (núcleo genérico, el integrador se adapta):** el cargador va al
+**runtime** —descubrimiento, jerarquía, orden, cap, e inyección como meta-mensaje— parametrizado por
+**nombre(s) de fichero**; `agentic_code` declara `AGENT.md`. Codificar el nombre en el núcleo
+obligaría al siguiente integrador a parchear el runtime, que es exactamente lo que `D-16` prohíbe.
+
+**Deuda colateral que se cierra con esto:** `system_prompt.py` corta hoy en «durable instructions» y
+lo declara en su docstring; al aterrizar `AGENT.md` la frase vuelve al literal de A con el nombre
+sustituido, y la entrada correspondiente sale de `_ADAPTACIONES_DECLARADAS` en
+`tests/test_system_prompt.py`. Lo mismo con `B1`: el encargo natural es cablear las **dos** memorias
+en el mismo punto de composición, porque el memdir lleva ventanas pagado y sin consumidor real
+(`FIND-CODE-SKILL-1` otra vez: cablear ≠ existir).
+
+**Alcance a decidir cuando se retome** (se ofrecieron tres y el usuario difirió la elección): núcleo
+(jerarquía + inyección) · núcleo + `@include` + cap · homologación completa de `claudemd.ts`
+(reglas condicionales por glob, excludes, cachés, includes externos) — esta última es TRAMO propio,
+no paso previo a probar.

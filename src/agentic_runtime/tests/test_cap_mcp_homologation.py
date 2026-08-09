@@ -185,14 +185,12 @@ def test_resource_tools_only_when_resources_present():
 # xfail — gaps FIND-MCP (fallan HOY; el fallo ES la evidencia)
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="FIND-MCP1: tool sin naming mcp__<server>__<tool>")
 def test_mcp_tool_name_fully_qualified():
     t = build_mcp_tool({"name": "commit"}, _call_ok, server_name="git")
     assert t.name == "mcp__git__commit"
     assert getattr(t, "mcp_info", None) == {"server_name": "git", "tool_name": "commit"}
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-MCP1: nombre con chars inválidos no normalizado")
 def test_mcp_tool_name_normalized():
     t = build_mcp_tool({"name": "do.it"}, _call_ok, server_name="my server")
     assert t.name == "mcp__my_server__do_it"

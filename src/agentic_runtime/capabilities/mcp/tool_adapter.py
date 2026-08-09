@@ -51,9 +51,46 @@ MAX_MCP_DESCRIPTION_LENGTH = 2048
 _TRUNCATION_SUFFIX = "… [truncated]"
 
 
+#: Prefijo de los servers de claude.ai, que A trata aparte en la normalización
+#: (`normalization.ts:8`): en esos nombres colapsa `_` repetidos y recorta los de los
+#: extremos, porque `__` es el DELIMITADOR de `mcp__server__tool` y un nombre con dos
+#: guiones bajos seguidos parte el nombre por donde no es.
+_CLAUDEAI_SERVER_PREFIX = "claude.ai "
+
+
 def normalize_mcp_tool_name(name: str) -> str:
-    """Nombre saneado para exponer al modelo. El del server se conserva aparte."""
-    return _UNSAFE_NAME_CHARS.sub("_", name)
+    """Nombre saneado para exponer al modelo. El del server se conserva aparte.
+
+    Calco de `normalizeNameForMCP` (`services/mcp/normalization.ts:17-23`), incluida su
+    rama para los servers de claude.ai.
+    """
+    normalized = _UNSAFE_NAME_CHARS.sub("_", name)
+    if name.startswith(_CLAUDEAI_SERVER_PREFIX):
+        normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized
+
+
+def mcp_tool_prefix(server_name: str) -> str:
+    """`mcp__<server>__` — homólogo de `getMcpPrefix` (`mcpStringUtils.ts:38-41`)."""
+    return f"mcp__{normalize_mcp_tool_name(server_name)}__"
+
+
+def build_mcp_tool_name(server_name: str, tool_name: str) -> str:
+    """Nombre CUALIFICADO `mcp__<server>__<tool>` — `buildMcpToolName` (`:50-52`).
+
+    No es cosmética ni «namespacing por si acaso»: el prefijo es la única señal de que
+    la tool vive en OTRO espacio que el del workspace, y sin él el modelo las mezcla.
+    Medido en sesión real (`FIND-MCP-NAME-1`): con nombres desnudos el modelo listó el
+    vault con `vault_list`, vio `index.md` y lo intentó leer con la tool NATIVA de
+    ficheros contra el cwd → `[Errno 2] No such file or directory`, tres veces, hasta
+    rendirse; nunca llamó a `vault_read`.
+
+    El canónico le da además un segundo trabajo, el de PERMISOS
+    (`getToolNameForPermissionCheck`, `mcpStringUtils.ts:59-67`, con la razón escrita):
+    un `deny` sobre una nativa —`Write`— no debe casar con una tool MCP que se llame
+    igual. Con nombre desnudo esa colisión es silenciosa en ambos sentidos.
+    """
+    return f"{mcp_tool_prefix(server_name)}{normalize_mcp_tool_name(tool_name)}"
 
 
 def cap_mcp_description(text: str) -> str:
@@ -90,11 +127,18 @@ class McpTool:
         search_hint: str = "",
         remote_name: str | None = None,
     ) -> None:
-        # `name` es lo que ve el MODELO (saneado); `remote_name` lo que se le dice al
-        # SERVER. A mantiene la misma separación: `name` = `fullyQualifiedName` saneado y
-        # `mcpInfo.toolName` = el original (`client.ts:1767-1773`). Sin ella, sanear el
-        # nombre rompería la invocación real de la tool.
-        self.name = name
+        # `name` es lo que ve el MODELO; `remote_name` lo que se le dice al SERVER. A
+        # mantiene la misma separación: `name` = `fullyQualifiedName` y `mcpInfo.toolName`
+        # = el original (`client.ts:1767-1773`). Sin ella, cualificar el nombre rompería
+        # la invocación real de la tool.
+        #
+        # La CUALIFICACIÓN se hace aquí, en el constructor, por lo mismo que el cap de la
+        # descripción: es el único punto por el que pasan todas las tools MCP
+        # (`build_mcp_tool` es esquivable). Este comentario DECÍA que `name` ya era el
+        # nombre cualificado mientras el código sólo lo saneaba — declaración en lugar de
+        # pago (`D-07`), y lo que llegaba al modelo eran `vault_read`, `vault_list`…
+        # Sin `server_name` no hay con qué cualificar y se sanea, como antes.
+        self.name = build_mcp_tool_name(server_name, name) if server_name else normalize_mcp_tool_name(name)
         self.remote_name = remote_name if remote_name is not None else name
         # El cap se aplica AQUÍ, en el constructor, y no en `build_mcp_tool`: en A vive
         # dentro del `prompt()` de la propia tool MCP (`client.ts:1789-1794`), o sea en el
@@ -124,6 +168,12 @@ class McpTool:
         self.safe_for_background = read_only
         self.timeout_seconds = timeout_seconds
         self.server_name = server_name
+        # Homólogo de `mcpInfo` (`client.ts:1770`): la identidad SIN cualificar, que es
+        # lo que necesita quien tenga que deshacer el prefijo — el chequeo de permisos
+        # (`getToolNameForPermissionCheck`) y cualquier UI que muestre el nombre corto.
+        # Se guarda el nombre REMOTO, no el saneado: es el que identifica a la tool en
+        # el server.
+        self.mcp_info = {"server_name": server_name, "tool_name": self.remote_name}
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         from .client import McpToolError
@@ -202,6 +252,8 @@ __all__ = [
     "McpCall",
     "McpTool",
     "build_mcp_tool",
+    "build_mcp_tool_name",
     "cap_mcp_description",
+    "mcp_tool_prefix",
     "normalize_mcp_tool_name",
 ]

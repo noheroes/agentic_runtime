@@ -146,7 +146,7 @@ def test_register_tools_skips_malformed_and_exposes_rest():
         _echo_call,
     )
     names = [t.name for t in provider.tools(_ctx())]
-    assert names == ["ok", "ok2"]
+    assert names == ["mcp__srv__ok", "mcp__srv__ok2"]
 
 
 def test_catalog_emits_mcp_tool_summaries():
@@ -201,4 +201,4 @@ def test_mcp_tools_converge_through_capability_manager():
     assembled = [t.name for t in pool.assemble()]
 
     # native como prefijo, mcp después (paridad con assembleToolPool)
-    assert assembled == ["read", "mcp_x"]
+    assert assembled == ["read", "mcp__srv__mcp_x"]
