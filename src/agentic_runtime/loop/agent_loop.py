@@ -24,6 +24,7 @@ from ..events.event_types import (
     ErrorEvent,
     Event,
     MessageEvent,
+    ThinkingEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -587,6 +588,7 @@ class AgentLoop:
 
             # Consume eventos del stream
             token_buffer: list[str] = []
+            thinking_blocks: list[dict[str, str]] = []
             tool_calls: list[ToolCallEvent] = []
             done: DoneEvent | None = None
             error: ErrorEvent | None = None
@@ -602,6 +604,17 @@ class AgentLoop:
                 await self._emit(event, ctx)  # observación en vivo
                 if isinstance(event, TokenEvent):
                     token_buffer.append(event.content)
+                elif isinstance(event, ThinkingEvent):
+                    # Sólo los bloques CERRADOS entran en la historia: los deltas son
+                    # para mirar, no para persistir. Sin esto el modelo re-razona desde
+                    # cero en cada tool call, que es lo que el motor recomienda evitar
+                    # devolviéndole sus propios items de razonamiento.
+                    if event.final:
+                        thinking_blocks.append({
+                            "thinking": event.content,
+                            "signature": event.signature,
+                            "model_id": event.model_id,
+                        })
                 elif isinstance(event, ToolCallEvent):
                     tool_calls.append(event)
                 elif isinstance(event, DoneEvent):
@@ -648,6 +661,11 @@ class AgentLoop:
             assistant_content = "".join(token_buffer)
             if assistant_content or tool_calls:
                 msg: dict[str, Any] = {"role": "assistant", "content": assistant_content}
+                if thinking_blocks:
+                    # Se cuelgan del mensaje que YA existe, nunca solos: un mensaje de
+                    # asistente que sólo lleva razonamiento es historia huérfana y hace
+                    # que el motor rechace el turno (`utils/messages.ts:2306-2310`).
+                    msg["thinking_blocks"] = thinking_blocks
                 if tool_calls:
                     msg["tool_calls"] = [
                         {"id": tc.call_id, "function": {"name": tc.tool_name, "arguments": json.dumps(tc.tool_input)}}

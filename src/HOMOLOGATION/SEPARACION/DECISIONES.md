@@ -855,3 +855,53 @@ fuera, texto genérico dentro: `reasoningTagHint` ← `isReasoningTagProvider`, 
 y las divergencias de proveedor se pagan en **transporte** (`provider-capabilities.ts`), no en
 prompt. **Y contradice nuestro dogma**: lista el censo de tools con resúmenes dentro del prompt
 (`system-prompt.ts:240-339`) — **no se adopta**, con motivo escrito (§7 de ese documento).
+
+---
+
+## D-21 · Una opción que el motor no sabe expresar se RECHAZA; descartarla en silencio es el defecto
+
+**2026-08-09, al cablear `B5` (`model_options`).** La costura `S1` estaba entera y **vacía**:
+`composition.py:206` pasaba sólo `capabilities=…`, así que `thinking`/`effort` llegaban siempre
+sin poblar. Al llenarla aparecieron tres huecos que **no** eran del cableado sino de lo que hay
+debajo, y los tres tenían la misma forma: el parámetro **viaja, se acepta y se tira sin decir
+nada**.
+
+- **`FIND-MODELS-BUDGET-1`.** `SimpleStreamOptions.thinking_budgets` sólo lo leen cuatro APIs
+  (`anthropic-messages`, `bedrock-converse-stream`, `google-generative-ai`, `google-vertex`).
+  `build_base_options` devuelve un `StreamOptions` plano y cada provider **re-adjunta lo suyo**:
+  en `azure-openai-responses` se re-adjunta el nivel y el presupuesto desaparece.
+- **`FIND-MODELS-OFF-1`.** `thinking.enabled=False` era un no-op. Apagar es un **nivel** (`off`),
+  no la ausencia de nivel: omitir el parámetro deja el default del motor (`medium` en gpt-5.x),
+  que es lo contrario de lo pedido. Y `clamp_thinking_level` **escala** lo no soportado, de modo
+  que un `off` mudo se convertía en `minimal`.
+- **`FIND-RT-REASON-1`.** Los items de razonamiento **no volvían nunca** al motor, pese a que
+  `agentic_models` ya los sabe re-inyectar (`openai_responses_shared.py:130-137`) y los sabe
+  firmar (`:368-379`). Los tres cortes estaban en el runtime.
+
+**La decisión.** Ante una opción sin representación en el motor elegido, el puente **lanza
+`UnsupportedModelOptionError`**. No la omite, no la aproxima al nivel más cercano y no la
+registra en un log que nadie lee. El razonamiento es que un turno que razona cuando se pidió que
+no razonara —o que ignora un techo de tokens— produce **exactamente la misma captura** que uno
+que obedeció: el defecto es indetectable *a posteriori*, y por eso hay que hacerlo imposible
+*a priori*. Es la lectura estricta de la doctrina de la costura: *lo que no se permite es que un
+puente los reciba y los tire callando.*
+
+**Dónde se paga** (criterio `C2` de `criterios-prompt-multimodelo.md`): en la **capa de
+transporte**, nunca en el prompt. La sonda `agentic_models.supports_thinking_budget` es
+conocimiento de proveedor y vive con el proveedor; el runtime la consulta, no la replica.
+
+**Corolario, del canónico.** Las firmas de razonamiento están **atadas al modelo**
+(`query.ts:924` → `stripSignatureBlocks`): un bloque firmado por otro modelo se descarta al
+rearmar el contexto. Y el razonamiento **se cuelga de un mensaje que ya existe**, nunca crea
+uno: un assistant sólo-thinking es un 400 en el request siguiente
+(`utils/messages.ts:2306-2310`).
+
+**Evidencia.** `agentic_runtime/src/agentic_runtime/tests/test_model_options_reasoning.py`
+(13 pruebas) y `agentic_code/tests/test_reasoning_surface.py` (16). El cierre real, por `D-15`,
+sigue siendo un `.jsonl` de sesión con `--capture-payloads`: el grabador anota el `reasoning`
+que salió de verdad y cuenta los items de razonamiento devueltos (`reasoning_items_sent`), que
+es la única prueba directa del round-trip.
+
+**Hallazgo colateral del entorno.** `agentic_runtime/.venv` tenía `agentic_models` instalado como
+**copia congelada**, no como editable: la suite del runtime estaba midiendo contra una copia
+vieja del proveedor. Reinstalado editable contra `/home/noheroes/python/agentic_models`.

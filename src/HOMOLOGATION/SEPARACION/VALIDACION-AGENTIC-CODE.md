@@ -694,7 +694,7 @@ Lo que NO está verificado para todos los ítems es si el hueco es DEUDA o **div
 | B2 | `mcp_oauth_redirect_handler` · `mcp_oauth_callback_handler` | **Todo server MCP con OAuth es inalcanzable desde el producto.** Y el contrato dice por qué duele aquí: «el runtime headless no abre navegador» (`factory.py:60-62`) — `agentic_code` es justamente quien tiene persona y navegador delante | ❌ deuda |
 | B3 | `mcp_config_watcher` | Vector 2 de recarga dinámica muerto. El contrato **NOMBRA a este integrador** como su implementador: «`agentic_code`: inotify» (`factory.py:51-54`). Campo designado por escrito y vacío | ❌ deuda |
 | B4 | `task_registry` (`S19`) **+** `root_turn_start_hooks` | Van en PAREJA: sin registry no hay tareas en background, y sin los hooks de turn-start no se drenan sus notificaciones (`factory.py:129-135` lo dice: el consumidor no alcanza el loop, así que las inyecta ahí). Cablear uno solo deja el ciclo a medias | ❌ deuda, y **acoplada** |
-| B5 | `model_options` | `thinking`, `effort`, `temperature`, `max_tokens`, `tool_choice`, `metadata` llegan **siempre vacíos** al motor (`models/protocol.py:88-104`): el producto no puede pedir razonamiento ni acotar salida. Es la costura de `agentic_models`, el otro repo que el usuario nombró | ❌ deuda |
+| B5 | `model_options` | ✅ **CABLEADO (22ª ventana)** — `--effort` / `--thinking` / `--capture-payloads`, round-trip de razonamiento y presentación del pensamiento. Ver § 4 quater. `temperature`, `max_tokens`, `metadata` los transporta el puente y **nadie los pide**: declarados, no cableados. `tool_choice` y `output_format` **no tienen representación** en agentic_models 0.2.0 y el puente los rechaza | ✅ pagado, con residuo declarado |
 | B6 | `presentation` (`PathPresentation`) | Sin presentación de paths inyectada, el default identidad — a verificar contra qué hace A al citar rutas al modelo | 🟡 abrir antes de rotular |
 | B7 | `git_credentials` | `clone_repository` sin auth. **Ya estaba nombrado como diferido** en ventanas anteriores (`SERPER_API_KEY` del entorno vs `ctx.git_credentials`) | ❌ deuda, ya nombrada |
 | B8 | `small_llm` | Sin modelo pequeño inyectado; a determinar qué lo consume en el runtime | 🟡 abrir antes de rotular |
@@ -849,3 +849,55 @@ en el mismo punto de composición, porque el memdir lleva ventanas pagado y sin 
 (jerarquía + inyección) · núcleo + `@include` + cap · homologación completa de `claudemd.ts`
 (reglas condicionales por glob, excludes, cachés, includes externos) — esta última es TRAMO propio,
 no paso previo a probar.
+
+---
+
+### § 4 quater · `B5` — `model_options` cableado, y los tres cortes que había debajo (22ª ventana)
+
+**Encargo del usuario, literal:** *«quiero que la implementación active las capacidades que hoy
+no están conectadas y si el portado de PI no lo contenía implementes lo que falte para usar los
+modos thinking y effort»*, más *«implementa hooks extras para que puedas capturar evidencias»* y
+*«que ese hook pueda llevar por stream contenidos que sirvan para que el CLI… pueda mostrar estos
+"pensamientos" junto con los spinners»*. El plan mínimo que yo había anunciado —cablear `--effort`
+y declarar el resto— fue **rechazado por insuficiente**, y con razón: la costura estaba entera y
+vacía, y llenarla sin mirar debajo habría dejado los tres cortes intactos.
+
+**Lo que había debajo.** Tres hallazgos, uno por capa, todos con la misma forma —el parámetro
+viaja, se acepta y se descarta **callando**—: `FIND-MODELS-BUDGET-1`, `FIND-MODELS-OFF-1` y
+`FIND-RT-REASON-1`. El criterio con que se resuelven es `D-21`. Corrección de mi propio encuadre
+inicial: supuse que el round-trip faltaba en `agentic_models`; leer
+`openai_responses_shared.py:130-137` y `:368-379` probó que **PI lo implementa entero** y que los
+tres cortes estaban en el runtime.
+
+**Inyecciones.**
+
+| Capa | Qué se inyectó |
+|---|---|
+| `agentic_models` | `supports_thinking_budget(model)` — sonda de proveedor: qué APIs leen de verdad `thinking_budgets`. Conocimiento de proveedor, en la capa de proveedor (`C2`) |
+| `agentic_runtime` | `ThinkingEvent` en el bus (contenido, firma, `final`, `model_id`); traducción de `effort`/`thinking` a `reasoning` con rechazo explícito de lo inexpresable; round-trip del razonamiento al rearmar el contexto, **filtrado por modelo**; persistencia de los bloques cerrados en el `AgentLoop`, colgados de un mensaje que ya existe |
+| `agentic_code` | `--effort` (5 niveles) · `--thinking`/`--no-thinking` · `--capture-payloads`; `build_model_options`; `PayloadRecorder` sobre los hooks `on_payload`/`on_response` del motor; `ThinkingBlock` en el transcript y su widget; eco atenuado en `--print`; **el pensamiento en vivo junto al indicador de trabajo** de la barra de estado |
+
+**Por qué hizo falta el grabador de payload.** El capture ordinario registra **eventos del
+runtime** —lo que el motor devuelve—, no lo que se le pidió. Sin `PayloadRecorder`, «`--effort
+high` viajó» es una afirmación sin prueba: una opción descartada por el camino produce
+exactamente el mismo `.jsonl` que una que llegó. El grabador anota el `reasoning` real, el
+`include`, y `reasoning_items_sent` —la cuenta de items de razonamiento devueltos—, que es la
+**única prueba directa** del round-trip. Por defecto sólo la cabecera; el cuerpo entero con
+`AGENTIC_CODE_CAPTURE_PAYLOADS_FULL` (el system prompt y la conversación ya están capturados y
+duplicarlos multiplica el fichero por turno). Ninguno de los dos lleva la clave.
+
+**Acreditación.** `test_model_options_reasoning.py` (13, runtime) + `test_reasoning_surface.py`
+(16, integrador), verdes. Suites completas sin regresión: las 4 caídas de `agentic_code` y las de
+`agentic_runtime` se verificaron **presentes en HEAD** extrayendo los tres repos con `git archive`
+a un scratch y ejecutando con `PYTHONPATH` propio, con `__file__` comprobado — deuda cero neta por
+diff. Al hacerlo salió un hallazgo de entorno: `agentic_runtime/.venv` tenía `agentic_models` como
+copia congelada en `site-packages`, no editable; la suite del runtime llevaba midiendo contra una
+copia vieja del proveedor. Reinstalado editable.
+
+**Residuo declarado, no rotulado** (`declarar-no-es-pagar`): `temperature`, `max_tokens` y
+`metadata` los transporta el puente y **nadie los pide** — una palanca que nadie mueve es
+superficie sin conducta, y se cablearán cuando haya quien las mueva. `tool_choice` y
+`output_format` **no tienen representación** en agentic_models 0.2.0 y el puente los rechaza por
+`D-21`. **Criterio de cierre pendiente:** `D-15` — un `.jsonl` de sesión real con
+`--capture-payloads` que muestre el `reasoning` que salió y `reasoning_items_sent > 0` en el
+segundo request de un turno con tool calls.

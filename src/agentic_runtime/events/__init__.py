@@ -2,6 +2,7 @@ from .bus import EventBus
 from .event_types import (
     DoneEvent,
     ErrorEvent,
+    ThinkingEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -15,6 +16,7 @@ __all__ = [
     "EventBus",
     "EventBusProtocol",
     "EventHandler",
+    "ThinkingEvent",
     "TokenEvent",
     "ToolCallEvent",
     "ToolResultEvent",

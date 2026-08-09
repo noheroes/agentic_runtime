@@ -77,6 +77,33 @@ class TokenEvent(Event):
 
 
 @dataclass(frozen=True)
+class ThinkingEvent(Event):
+    """Razonamiento del modelo — el canal que faltaba en el bus.
+
+    Existe por dos motivos distintos que conviene no confundir:
+
+    1. **Presentación.** El motor emite el resumen de razonamiento mientras
+       piensa; sin este evento el consumidor no tiene por dónde recibirlo y la
+       espera es una pantalla muda.
+    2. **Round-trip.** `signature` es el **item de razonamiento entero**, opaco
+       y serializado por el motor (incluye su `encrypted_content` cuando lo
+       hay). Es lo que hay que devolver en el request siguiente para que el
+       modelo continúe su cadena en vez de re-razonar desde cero. El runtime no
+       lo interpreta: lo transporta y lo persiste.
+
+    `final=False` son los deltas en vivo; `final=True` cierra el bloque y es el
+    único que trae `signature`. `model_id` viaja porque **las firmas están atadas
+    al modelo** que las generó: reproducirlas contra otro modelo es un 400 (el
+    canónico lo resuelve igual, `query.ts:924` → `stripSignatureBlocks`).
+    """
+
+    content: str = ""
+    signature: str = ""
+    final: bool = False
+    model_id: str = ""
+
+
+@dataclass(frozen=True)
 class ToolCallEvent(Event):
     tool_name: str = ""
     tool_input: dict[str, Any] = field(default_factory=dict)
@@ -152,6 +179,7 @@ __all__ = [
     "EventBusProtocol",
     "EventHandler",
     "MessageEvent",
+    "ThinkingEvent",
     "TokenEvent",
     "ToolCallEvent",
     "ToolResultEvent",
