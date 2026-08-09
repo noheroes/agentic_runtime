@@ -23,6 +23,8 @@ EXIT_PLAN_MODE_TOOL_NAME = "ExitPlanMode"
 
 class EnterPlanModeTool:
     name = ENTER_PLAN_MODE_TOOL_NAME
+    # `shouldDefer: true` del canónico (`EnterPlanModeTool/EnterPlanModeTool.ts:55`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`EnterPlanModeTool.ts:38`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "switch to plan mode to design an approach before coding"
@@ -186,6 +188,8 @@ than to redo work
 
 class ExitPlanModeTool:
     name = EXIT_PLAN_MODE_TOOL_NAME
+    # `shouldDefer: true` del canónico (`ExitPlanModeTool/ExitPlanModeV2Tool.ts:166`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`ExitPlanModeV2Tool.ts:149`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "present plan for approval and start coding (plan mode only)"

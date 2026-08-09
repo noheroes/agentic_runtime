@@ -76,6 +76,8 @@ def _scoped_get(task_id: str, ctx: ToolUseContext | None) -> Any:
 
 class TaskCreateTool:
     name = "TaskCreate"
+    # `shouldDefer: true` del canónico (`TaskCreateTool/TaskCreateTool.ts:67`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`TaskCreateTool.ts:50`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "create a task in the task list"
@@ -154,6 +156,8 @@ All tasks are created with status `pending`.
 
 class TaskGetTool:
     name = "TaskGet"
+    # `shouldDefer: true` del canónico (`TaskGetTool/TaskGetTool.ts:57`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`TaskGetTool.ts:40`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "retrieve a task by ID"
@@ -211,6 +215,8 @@ Returns full task details:
 
 class TaskListTool:
     name = "TaskList"
+    # `shouldDefer: true` del canónico (`TaskListTool/TaskListTool.ts:52`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`TaskListTool.ts:35`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "list all tasks"
@@ -285,6 +291,8 @@ Use TaskGet with a specific task ID to view full details including its result.
 
 class TaskUpdateTool:
     name = "TaskUpdate"
+    # `shouldDefer: true` del canónico (`TaskUpdateTool/TaskUpdateTool.ts:107`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`TaskUpdateTool.ts:90`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "update a task"
@@ -355,6 +363,8 @@ Rewrite a task's description:
 
 class TaskStopTool:
     name = "TaskStop"
+    # `shouldDefer: true` del canónico (`TaskStopTool/TaskStopTool.ts:53`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`TaskStopTool.ts:41`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "kill a running background task"
@@ -398,6 +408,8 @@ class TaskStopTool:
 
 class TaskOutputTool:
     name = "TaskOutput"
+    # `shouldDefer: true` del canónico (`TaskOutputTool/TaskOutputTool.tsx:148`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`TaskOutputTool.tsx:146`). Fuera del
     # contrato T1 (`contracts/tools.py:5`); lo lee ToolSearch para rankear.
     search_hint = "read output/logs from a background task"

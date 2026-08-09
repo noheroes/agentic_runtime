@@ -685,3 +685,61 @@ el server de terceros. Portados con la grafía literal de A. Quedan sin hint `Sl
 **Consecuencia para el orden de `D-18`:** el vínculo con `GAP-TOOL4` se refuerza, no se
 debilita. El hint sólo puntúa en la vía diferida; pagarlo antes de marcar las 15 diferidas es
 exactamente poner la señal antes que el mecanismo que la usa.
+
+---
+
+## D-19 · `GAP-TOOL4` pagado: las 15 «meta» se difieren, y el marcador dice qué cambió
+
+**Decisión.** Las 15 nativas que A retira del turno 1 por `shouldDefer: true` se marcan
+`deferred = True` en `tools/native/`, con la cita a `fichero:línea` de A en cada clase. El
+reparto queda **igual al del canónico y sólo al del canónico**: 15 diferidas, 10 no.
+
+**El censo, releído sobre el fuente de A (`D-08`), no de memoria.** 27 ficheros de
+`claude-code/src/tools` llevan `shouldDefer: true`. De ésos, B tiene 15 —los de la ficha— y no
+tiene 12 (`LSPTool`, `SendMessage`, `Team*`, `RemoteTrigger`, `Cron*`, `NotebookEdit`). Las dos
+de recursos MCP quedan fuera a propósito: son `FIND-MCP17`, deuda distinta con su `xfail` vivo.
+
+**Guardián durable, acreditado en rojo dos veces.** `test_gap_tool4_el_reparto_de_diferidas_es_el_del_canonico`
+mide sobre las clases de **producción** vía `create_tools(interactive=True)` — no sobre un pool
+fabricado, que es justo por lo que `E2g` no veía este hueco (monkeypatchea el suyo,
+`test_tramo1_gate.py:2357-2359`). Acreditación ejecutada contra el fuente base en worktree
+aparte: sin las marcas da `faltan={las 15}`; difiriendo `grep` da `sobran={'grep'}`. **Las dos
+direcciones se afirman a propósito**: sin la segunda mitad, un rojo se «arregla» difiriendo
+`grep`, que es exactamente lo que el turno 1 no puede perder.
+
+### El marcador: qué cambió de verdad, medido en consumidor con `AGENTIC_CODE_GPT5_HINTS=0`
+
+14 sesiones reales de `agentic_code` (`--print`, gpt-5.4-mini, `.jsonl` como evidencia), en las
+dos configuraciones que el usuario fijó, 3 enunciados sin alinear, 7 rondas por lado.
+
+| | anunciadas | diferidas ANTES | diferidas DESPUÉS |
+|---|---|---|---|
+| con `obsidian` | 38 | 15 (todas MCP) | **27** |
+| sin MCP | 21 | **0** | **12** |
+
+- **12, no 15, porque el marcador corre en `--print`:** `AskUserQuestion`, `EnterPlanMode` y
+  `ExitPlanMode` están gateadas por `interactive` (`factory.py:53-59`) y no entran al pool
+  headless. En sesión interactiva son las 15. **No es un hueco de cableado**, y se dice porque
+  al leer el primer marcador lo di por tal.
+- **El `tool_search` server-side aparece donde no estaba:** sin MCP el `any(t.defer_loading)`
+  de `openai_responses_shared.py:229-231` era falso y no se emitía; ahora se emite siempre.
+  La rama en juego es la NATIVA, verificado en catálogo (`gpt-5.4-mini.native_tool_search`
+  = `True`), no supuesto.
+- **La expansión server-side funciona sobre nativas:** en 4 de 6 rondas de `webdir` el modelo
+  invocó `WebSearch` —ya diferida— **sin ninguna llamada a `ToolSearch` client-side**. Eso es
+  la prueba de que el proveedor las resuelve; una corrida verde no lo habría dicho.
+- **14.661 bytes de schema salen del turno 1** (las 12 del pool headless, medidas
+  `description` + `input_schema`).
+
+**El cambio de conducta que sí hubo, y no se disimula.** El enunciado `tres` («revisar tres
+cosas a la vez») pasaba por `TaskCreate` en **4/4** rondas antes y en **1/4** después: el modelo
+se fue a `Agent`, que A no difiere. Las respuestas del «después» son mejores —revisan y
+reportan, en vez de crear tres tareas y preguntar qué hacer—, pero eso es efecto colateral
+observado, no el criterio: **el criterio es que el reparto sea el de A**, y la conducta se
+anota como lo que es, un desplazamiento medido de `Task*` hacia `Agent`.
+
+**Deuda cero neta por diff, medida y no rotulada (`declarar no es pagar`).** Suite completo
+antes y después con invocación idéntica (`uv run pytest -q -p no:randomly`, el «antes» desde
+worktree del `HEAD` por `PYTHONPATH`, sin revertir nada): **12 rojos antes, 13 después**; el
+único de más, `test_e6_…`, **pasa en aislado** — es gate contra modelo vivo, ruido. `e2c`/`e2e`
+fallan con el **mismo texto y el mismo número** a los dos lados porque fabrican su pool.

@@ -509,7 +509,12 @@
   **no-op** (`registry.py:89-92`) y el default es 300 s, pero murió a ~100 s. `E2g` ya no revienta con un error opaco de asyncio:
   captura el `CancelledError` —legítimo, porque `await` sobre una tarea **ajena** cancelada lo relanza en quien espera sin
   cancelarlo a él— y lo reporta como fallo del caso **con las tools que el modelo había elegido antes de morir**.
-- **⚠ `S26` no tiene sujeto nativo en producción:** **ninguna** tool nativa marca `deferred` (`grep -c "deferred = True"
+- **✅ SUPERADO (`D-19`, `GAP-TOOL4` pagado): `S26` YA tiene sujeto nativo en producción** — las 15 del reparto de A
+  marcan `deferred = True` con su cita, y el guardián es
+  `test_tools_infra_homologation.py::test_gap_tool4_el_reparto_de_diferidas_es_el_del_canonico`, que mide sobre
+  `create_tools()` y no sobre un pool fabricado. Lo que sigue vivo de este renglón es sólo `GAP-TOOL3` (la *precedencia*
+  de `isDeferredTool`), que es otra deuda. **Texto original conservado abajo porque describe el estado que se pagó:**
+- **⚠ `S26` no tenía sujeto nativo en producción:** **ninguna** tool nativa marcaba `deferred` (`grep -c "deferred = True"
   tools/native/*.py` = **cero**). El único sujeto real es MCP (`capabilities/mcp/tool_adapter.py:30`, a mano), tal como
   `09·E1` anticipaba. Lo que difiere `WebFetch`/`WebSearch` en el canónico es `shouldDefer` dentro de la precedencia de
   `isDeferredTool` (`prompt.ts:62`) = `GAP-TOOL3`/`09·TiR5`, **no implementada** ⇒ `E2e` **configura** el runtime como

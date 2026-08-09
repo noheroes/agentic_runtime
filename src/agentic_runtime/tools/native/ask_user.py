@@ -104,6 +104,8 @@ _ANNOTATION_SCHEMA: dict[str, Any] = {
 
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
+    # `shouldDefer: true` del canónico (`AskUserQuestionTool/AskUserQuestionTool.tsx:113`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`AskUserQuestionTool.tsx:111`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "prompt the user with a multiple-choice question"

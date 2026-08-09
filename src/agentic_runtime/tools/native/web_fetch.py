@@ -245,6 +245,8 @@ def html_a_markdown(html: str) -> str:
 
 class WebFetchTool:
     name = WEB_FETCH_TOOL_NAME
+    # `shouldDefer: true` del canónico (`WebFetchTool/WebFetchTool.ts:71`) — `GAP-TOOL4`.
+    deferred = True
     # `Tool.searchHint` del canónico (`WebFetchTool.ts:68`), literal. Fuera del contrato T1
     # (`contracts/tools.py:5`) pero leído opcionalmente por ToolSearch para rankear.
     search_hint = "fetch and extract content from a URL"

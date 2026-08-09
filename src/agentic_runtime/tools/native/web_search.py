@@ -24,6 +24,8 @@ _MAX_RESULTS_CAP = 20
 
 class WebSearchTool:
     name = WEB_SEARCH_TOOL_NAME
+    # `shouldDefer: true` del canónico (`WebSearchTool/WebSearchTool.ts:156`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal. Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "search the web for current information"

@@ -28,6 +28,8 @@ _TODO_SCHEMA = {
 
 class TodoWriteTool:
     name = TODO_WRITE_TOOL_NAME
+    # `shouldDefer: true` del canónico (`TodoWriteTool/TodoWriteTool.ts:51`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal. Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "manage the session task checklist"

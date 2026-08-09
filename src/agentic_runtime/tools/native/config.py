@@ -14,6 +14,8 @@ _CONFIG_KEY = "config"
 
 class ConfigTool:
     name = CONFIG_TOOL_NAME
+    # `shouldDefer: true` del canónico (`ConfigTool/ConfigTool.ts:86`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal. Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "get or set runtime settings (theme, model)"

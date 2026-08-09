@@ -43,7 +43,7 @@ Producido por el usuario ejercitando `agentic_code` contra el runtime. **Este es
 | 1 | `run_shell` sin `cwd` | defecto de **CONTRATO** | ✅ **PAGADO** (11ª ventana) — 6 inyecciones rojas, `preventCwdChanges` incluido |
 | 2 | Fallback de `BashTool` (`TRAMO-1.md:183`) | conducta | ✅ **PAGADO** (13ª ventana) — más ancho que la ficha: el fallback estaba en **dos** sitios de producción |
 | 3 | Remediación de `FIND-TS-1` / `TS-3` / `TS-4` | deuda ya declarada | ⛔ abierto |
-| 4 | `GAP-TOOL4` | deuda ya declarada | ⛔ abierto |
+| 4 | `GAP-TOOL4` | deuda ya declarada | ✅ **PAGADO** (`D-19`) — 15 nativas diferidas como A; marcador antes/después de 14 sesiones con `AGENTIC_CODE_GPT5_HINTS=0` |
 | 5 | `GAP-PROMPT-1` — 15 de 25 descripciones sin homologar | superficie del modelo | ⛔ abierto |
 | 6 | `FIND-E2G-2` | deuda ya declarada | ⛔ abierto |
 | 7 | Abort de `WebFetch` no esperable | conducta | ⛔ abierto |

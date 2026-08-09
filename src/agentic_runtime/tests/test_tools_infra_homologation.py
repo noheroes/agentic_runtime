@@ -180,6 +180,45 @@ def test_native_strategy_marks_defer_loading_and_drops_toolsearch():
     assert "defer_loading" not in by_name["Bash"]
 
 
+#: El reparto de `shouldDefer` del canónico, censado sobre `claude-code/src/tools` 1→EOF
+#: (`D-08`) y no de memoria. Cada nombre lleva su cita en la clase de B. Las 12 que A
+#: difiere y B no tiene (`LSPTool`, `SendMessage`, `Team*`, `RemoteTrigger`, `Cron*`,
+#: `NotebookEdit`) no entran; las dos de recursos MCP tampoco, porque son `FIND-MCP17`.
+_A_DIFIERE = {
+    "AskUserQuestion", "Config", "EnterPlanMode", "ExitPlanMode", "EnterWorktree",
+    "ExitWorktree", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+    "TaskUpdate", "TodoWrite", "WebFetch", "WebSearch",
+}
+#: Lo que A **no** difiere, y no es arbitrario: es el núcleo de exploración que el modelo
+#: necesita en el turno 1, más `ToolSearch` (que nunca se difiere) y `clone_repository`,
+#: que no existe en A (`L10`).
+_A_NO_DIFIERE = {
+    "Agent", "bash", "glob", "grep", "read_file", "write_file", "Edit", "Sleep",
+    "clone_repository", "ToolSearch",
+}
+
+
+def test_gap_tool4_el_reparto_de_diferidas_es_el_del_canonico():
+    """`GAP-TOOL4`: las 15 «meta» que A retira del turno 1 se difieren, y sólo ésas.
+
+    Se mide sobre las clases de PRODUCCIÓN, no sobre un pool fabricado: el gate `E2g`
+    monkeypatchea las suyas (`test_tramo1_gate.py:2357-2359`) y por eso no veía este
+    hueco. La aserción va en las DOS direcciones a propósito — que falte una marca y que
+    sobre una son el mismo defecto de reparto, y sólo la segunda mitad impide «arreglar»
+    un rojo difiriendo `grep`, que es justo lo que el turno 1 no puede perder.
+    """
+    from agentic_runtime.tools.factory import create_tools
+
+    por_nombre = {t.name: t for t in create_tools(interactive=True).all_tools()}
+    assert _A_DIFIERE | _A_NO_DIFIERE == set(por_nombre), (
+        f"el censo de nativas cambió: {set(por_nombre) ^ (_A_DIFIERE | _A_NO_DIFIERE)}"
+    )
+    diferidas = {n for n, t in por_nombre.items() if is_deferred_tool(t)}
+    assert diferidas == _A_DIFIERE, (
+        f"faltan={_A_DIFIERE - diferidas} sobran={diferidas - _A_DIFIERE}"
+    )
+
+
 # ===========================================================================
 # G · Path guards / confinamiento — lo homologado (PASA)
 # ===========================================================================

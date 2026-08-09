@@ -71,6 +71,8 @@ async def _run(
 
 class EnterWorktreeTool:
     name = ENTER_WORKTREE_TOOL_NAME
+    # `shouldDefer: true` del canónico (`EnterWorktreeTool/EnterWorktreeTool.ts:71`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`EnterWorktreeTool.ts:54`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "create an isolated git worktree and switch into it"
@@ -194,6 +196,8 @@ specifically mention worktrees
 
 class ExitWorktreeTool:
     name = EXIT_WORKTREE_TOOL_NAME
+    # `shouldDefer: true` del canónico (`ExitWorktreeTool/ExitWorktreeTool.ts:167`) — `GAP-TOOL4`.
+    deferred = True
     # `searchHint` del canónico, grafía literal (`ExitWorktreeTool.ts:150`). Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "exit a worktree session and return to the original directory"
