@@ -557,3 +557,64 @@ revés**. La sección de hints vive en el **integrador**, no en el runtime, prec
 `SEPARACION/VALIDACION-AGENTIC-CODE.md` (inventario de costuras) y
 `agentic_code/PRUEBAS-E2E-HOMOLOGACION.md` (bitácora de sesiones reales con enunciados sin
 alineamiento).
+
+---
+
+## `D-17` · Un test cuyo arnés renuncia a la condición que dice medir se REESCRIBE contra el criterio; y la auto-aprobación MCP se paga por sus DOS vías (2026-08-09)
+
+- **Fecha:** 2026-08-09, 23ª ventana. Decidido con el usuario antes de tocar un solo fuente.
+- **Qué la originó.** Los 3 rojos del gate MCP de `agentic_code`. Al implementar B la regla de A
+  (`ServerApprovals.status()` auto-aprueba bajo bypass, espejo de `services/mcp/utils.ts:386-391`),
+  dos tests se pusieron rojos porque su arnés fuerza `dangerously_skip_permissions=True`
+  (`test_mcp_integration.py:98` y `:222`). Estaban verdes **sólo porque B carecía de la regla**:
+  medían la ausencia de la regla, no el gate.
+
+### La regla
+
+1. **Un test cuyo arnés renuncia a la condición que el test dice medir no mide nada.** No se ablanda
+   la aserción para volver al verde: se reescribe **el arnés** contra el criterio. Aquí: los dos
+   tests del gate bajan el bypass a `False`, porque el gate de aprobación vive en el modo NO bypass.
+2. **El gate se mide por CONEXIÓN, no por EJECUCIÓN.** Ejercitar una tool metería el hook de
+   permisos en el camino y un verde podría venir del ✗ del permiso en vez del gate — trampa ya
+   cazada una vez y documentada en `test_mcp_integration.py:108-110`. Se mide sobre las tools que
+   el provider aporta al pool.
+3. **Antídoto al verde vacío:** todo test negativo lleva pareja la aserción de que lo negado
+   **estaba declarado** (`ProjectServerStore.declared()`), para que un verde no pueda provenir de
+   «no había nada configurado».
+4. **La regla nueva paga su propia cobertura.** Auto-aprobar bajo bypass y que el `reject` explícito
+   **mande sobre** el bypass son conducta nueva sin un solo test: se añaden. Código nuevo sin test
+   es deuda, la traiga quien la traiga.
+5. **Expectativa de nombre desnudo.** El tercer rojo (`…failing_remote_tool…`) **no es del gate**:
+   su sustancia pasa y falla sólo en `✗ always_fails` vs `✗ mcp__echo__always_fails`. Es la familia
+   de los 7 rojos declarados del runtime — el pago de `FIND-MCP1` (naming FQ `mcp__srv__tool`,
+   `11-cap-mcp.md:79`) invalidó la expectativa. Se corrige al nombre FQ **y se refuerza** con la
+   aserción negativa de que no aparezca texto de denegación de permiso, para que el ✗ no pueda
+   volver a ser el del permiso.
+
+### Las DOS vías de auto-aprobación, y por qué las dos se pagan
+
+`getProjectMcpServerStatus` (`services/mcp/utils.ts:351-405`) auto-aprueba por **dos** caminos, y el
+razonamiento de A es el mismo en ambos: *no hay diálogo que mostrar*, luego dejar el server en
+`pending` no lo somete a una decisión del usuario — **lo descarta en silencio**.
+
+- **Vía 1, bypass** (`:386-391`): ya pagada.
+- **Vía 2, sesión no interactiva** (`:397-403`): `getIsNonInteractiveSession()` — SDK, `claude -p`,
+  entrada por tubería. **Se paga.** B ya tiene la distinción materializada: `cli.py:175` pasa
+  `interactive=not args.print_mode`.
+
+### Corrección de una carencia SOBREDECLARADA
+
+El docstring de `ServerApprovals` declaraba como «divergencia por EXCESO» la ausencia en B de la
+guarda `isSettingSourceEnabled('projectSettings')` que A pone en las dos vías. **Leído el fuente
+(`D-08`), eso sólo es cierto para el perfil SDK.** El estado por defecto del CLI incluye
+`'projectSettings'` en `allowedSettingSources` (`bootstrap/state.ts:313-319`); sólo el SDK lo pone a
+`[]`, y el CLI lo altera con `--setting-sources`. Para el **perfil terminal que B implementa la
+guarda es constante-verdadera**, luego B es **equivalente**, no excesiva. Se corrige el docstring:
+declarar de más también es declarar mal.
+
+### Divergencia deliberada, rotulada (`L10`)
+
+**Ambas vías anuncian por diagnóstico el server auto-aprobado.** A no emite nada. Es divergencia por
+**exceso de información**, benigna y deliberada: el defecto real en las dos direcciones —descartar en
+silencio, conectar en silencio— es el **silencio**, y conectar un proceso de terceros sin que nadie
+lo haya aprobado es exactamente lo que merece quedar dicho.
