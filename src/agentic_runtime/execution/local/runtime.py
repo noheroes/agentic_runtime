@@ -20,7 +20,6 @@ from ...context.tool_use import ToolUseContext
 from ...contracts.abort import AbortController
 from ...contracts.errors import RuntimeIdentityError
 from ...contracts.identity import Scope, SessionId, SessionRepo
-from ...contracts.permissions import PermissionContext
 from ...events.bus import EventBus
 from ...events.event_types import DoneEvent, TokenEvent, ToolCallEvent, ToolResultEvent
 from ...events.protocol import Event, EventHandler
@@ -311,8 +310,19 @@ class LocalAgentRuntime:
         # (p.ej. `write_file`, que la memoria necesita para guardar) quedan fuera del
         # pool en un agente autónomo. Los subagentes los heredan vía snapshot.
         if self._initial_allowed_tools:
+            # SUMA, no sustituye — y se declara lo que se MIDIÓ: **hoy es inobservable y
+            # NO está acreditado**. El `ctx` de estas líneas acaba de construirse sin
+            # `permission_context`, así que lleva el default vacío y sumar sobre vacío da
+            # exactamente lo mismo que construir uno nuevo. Se conserva porque
+            # `with_command_allow` es la primitiva que el contrato ya tenía para esto y
+            # porque el orden real de las costuras (seed aquí → `root_context_modifier`
+            # después, `:465`) hace que quien manda sobre los permisos sea el integrador:
+            # si algún día este camino heredase permisos, sustituir los perdería en
+            # silencio. Lo que NO es: la explicación de por qué el modelo unas veces usa
+            # una tool MCP y otras no. Eso se midió aparte y el pool sale IDÉNTICO con
+            # `--allowed-tool`, con `--dangerously-skip-permissions` y sin flags.
             ctx = ctx.with_permissions(
-                PermissionContext(always_allow_command=list(self._initial_allowed_tools))
+                ctx.permission_context.with_command_allow(list(self._initial_allowed_tools))
             )
         return ctx, None, 0
 

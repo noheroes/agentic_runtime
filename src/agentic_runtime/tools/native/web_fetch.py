@@ -9,6 +9,7 @@ from html import unescape
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from ...tls import default_ssl_context
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -125,7 +126,13 @@ def _descargar(url: str, profundidad: int = 0) -> _Descarga | _Redirect:
             "Accept": "text/markdown, text/html, */*",
         },
     )
-    opener = urllib.request.build_opener(_NoRedirect)
+    # El handler https lleva la CA extra del proceso (`AGENTIC_EXTRA_CA_CERTS`). En A no
+    # hay línea equivalente porque Node aplica `NODE_EXTRA_CA_CERTS` a todo el proceso y
+    # `fetch` la hereda; en B el opener se construye a mano, así que si no se le da el
+    # contexto se queda con el almacén por defecto. `None` = defaults de la stdlib.
+    opener = urllib.request.build_opener(
+        _NoRedirect, urllib.request.HTTPSHandler(context=default_ssl_context())
+    )
     try:
         # esquema validado por el llamante a http/https (mitiga CWE-22)
         with opener.open(req, timeout=20) as resp:  # nosec B310

@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, Any
 
+from ...tls import default_ssl_context
 from ..protocol import ToolCategory, ToolResult
 
 if TYPE_CHECKING:
@@ -135,8 +136,15 @@ def _serper_search(tool_name: str, query: str, n: int, api_key: str) -> ToolResu
         method="POST",
     )
     try:
-        # URL https fija (endpoint Serper), sin entrada de usuario en el esquema
-        with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT) as resp:  # nosec B310
+        # URL https fija (endpoint Serper), sin entrada de usuario en el esquema.
+        # `context` lleva la CA extra del proceso (`AGENTIC_EXTRA_CA_CERTS`): en A esta
+        # llamada la haría `fetch`, al que Node ya le aplicó `NODE_EXTRA_CA_CERTS`. Sin
+        # esto, un proxy corporativo que intercepta TLS —el caso que el propio canónico
+        # documenta en `errorUtils.ts:99`— rompe la búsqueda aunque el CA esté declarado.
+        # `None` = defaults de la stdlib, o sea el comportamiento de siempre.
+        with urllib.request.urlopen(  # nosec B310
+            req, timeout=_DEFAULT_TIMEOUT, context=default_ssl_context()
+        ) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         return ToolResult.error(tool_name, f"Serper HTTP {e.code}: {e.reason}")

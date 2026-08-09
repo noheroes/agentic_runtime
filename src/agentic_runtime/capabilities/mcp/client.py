@@ -23,6 +23,42 @@ class McpToolError(Exception):
     """
 
 
+#: Read timeout de los streams SSE, en segundos. Es el default del propio SDK
+#: (`sse_read_timeout=300` en `sse_client`, que es quien aún lo expone) y NO
+#: se puede confundir con el timeout de una petición: el canal GET de streamable-HTTP es
+#: de larga duración y con el timeout de request se corta cada pocos segundos.
+SSE_READ_TIMEOUT_SECONDS = 300.0
+
+
+def _sdk_httpx() -> Any:
+    """El módulo httpx que usa ESTE SDK: `httpx2` en `mcp` 2.x, `httpx` en 1.26/1.27.
+
+    No es un detalle de empaquetado. En `mcp` 2.0 el transporte streamable-HTTP abre el
+    canal GET con `client.sse(...)` (`streamable_http.py:213,256,504`), un método que
+    sólo existe en `httpx2`. Pasarle un `httpx.AsyncClient` normal conecta y deja pasar
+    las tool calls (que son POST) pero revienta el canal GET con
+    `AttributeError: 'AsyncClient' object has no attribute 'sse'` **dentro del task
+    group**: el server no puede volver a hablar —notificaciones, `resources/updated`,
+    progreso— y desde fuera parece que todo va bien. Medido contra el server real.
+
+    Por eso el flavor NO se elige por lo que haya instalado, sino leyéndolo del propio
+    SDK: `mcp.shared._httpx_utils` importa exactamente uno de los dos, y ése es el que
+    sus transportes van a recibir.
+    """
+    try:
+        from mcp.shared import _httpx_utils
+    except ImportError:  # pragma: no cover — SDK sin ese módulo interno
+        import httpx
+
+        return httpx
+    module = getattr(_httpx_utils, "httpx2", None) or getattr(_httpx_utils, "httpx", None)
+    if module is None:  # pragma: no cover — reorganización futura del SDK
+        import httpx
+
+        return httpx
+    return module
+
+
 def _http_client_factory(ssl_verify: bool) -> Callable[..., httpx.AsyncClient]:
     """Factory de cliente httpx para los transportes http/sse, respetando `ssl_verify`.
 
@@ -30,20 +66,30 @@ def _http_client_factory(ssl_verify: bool) -> Callable[..., httpx.AsyncClient]:
     `ssl_verify=False` desactiva la validación de certificados TLS (útil contra
     servidores corporativos con CA propia o entornos de prueba). Borde de seguridad:
     es una decisión explícita del que registra el server, nunca un default silencioso.
+
+    El `verify` NO se pasa crudo: va por `tls.httpx_verify`, que es donde entra la CA
+    extra del proceso (`AGENTIC_EXTRA_CA_CERTS`, homóloga de `NODE_EXTRA_CA_CERTS`). En A
+    el transporte MCP no configura TLS porque Node ya aplicó la CA extra a todo el
+    proceso; en B hay que llevarla al cliente, y las DOS ramas (sse aquí, http en
+    `connect`) tienen que pasar por el mismo punto o la que se olvide queda con el
+    almacén por defecto y falla sólo contra el server con CA propia.
     """
-    import httpx
+    from ...tls import httpx_verify
+
+    httpx_impl = _sdk_httpx()
 
     def factory(
         headers: Any = None, timeout: Any = None, auth: Any = None
     ) -> httpx.AsyncClient:
-        kwargs: dict[str, Any] = {"follow_redirects": True, "verify": ssl_verify}
+        kwargs: dict[str, Any] = {"follow_redirects": True, "verify": httpx_verify(ssl_verify)}
         if headers is not None:
             kwargs["headers"] = headers
         if timeout is not None:
             kwargs["timeout"] = timeout
         if auth is not None:
             kwargs["auth"] = auth
-        return httpx.AsyncClient(**kwargs)
+        client: httpx.AsyncClient = httpx_impl.AsyncClient(**kwargs)
+        return client
 
     return factory
 
@@ -121,8 +167,7 @@ class McpClient:
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             else:
-                import httpx
-
+                from ...tls import httpx_verify
                 from .auth import build_auth
 
                 url = self._config.url or ""
@@ -139,17 +184,31 @@ class McpClient:
                             auth=httpx_auth,
                         )
                     )
-                else:  # http (Streamable HTTP) — API nueva: recibe un httpx.AsyncClient
+                else:  # http (Streamable HTTP)
                     from mcp.client.streamable_http import streamable_http_client
 
+                    request_timeout = self._config.timeout_seconds or 30.0
+                    # `streamable_http_client` recibe el cliente YA CONSTRUIDO, así que el
+                    # transporte no pone ni timeouts ni material TLS: lo que no se ponga
+                    # aquí no lo pone nadie. (La firma con `headers=`/`timeout=` es de
+                    # `streamablehttp_client`, sin guion bajo, que está DEPRECADA y es otra
+                    # función; no hay dos firmas vivas de ésta en `mcp>=1.26.0`.)
+                    #
                     # El timeout DEBE venir del config (espejo del default operativo del
-                    # provider, 30s): sin pasarlo, httpx aplica su default de 5s y toda tool
-                    # que tarde más da ReadTimeout. La rama SSE ya lo respeta vía el factory.
+                    # provider, 30s): sin pasarlo, httpx aplica su default de 5s y toda
+                    # tool que tarde más da ReadTimeout. Pero un timeout PLANO tampoco
+                    # vale: el canal GET de streamable-HTTP es un stream abierto y con
+                    # `read=30` se corta solo; el propio SDK separa los dos ejes
+                    # (`sse_read_timeout=300`) y aquí se hace igual.
+                    httpx_impl = _sdk_httpx()
                     http_client = await stack.enter_async_context(
-                        httpx.AsyncClient(
+                        httpx_impl.AsyncClient(
                             headers=headers, auth=httpx_auth,
-                            verify=self._config.ssl_verify, follow_redirects=True,
-                            timeout=self._config.timeout_seconds or 30.0,
+                            verify=httpx_verify(self._config.ssl_verify),
+                            follow_redirects=True,
+                            timeout=httpx_impl.Timeout(
+                                request_timeout, read=SSE_READ_TIMEOUT_SECONDS
+                            ),
                         )
                     )
                     streams = await stack.enter_async_context(

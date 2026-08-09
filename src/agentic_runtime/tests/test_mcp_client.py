@@ -6,6 +6,7 @@ El transporte se inyecta vía `client_factory` (cliente fake) — sin server rea
 """
 from types import SimpleNamespace
 
+import certifi
 import httpx
 import mcp
 import mcp.client.streamable_http as _shttp
@@ -160,14 +161,44 @@ async def test_tool_is_error_maps_to_error_result_single_call():
 # ---------------------------------------------------------------------------
 
 
+class _FakeStreams:
+    async def __aenter__(self):
+        return (object(), object())
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    def __init__(self, *a, **k) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def initialize(self):
+        return None
+
+
 def _patch_streamable_transport(monkeypatch) -> dict:
-    """Stub del transporte streamable-HTTP que captura el timeout del httpx.AsyncClient,
-    evitando server real. Devuelve el dict donde se registra lo capturado."""
+    """Stub del transporte streamable-HTTP, sin server real.
+
+    El stub declara la firma REAL (`url` + `http_client` keyword-only) en vez de tragar
+    `**kwargs`: uno permisivo daría verde con cualquier forma de llamada y no probaría
+    nada. Esa firma es la misma en todo el rango declarado (`mcp>=1.26.0`) — la variante
+    con `headers=`/`timeout=`/`httpx_client_factory=` pertenece a `streamablehttp_client`,
+    sin guion bajo, que es otra función y está deprecada.
+    """
     captured: dict = {}
 
     class _CapturingClient:
         def __init__(self, **kwargs) -> None:
             captured["timeout"] = kwargs.get("timeout")
+            captured["verify"] = kwargs.get("verify")
+            captured["cliente"] = type(self).__name__
 
         async def __aenter__(self):
             return self
@@ -175,28 +206,13 @@ def _patch_streamable_transport(monkeypatch) -> dict:
         async def __aexit__(self, *exc):
             return False
 
-    class _FakeStreams:
-        async def __aenter__(self):
-            return (object(), object())
-
-        async def __aexit__(self, *exc):
-            return False
-
-    class _FakeSession:
-        def __init__(self, *a, **k) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def initialize(self):
-            return None
+    def transport(url, *, http_client=None, terminate_on_close=True):
+        captured["url"] = url
+        captured["http_client"] = http_client
+        return _FakeStreams()
 
     monkeypatch.setattr(httpx, "AsyncClient", _CapturingClient)
-    monkeypatch.setattr(_shttp, "streamable_http_client", lambda *a, **k: _FakeStreams())
+    monkeypatch.setattr(_shttp, "streamable_http_client", transport)
     monkeypatch.setattr(mcp, "ClientSession", _FakeSession)
     return captured
 
@@ -205,7 +221,7 @@ async def test_streamable_http_uses_configured_timeout(monkeypatch):
     captured = _patch_streamable_transport(monkeypatch)
     cfg = McpServerConfig(name="s", url="http://x/mcp", type="http", timeout_seconds=42.0)
     await McpClient(cfg).connect()
-    assert captured["timeout"] == 42.0
+    assert captured["timeout"].connect == 42.0
 
 
 async def test_streamable_http_defaults_timeout_above_httpx_5s(monkeypatch):
@@ -214,7 +230,142 @@ async def test_streamable_http_defaults_timeout_above_httpx_5s(monkeypatch):
     await McpClient(cfg).connect()
     # sin config explícita, debe usar el default operativo del provider (30s), nunca
     # quedarse con el default de httpx (5s) que regresa el bug.
-    assert captured["timeout"] == 30.0
+    assert captured["timeout"].connect == 30.0
+
+
+async def test_el_read_timeout_no_corta_el_canal_sse(monkeypatch):
+    """Un timeout PLANO mata el canal GET, que es un stream de larga duración.
+
+    El timeout de request y el de lectura del stream son ejes distintos: el SDK los
+    separa (`sse_read_timeout=300`) y el runtime tiene que hacer lo mismo, o el server
+    pierde la vía por la que envía notificaciones cada vez que pasan 30 s en silencio.
+    """
+    captured = _patch_streamable_transport(monkeypatch)
+    cfg = McpServerConfig(name="s", url="http://x/mcp", type="http", timeout_seconds=42.0)
+    await McpClient(cfg).connect()
+    timeout = captured["timeout"]
+    assert timeout.read == 300.0, timeout
+    assert timeout.connect == 42.0 and timeout.write == 42.0, timeout
+
+
+async def test_el_transporte_recibe_el_cliente_ya_construido(monkeypatch):
+    """`streamable_http_client` no construye cliente: lo recibe.
+
+    De ahí que TODO —timeouts y material TLS— tenga que ponerlo el llamante. El stub
+    declara la firma real, así que una llamada con la forma deprecada (`headers=`,
+    `timeout=`, `httpx_client_factory=`) muere aquí con `TypeError` en vez de pasar.
+    """
+    captured = _patch_streamable_transport(monkeypatch)
+    cfg = McpServerConfig(name="s", url="http://x/mcp", type="http", timeout_seconds=42.0)
+    await McpClient(cfg).connect()
+    assert captured["http_client"] is not None, "el transporte se llamó sin cliente"
+
+
+# ---------------------------------------------------------------------------
+# El FLAVOR de httpx: en `mcp` 2.0 el transporte abre el canal GET con `client.sse(...)`,
+# que sólo existe en `httpx2`. Con un `httpx.AsyncClient` normal la conexión se
+# establece, las tool calls (POST) funcionan y el canal GET revienta DENTRO del task
+# group con `AttributeError: 'AsyncClient' object has no attribute 'sse'` — o sea, el
+# server se queda sin vía para hablar y desde fuera parece que todo va bien. Medido
+# contra el server real (`D-15`); esta suite corre con 1.27.2 y estaba verde y ciega.
+# ---------------------------------------------------------------------------
+
+
+async def test_el_flavor_de_httpx_se_lee_del_sdk_no_se_supone(monkeypatch):
+    from mcp.shared import _httpx_utils
+
+    from agentic_runtime.capabilities.mcp.client import _sdk_httpx
+
+    centinela = SimpleNamespace(AsyncClient=object, Timeout=object)
+    monkeypatch.setattr(_httpx_utils, "httpx2", centinela, raising=False)
+    assert _sdk_httpx() is centinela, "se ignoró el httpx que usa el propio SDK"
+
+    monkeypatch.delattr(_httpx_utils, "httpx2", raising=False)
+    assert _sdk_httpx() is httpx
+
+
+async def test_el_cliente_del_transporte_se_construye_con_el_flavor_del_sdk(monkeypatch):
+    """No basta con elegir bien el módulo: hay que CONSTRUIR el cliente con él."""
+    from mcp.shared import _httpx_utils
+
+    construidos: list[str] = []
+
+    class _Httpx2Client:
+        def __init__(self, **kwargs) -> None:
+            construidos.append("httpx2")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    falso_httpx2 = SimpleNamespace(AsyncClient=_Httpx2Client, Timeout=httpx.Timeout)
+    monkeypatch.setattr(_httpx_utils, "httpx2", falso_httpx2, raising=False)
+    captured = _patch_streamable_transport(monkeypatch)
+
+    await McpClient(McpServerConfig(name="s", url="http://x/mcp", type="http")).connect()
+
+    assert construidos == ["httpx2"], "el cliente se construyó con el httpx equivocado"
+    assert isinstance(captured["http_client"], _Httpx2Client)
+
+
+# ---------------------------------------------------------------------------
+# CA extra: el contexto TLS del proceso tiene que llegar a las DOS ramas (http y sse).
+# La que se olvide se queda con el almacén por defecto y falla SÓLO contra el server con
+# CA propia — que es justo el que motivó el arreglo.
+# ---------------------------------------------------------------------------
+
+
+async def test_la_ca_extra_llega_al_transporte_http(monkeypatch):
+    import ssl as _ssl
+
+    from agentic_runtime import tls
+
+    monkeypatch.setenv(tls.EXTRA_CA_CERTS_ENV, certifi.where())
+    tls.clear_tls_cache()
+    captured = _patch_streamable_transport(monkeypatch)
+
+    await McpClient(McpServerConfig(name="s", url="https://x/mcp", type="http")).connect()
+
+    tls.clear_tls_cache()
+    assert isinstance(captured["verify"], _ssl.SSLContext), captured["verify"]
+
+
+async def test_la_ca_extra_llega_al_transporte_sse(monkeypatch):
+    import ssl as _ssl
+
+    from agentic_runtime import tls
+    from agentic_runtime.capabilities.mcp.client import _http_client_factory
+
+    monkeypatch.setenv(tls.EXTRA_CA_CERTS_ENV, certifi.where())
+    tls.clear_tls_cache()
+    capturado: dict = {}
+
+    class _CapturingClient:
+        def __init__(self, **kwargs) -> None:
+            capturado.update(kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _CapturingClient)
+    _http_client_factory(True)(headers=None, timeout=5, auth=None)
+
+    tls.clear_tls_cache()
+    assert isinstance(capturado["verify"], _ssl.SSLContext), capturado.get("verify")
+
+
+async def test_ssl_verify_false_sigue_desactivando_la_validacion(monkeypatch):
+    """El eje por-server manda sobre el del entorno: quien lo apaga no quiere contexto."""
+    from agentic_runtime import tls
+
+    monkeypatch.setenv(tls.EXTRA_CA_CERTS_ENV, certifi.where())
+    tls.clear_tls_cache()
+    captured = _patch_streamable_transport(monkeypatch)
+
+    cfg = McpServerConfig(name="s", url="https://x/mcp", type="http", ssl_verify=False)
+    await McpClient(cfg).connect()
+
+    tls.clear_tls_cache()
+    assert captured["verify"] is False
 
 
 # ---------------------------------------------------------------------------

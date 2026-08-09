@@ -708,6 +708,81 @@ Lo que NO está verificado para todos los ítems es si el hueco es DEUDA o **div
 `resolve_timeout_seconds`, `background_result_max_chars`, `extra_providers`. **Siete costuras vacías
 A PROPÓSITO**, con default correcto.
 
+### § 4 bis · Pre-encargo de la 22ª — el server MCP `obsidian` daba error ✅ PAGADO
+
+Sin esto no hay detector `D-15` para NINGUNA superficie MCP, así que va por delante del bloque.
+
+**Lo que era, medido y no supuesto:** `httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED]
+self-signed certificate` contra `https://127.0.0.1:5583/mcp/` (plugin Local REST API de Obsidian,
+cert autofirmado). Pagado en TRES piezas, dos de ellas defectos del runtime que su suite no veía:
+
+1. **Material de confianza TLS ausente por completo** → `agentic_runtime/tls.py` nuevo, homólogo de
+   `utils/caCerts.ts`. La diferencia que dicta el diseño y que el canónico escribe: `NODE_EXTRA_CA_CERTS`
+   **añade**, mientras `SSL_CERT_FILE`/`SSL_CERT_DIR` de Python **reemplazan** el almacén — de ahí que
+   `default_ssl_context()` construya sobre la base (`httpx.create_ssl_context`) y **sume** la CA extra,
+   igual que el comentario de A («setting `ca` … replaces the default certificate store, so we must
+   always include base CAs»). Cableado a TODA la salida TLS del runtime: MCP http, MCP sse, `WebFetch`
+   y `WebSearch`. El *sourcing* de la ruta se queda FUERA del runtime a propósito, exactamente como A
+   lo parte entre `caCerts.ts` (sólo `process.env`) y `caCertsConfig.ts` (importado sólo por `init.ts`).
+2. **`FIND-MCP-HTTPX-FLAVOR-1`** — el cliente HTTP se construía con el `httpx` del entorno, no con el
+   del SDK. En `mcp` 2.x el SDK usa `httpx2` y sólo su `AsyncClient` tiene `.sse`; el módulo se lee
+   ahora del propio SDK (`_sdk_httpx()`), no se supone.
+3. **`FIND-MCP-TIMEOUT-1`** — el timeout iba PLANO al transporte, con lo que el `read` cortaba el GET
+   servidor→cliente del canal SSE. Ahora `Timeout(request, read=SSE_READ_TIMEOUT_SECONDS)`.
+
+**Corrección de premisa MÍA, y la cazó `mypy`:** yo había afirmado que `mcp 1.27.2` no tenía el
+parámetro `http_client` y que en el rango declarado convivían DOS firmas, y monté una bifurcación por
+`inspect.signature`. Descargado `mcp==1.26.0` (el suelo declarado) se ve que `streamable_http_client`
+YA lo tiene ahí; la firma vieja (`headers=`/`timeout=`/`auth=`) es de `streamablehttp_client` **sin
+guion bajo**, que es otra función y está DEPRECADA. La bifurcación era código muerto en TODO el rango
+⇒ eliminada junto con su test, que acreditaba una rama inexistente.
+
+**`FIND-CODE-MCP-ALLOW-1` (integrador)** — `cli.py::_tool_names` DESCARTABA lo que no estuviera en el
+censo de nativas. Como las tools MCP se descubren mucho después de parsear la línea de comandos, eso
+dejaba **toda** la superficie MCP fuera de `--allowed-tool`, o sea inalcanzable en `--print`, que es
+headless. El canónico no valida nada ahí: `parseToolListFromCLI` (`permissionSetup.ts:813-860`) sólo
+trocea respetando paréntesis, y `mcp__server__tool` es forma esperada. Ahora se ACEPTA y se avisa.
+`INY-156..158` → **3 rojas**.
+
+**Hipótesis MÍA REFUTADA por medición, y se dice porque llegó a escribirse en el fuente.** Había
+declarado un síntoma —«con `--allowed-tool` o con `--dangerously-skip-permissions` las tools MCP
+desaparecen del pool»— a partir de la conducta del modelo. Medido con un espía en la costura
+`complete`, el array de tools que llega al modelo es **IDÉNTICO en los tres casos** (24 tools; las MCP
+en ninguno) y `vault_list` viaja por la vía DIFERIDA, en los mensajes, no en el array. Lo que variaba
+era el MODELO, que unas veces hace `ToolSearch` y otras contesta «no tengo tool». La deferencia es
+**fiel a A**, que lo dicta sin condición: *«MCP tools are always deferred (workflow-specific)»*
+(`ToolSearchTool/prompt.ts:67-68`). En consecuencia, `FIND-RT-SEED-1` **pierde su evidencia**: el
+`ctx` de `_prepare_context` nace con el `PermissionContext` por defecto vacío, así que sumar y
+sustituir dan lo mismo. Se conserva el cambio por ser la primitiva correcta y **se declara NO
+acreditado** en el propio fuente, en vez de dejar en pie un comentario que afirmaba una medición falsa.
+
+**Abierto, NOMBRADO y no pagado (`L07`) — `FIND-MCP-ALWAYSLOAD-1`:** el canónico comprueba
+`tool.alwaysLoad === true` **antes** que `isMcp` (`prompt.ts:63-68`), o sea que un server puede pedir
+por `_meta['anthropic/alwaysLoad']` que su tool salga con esquema completo en el prompt inicial. B lee
+ese `_meta` —lo tiene cargado en `client.py:242`— pero **sólo consume la clave del `searchHint`**. Es
+otra vez el patrón del barrido EOF: el dato está y no llega a ninguna lista que el modelo vea.
+
+**Abierto, NOMBRADO y no pagado — `FIND-MCP-NAME-1`, y lo destapó la traza real:** el anuncio de
+diferidas que recibe el modelo lista `vault_list`, `search_query`, `open_file`… **sin prefijo de
+server**. A compone `buildMcpToolName(client.name, tool.name)` → `mcp__<server>__<tool>` y sólo usa el
+nombre desnudo en un caso estrechísimo (server de tipo `sdk` **y** `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`,
+`client.ts:1760-1773`); B llama a `normalize_mcp_tool_name(name)` a secas (`tool_adapter.py:187`). No
+es cosmético y tiene tres consecuencias medibles: dos servers que publiquen `search` COLISIONAN entre
+sí y contra las nativas (y el dedup de `assemble_tool_pool` es «native wins», así que la MCP
+desaparece en silencio); `--allowed-tool mcp__obsidian__vault_list` —la forma que el canónico
+documenta como esperada en `parseToolListFromCLI`— no casa con nada; y la comprobación de permisos
+pierde el eje de servidor que A conserva aparte en `mcpInfo`. Se nombra y no se toca aquí: cambiar la
+identidad de las tools MCP mueve pool, permisos y aprobaciones a la vez.
+
+**Lo que NO se pudo cerrar con `.jsonl` y se dice en vez de rotularlo verde:** con el server ya
+CONECTADO (15 tools, `vault_list` devolviendo el vault real por llamada directa), el modelo del
+producto —Azure OpenAI responses— **no llega a llamar a `ToolSearch`** ni con instrucción explícita de
+dos pasos; responde «no ejecutable» sin emitir una sola tool call (traza `20260808T*`, `DoneEvent` con
+`stop_reason: stop` y cero `ToolCallEvent`). El pool, el anuncio de diferidas y el despacho están
+medidos y correctos, así que esto es solvencia del MODELO y no defecto del sujeto — el mismo reparto
+que `D-14` fijó para `E11`. Queda como carencia declarada del cierre `D-15` de esta pieza: la ruta
+MCP está acreditada por medición directa, no por una traza en la que el modelo la use.
+
 ### Criterio de cierre del bloque
 
 No es que compile ni que la suite siga verde: **es el `.jsonl` de sesión real** (`D-15`, paso 4). Un
