@@ -9,8 +9,12 @@ if TYPE_CHECKING:
 
 ASK_USER_QUESTION_TOOL_NAME = "AskUserQuestion"
 
-#: Ancho del chip, literal de A (`prompt.ts:5`): entra en la descripción de `header`.
 ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12
+
+_ANSWERED_TEMPLATE = (
+    "User has answered your questions: {answers}. "
+    "You can now continue with the user's answers in mind."
+)
 
 _OPTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -38,8 +42,6 @@ _OPTION_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    # A los tiene los dos requeridos (`z.object({label, description})`, sólo `preview`
-    # es `.optional()`): B pedía únicamente `label` — divergencia, no mejora (`L10`).
     "required": ["label", "description"],
 }
 
@@ -85,8 +87,6 @@ _QUESTION_SCHEMA: dict[str, Any] = {
     "required": ["question", "header", "options", "multiSelect"],
 }
 
-#: `annotations` de A (`AskUserQuestionTool.tsx:26-30`): lo rellena la capa de
-#: interacción al devolver las respuestas, no el modelo.
 _ANNOTATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -102,24 +102,29 @@ _ANNOTATION_SCHEMA: dict[str, Any] = {
 }
 
 
+def render_answers(
+    answers: dict[str, Any],
+    annotations: dict[str, Any] | None = None,
+) -> str:
+    rendered: list[str] = []
+    for question, answer in answers.items():
+        annotation = (annotations or {}).get(question)
+        parts = [f'"{question}"="{answer}"']
+        if isinstance(annotation, dict):
+            preview = annotation.get("preview")
+            if preview:
+                parts.append(f"selected preview:\n{preview}")
+            notes = annotation.get("notes")
+            if notes:
+                parts.append(f"user notes: {notes}")
+        rendered.append(" ".join(parts))
+    return ", ".join(rendered)
+
+
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
-    # `shouldDefer: true` del canónico (`AskUserQuestionTool/AskUserQuestionTool.tsx:113`) — `GAP-TOOL4`.
     deferred = True
-    # `searchHint` del canónico, grafía literal (`AskUserQuestionTool.tsx:111`). Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "prompt the user with a multiple-choice question"
-    # Mímica de lo que A manda REALMENTE al modelo: `api.ts:171` serializa
-    # `description: await tool.prompt(…)`, o sea `ASK_USER_QUESTION_TOOL_PROMPT`
-    # (`AskUserQuestionTool/prompt.ts:31-44`), no el `DESCRIPTION` corto —ése es el
-    # `searchHint`/UI—. La sección de preview se omite porque A también la omite
-    # cuando el consumidor no ha optado por un formato (`getQuestionPreviewFormat()
-    # === undefined`, rama «SDK consumer»), que es exactamente el caso de B.
-    #
-    # ⚠ La versión anterior de B decía «Prefer this over asking in free-form prose…»
-    # y «GROUP related questions into a SINGLE call»: **texto que A no tiene**
-    # (`FIND-E11-4`). Empujaba más que el canónico, así que medía a un sujeto que no
-    # es A. Retirado por `L10` — una divergencia no es una mejora hasta demostrarlo.
     description = (
         "Use this tool when you need to ask the user questions during execution. This allows you to:\n"
         "1. Gather user preferences or requirements\n"
@@ -150,9 +155,6 @@ class AskUserQuestionTool:
                 "maxItems": 4,
                 "description": "Questions to ask the user (1-4 questions)",
             },
-            # Los tres de A que NO rellena el modelo sino la capa de interacción al
-            # devolver las respuestas (`AskUserQuestionTool.tsx:26-62`). Van en el
-            # schema porque en A van: quitarlos sería recortar el sujeto.
             "annotations": {
                 "type": "object",
                 "additionalProperties": _ANNOTATION_SCHEMA,
@@ -184,21 +186,10 @@ class AskUserQuestionTool:
     }
     category = ToolCategory.SYSTEM
     requires_permission = False
+    requires_user_interaction = True
     safe_for_background = False
     timeout_seconds = 300.0
 
-    # `FIND-TOOL-ENABLED-1` — tool de PUERTA ÚNICA: su `execute` cierra el turno
-    # (`ends_turn=True`, abajo) a la espera de una respuesta humana. En un host sin
-    # humano eso no es «esperar»: es un turno vacío garantizado, y el trabajo se
-    # pierde. Medido en el E2g (`GATE_E2G_SEED=1780649320`, `archivos/nativa`):
-    # `elegidas=['AskUserQuestion','glob']`, `respuesta=''`, centinela no emitido.
-    #
-    # Homólogo del criterio de A, que apaga la ENTRADA cuando la SALIDA no existe
-    # (`EnterPlanModeTool.ts:56-67`, sobre `--channels`: *«its approval dialog needs
-    # the terminal»*). Default `False` porque el runtime es headless salvo que el
-    # integrador declare lo contrario — mismo criterio ya establecido para los
-    # handlers OAuth de MCP (`CapabilitiesConfig`: «el runtime headless no abre
-    # navegador»). El cable es `ToolsConfig.interactive`.
     def __init__(self, *, interactive: bool = False) -> None:
         self._interactive = interactive
 
@@ -206,20 +197,14 @@ class AskUserQuestionTool:
         return self._interactive
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
-        """HITL multi-turno: NO bloquea. Emite las preguntas (el consumidor las detecta por este
-        `tool_call` en el stream) y CIERRA el turno vía `ends_turn`; el usuario responde y el
-        resultado REAL ('User has answered your questions: …') lo reinyecta el consumidor como el
-        tool_result de esta llamada al inicio del turno siguiente. Aquí solo dejamos un placeholder.
-
-        ⚠ **Divergencia declarada con A.** El canónico NO cierra el turno: su `call()` sólo
-        devuelve `{data:{questions,answers,annotations}}` (leído 1→EOF en
-        `AskUserQuestionTool.tsx:209-220`) y las respuestas llegan **dentro del mismo turno**
-        por `checkPermissions → behavior:'ask' + updatedInput`, capa de interacción que en B
-        es `GAP-02`/`K1` y está por encima de la línea de corte. `ends_turn` es el cable de B
-        mientras eso no exista, no un espejo. Ver `ToolResult.ends_turn`.
-        """
+        answers = input.get("answers")
+        annotations = input.get("annotations")
         return ToolResult(
             tool_name=self.name,
-            output="Awaiting the user's answers to the questions above.",
-            ends_turn=True,
+            output=_ANSWERED_TEMPLATE.format(
+                answers=render_answers(
+                    answers if isinstance(answers, dict) else {},
+                    annotations if isinstance(annotations, dict) else {},
+                )
+            ),
         )

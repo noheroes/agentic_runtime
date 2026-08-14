@@ -31,15 +31,6 @@ class HookEvent(str, Enum):
 
 @dataclass(frozen=True)
 class HookDecision:
-    """Resultado que un handler devuelve para influir en el ciclo.
-
-    - block: rechaza la acción (p.ej. un tool en PreToolUse) sin detener el loop.
-    - stop: detiene la ejecución del agente.
-    - message: razón legible del block/stop.
-    - modified_input: reemplazo del input de la herramienta (PreToolUse).
-    - additional_context: texto a inyectar en el contexto del modelo.
-    """
-
     block: bool = False
     stop: bool = False
     message: str | None = None
@@ -47,8 +38,8 @@ class HookDecision:
     additional_context: str | None = None
 
     @classmethod
-    def allow(cls) -> HookDecision:
-        return cls()
+    def allow(cls, modified_input: dict[str, Any] | None = None) -> HookDecision:
+        return cls(modified_input=modified_input)
 
     @classmethod
     def blocked(cls, message: str) -> HookDecision:
