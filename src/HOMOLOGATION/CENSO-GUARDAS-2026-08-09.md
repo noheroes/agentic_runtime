@@ -628,8 +628,35 @@ aprobación es una decisión de permiso (`ExitPlanMode.check_permissions` ⇒
 `PermissionDecision.ask(plan, remember=False)`), y `execute` sólo corre si se concedió — luego
 `PlanModeState.rearm()` es **código muerto**, y su retirada queda pendiente de decisión.
 
-**Falta por certificar de T2:** repetirlo **aprobando** el plan (sin Esc), para ver el turno
-continuar en el sitio y que la tecla de aprobación no entre en el historial de prompts.
+**Falta por certificar de T2:** repetirlo **aprobando** el plan, para ver el `tool_result` de
+aprobación y que la tecla no entre en el historial de prompts.
+
+#### Segunda corrida de T2 — `20260814T012230-46f5a22fbb83.jsonl` (01:22:30→01:26:21)
+
+**El turno ya no muere.** `ExitPlanMode` en seq 39 (01:25:22) ⇒ 50,8 s de modal ⇒ seq 42 con el
+mismo literal de rechazo e `is_error=true` ⇒ **turno 8** que relee el plan, **turno 9** que responde
+en streaming, y cierre en `subtype=success status=completed` con `anomalies: []`. El `error_killed`
+de la corrida anterior era del `Esc` sobre `PermissionScreen`, **no del gate**: Codex encaminó
+`ExitPlanMode` a `PlanApprovalScreen` (`tui.py:1120-1125`), donde `Esc` va a `_reject()` y devuelve
+`n <feedback>`. Confirmado por el usuario en vivo: la ventana de plan se muestra con Markdown y sus
+dos botones, «Seguir planificando» y «Aprobar e implementar» ⇒ **requisito arrastrado, cumplido**.
+Sigue siendo la rama de **rechazo**: la de aprobación no se ha ejercitado ni una vez.
+
+**`H-7` (ABIERTO, hallado al revisar esta corrida).** Contenido de aprobación del canónico
+(`ExitPlanModeV2Tool.ts:483-489`, leído 1→EOF): tras la primera línea van
+`Your plan has been saved to: ${filePath}` y `You can refer back to it if needed during
+implementation.`, antes del `## Approved Plan:`. `PLAN_APPROVED_TEMPLATE`
+(`tools/native/plan_mode.py:25-28`) **omite esas dos líneas**, y no es inexpresable: B tiene
+`get_plan_file_path(ctx)` y lo usa dos líneas más abajo. Fuera con razón el `teamHint` (cuelga de
+`TeamCreateTool`, ausente en B) y la rama `isAgent` (`:452-459`).
+
+**Sin certificar, declarado:** `PLAN_REJECTION_PREFIX` (`plan_mode.py:30-33`) **no aparece en
+`ExitPlanModeV2Tool.ts`**. Procede de otro punto del canónico que no se ha leído; no se da por
+genuino hasta contrastarlo.
+
+**Para el catálogo de gpt-5.x:** cero `ThinkingEvent` en 181 registros y `thinking_tokens: 0` — la
+superficie de razonamiento recién añadida no tiene qué pintar con este proveedor. Y se repite la
+relectura redundante del plan (seq 34 y 44).
 
 **Diagnóstico del «cuelgue» de la TUI — no era cuelgue, es coste de render.** Medido, no
 afirmado, con dos capturas reales replicadas en `TranscriptStore`:
@@ -654,6 +681,13 @@ acota el resultado, **antes** de `Syntax`/`Markdown`; cachear el renderable por
 requisito arrastrado: encaminar `ExitPlanMode` a una pantalla de aprobación de plan —hoy cae en
 `_render_fallback`, sin Markdown y con un botón `[p] proyecto` que aquí es aprobación de un solo
 uso—, lo que exige que `PermissionReader` lleve el **nombre de la tool**.
+
+**Requisito CUMPLIDO y remedido (2026-08-14, commit `f2fe6bc` de Codex).** Mismas capturas, mismo
+banco, con el arreglo puesto: 10 items (00:19) **1505,2 ms ⇒ 411,5 ms** · 14 items (18:19)
+**866,6 ms ⇒ 315,8 ms** · 10 items (01:22) 156,2 ms. `_limit_lines` acota ahora también la entrada
+antes de Pygments (`tool_view.py:137`, `:166`), con caché y repintado selectivo en `tui.py`. Y el
+nombre de la tool llega a la UX vía `PermissionRequest` (`permissions.py`), que además arrastra el
+feedback del usuario al `deny_message`. Queda coste residual, pero ya no bloquea segundos.
 
 **Deuda declarada, no tapada:** `composition.py`, `rendering.py` y `mcp_config.py` entraron en el
 commit **conservando comentarios de ventanas anteriores**, en contra de la regla del §4. Barrerlos
