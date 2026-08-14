@@ -608,7 +608,66 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 **Pasos cerrados:** 1 — `FIND-EXITPLAN` · 2 — `FIND-TODO` (`allDone ⇒ []`) · 3 — `FIND-EDIT` ·
 4 — `FIND-CFG-2`.
-**Paso siguiente:** 5 — `FIND-WT2` (descripción de `ExitWorktree`), **sin abrir**. **Sin commit.**
+**Paso siguiente:** 5 — `FIND-WT2` (descripción de `ExitWorktree`), **sin abrir**.
+**Commiteado** (palabra del usuario, 2026-08-14, para que Codex pueda trabajar sobre el árbol):
+`agentic_code` `06e5ed0` en `fase-b/find-pool-1` · `agentic_runtime` `ff30127` en `fase-b/tramo-1`.
+
+### Pasada orgánica en vivo — T2 y diagnóstico de la TUI (2026-08-14)
+
+Antes de abrir el paso 5 se está ejercitando `agentic_code` de verdad (sesión interactiva, nunca
+`--print`) contra las conductas ya cerradas. Lo de esta ventana:
+
+**T2 — gate de plan, veredicto: la conducta homologada es CORRECTA.** Reconstruido desde la
+captura `20260814T001908-34d9290b3ecc.jsonl`: seq 77 `ToolCallEvent ExitPlanMode` (00:27:38) ⇒ 24 s
+de modal ⇒ seq 80 `ToolResultEvent` con el **literal canónico de rechazo** (00:28:02) ⇒ seq 81
+`TurnStartEvent` del turno 16 ⇒ seq 82 `result subtype=error_killed status=killed` (00:28:03.46).
+La tecla fue **Esc**, que en `PermissionScreen` está bindeada a `choose('cancel')`; `cancel` no cae
+ni en `_TURN_KEYS` ni en `_PROJECT_KEYS`, así que `PermissionPolicy.handle` devuelve
+`HookDecision.blocked(deny_message)`. **El plan mode sobrevive al rechazo por construcción**: la
+aprobación es una decisión de permiso (`ExitPlanMode.check_permissions` ⇒
+`PermissionDecision.ask(plan, remember=False)`), y `execute` sólo corre si se concedió — luego
+`PlanModeState.rearm()` es **código muerto**, y su retirada queda pendiente de decisión.
+
+**Falta por certificar de T2:** repetirlo **aprobando** el plan (sin Esc), para ver el turno
+continuar en el sitio y que la tecla de aprobación no entre en el historial de prompts.
+
+**Diagnóstico del «cuelgue» de la TUI — no era cuelgue, es coste de render.** Medido, no
+afirmado, con dos capturas reales replicadas en `TranscriptStore`:
+
+| | plegado | desplegado |
+|---|---|---|
+| 10 items (captura 00:19) | 35,1 ms | **1505,2 ms** |
+| 14 items (captura 18:19) | 36,1 ms | **866,6 ms** |
+
+Por tool, con `preview_lines=8`: `Edit` 263,0 ms (entrada 5112 B) · `write_file` 193,2 ms y
+84,2 ms · `Agent` 38,0 / 31,5 ms — 681,3 ms en 16 tools. `store.apply` suma 2,5–20,5 ms y
+`store.items` 0,04–0,08 ms: **la capa de dominio no es el coste**. Causa: `_limit_lines`
+(`tool_view.py:93`) acota **sólo el resultado**, mientras la ENTRADA entra entera en Pygments
+(`Syntax`, `:165`, `:172`) y en `Markdown` (`:190`); se suma el auto-despliegue del deck mientras
+una tool está `RUNNING` (`transcript.py:228`) y el repintado del deck **entero** ante el cambio de
+cualquiera de sus tools (`tui.py:389`). De ahí 0,2–1,5 s de bloqueo por ráfaga, que se libera al
+terminar la tool y plegarse el deck. El REPL queda **exonerado** con repro headless de la ruta Esc.
+
+**Entregado a Codex como requisito (la TUI no se toca desde aquí):** acotar la entrada como se
+acota el resultado, **antes** de `Syntax`/`Markdown`; cachear el renderable por
+`(tool.id, status, finished_at)`; repintar sólo las tools cuyo id esté en `changed_ids`. Y el
+requisito arrastrado: encaminar `ExitPlanMode` a una pantalla de aprobación de plan —hoy cae en
+`_render_fallback`, sin Markdown y con un botón `[p] proyecto` que aquí es aprobación de un solo
+uso—, lo que exige que `PermissionReader` lleve el **nombre de la tool**.
+
+**Deuda declarada, no tapada:** `composition.py`, `rendering.py` y `mcp_config.py` entraron en el
+commit **conservando comentarios de ventanas anteriores**, en contra de la regla del §4. Barrerlos
+habría sido una mutación grande y no anunciada dentro de un commit de coordinación. Queda medida y
+vigilada; se paga al tocar cada fichero.
+
+**Hallazgos abiertos de la pasada orgánica:** **H-4** — un subagente caído se sirve como
+`"(no output)"` con `is_error=False`, contra `AgentTool/runAgent.ts` · **H-5** — `arm_watchdog` es
+`pass` · **H-6** — notificación de tarea duplicada para el `Agent` en primer plano.
+
+**Fuera del censo, para no perderlo:** `.env` está en `AGENTIC_CODE_MODEL=gpt-5.4` por la
+comparación de modelos; vuelve a `gpt-5.4-mini` al terminarla. Turnos orgánicos pendientes: T1
+(ficheros encadenados), T3 (`Edit` sobre CRLF), T4 (no encontrado + sugerencia), T5 (rechazo de
+`.mcp.json`), T6 (valor inválido de `Config`), T7 (config de proyecto corrupta + copia, el último).
 
 ### Paso 4 — `FIND-CFG-2` — CERRADO (2026-08-13)
 
