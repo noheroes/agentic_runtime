@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 
 
 class FilesystemStorage:
-    """Backend de filesystem — implementación nativa del runtime para desarrollo y tests."""
-
-    def __init__(self, *, root: Path) -> None:
+    def __init__(self, *, root: Path, executor: Executor | None = None) -> None:
         self._root = root.resolve()
+        self._owns_executor = executor is None
+        self._executor: Executor | None = executor or ThreadPoolExecutor(
+            thread_name_prefix="agentic-storage"
+        )
 
     def _path(self, key: str) -> Path:
         p = (self._root / key).resolve()
@@ -17,14 +20,19 @@ class FilesystemStorage:
             raise ValueError(f"path traversal detected: {key!r}")
         return p
 
+    def _run(self, fn, *args):
+        if self._executor is None:
+            raise RuntimeError("FilesystemStorage ya fue cerrado con teardown()")
+        return asyncio.get_running_loop().run_in_executor(self._executor, fn, *args)
+
     async def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
         p = self._path(key)
-        await asyncio.get_event_loop().run_in_executor(None, self._write, p, data)
+        await self._run(self._write, p, data)
         return key
 
     async def download(self, key: str) -> bytes:
         p = self._path(key)
-        return await asyncio.get_event_loop().run_in_executor(None, p.read_bytes)
+        return await self._run(p.read_bytes)
 
     async def presign(self, key: str, ttl_seconds: int = 3600) -> str:
         return self._path(key).as_uri()
@@ -33,7 +41,7 @@ class FilesystemStorage:
         p = self._path(key)
         if not p.exists():
             return False
-        await asyncio.get_event_loop().run_in_executor(None, p.unlink)
+        await self._run(p.unlink)
         return True
 
     async def exists(self, key: str) -> bool:
@@ -50,14 +58,15 @@ class FilesystemStorage:
         ]
 
     async def copy(self, src: str, dst: str) -> None:
-        """Copia sin pasar por upload/download — usa shutil.copy2 directamente."""
         src_path = self._path(src)
         dst_path = self._path(dst)
-        await asyncio.get_event_loop().run_in_executor(None, self._copy, src_path, dst_path)
+        await self._run(self._copy, src_path, dst_path)
 
-    # ------------------------------------------------------------------
-    # Sync helpers for executor
-    # ------------------------------------------------------------------
+    async def teardown(self) -> None:
+        executor = self._executor
+        self._executor = None
+        if executor is not None and self._owns_executor:
+            executor.shutdown(wait=True)
 
     @staticmethod
     def _write(path: Path, data: bytes) -> None:

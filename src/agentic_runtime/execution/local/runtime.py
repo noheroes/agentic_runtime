@@ -67,6 +67,7 @@ class LocalAgentRuntime:
         task_registry: TaskRegistryProtocol | None = None,
         hook_runner: HookRunner | None = None,
         storage: StorageProtocol | None = None,
+        owns_storage: bool = False,
         presentation: Any = None,
         exec_env: Any = None,
         fs: Any = None,
@@ -107,6 +108,7 @@ class LocalAgentRuntime:
         self._task_registry = task_registry or InMemoryTaskRegistry()
         self._hook_runner = hook_runner
         self._storage = storage
+        self._owns_storage = owns_storage
         self._presentation = presentation
         self._exec_env = exec_env
         self._fs = fs
@@ -168,6 +170,10 @@ class LocalAgentRuntime:
     async def shutdown(self) -> None:
         if self._capability_manager is not None:
             await self._capability_manager.shutdown()
+        if self._owns_storage:
+            teardown = getattr(self._storage, "teardown", None)
+            if teardown is not None:
+                await teardown()
 
     @property
     def capabilities(self) -> Any:

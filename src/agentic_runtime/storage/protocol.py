@@ -17,6 +17,11 @@ class StorageProtocol(Protocol):
     async def list_prefix(self, prefix: str) -> list[str]: ...
 
 
+@runtime_checkable
+class StorageLifecycle(Protocol):
+    async def teardown(self) -> None: ...
+
+
 class StorageKeys:
     """
     Claves canónicas del runtime — deterministas, sin dependencia de implementación.

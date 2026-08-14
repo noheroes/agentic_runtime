@@ -23,6 +23,7 @@ class StorageConfig:
     backend: str = "filesystem"
     root: Path | None = None
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
+    instance: Any = None
 
 
 @dataclass
@@ -236,12 +237,16 @@ class RuntimeFactory:
     def _build_local(cls, config: RuntimeConfig) -> Any:
         from .execution.local import LocalAgentRuntime
 
-        # Storage
-        storage_kwargs: dict[str, Any] = {}
-        if config.storage.root is not None:
-            storage_kwargs["root"] = config.storage.root
-        storage_kwargs.update(config.storage.extra_kwargs)
-        storage = StorageRegistry.create(config.storage.backend, **storage_kwargs)
+        if config.storage.instance is not None:
+            storage = config.storage.instance
+            owns_storage = False
+        else:
+            storage_kwargs: dict[str, Any] = {}
+            if config.storage.root is not None:
+                storage_kwargs["root"] = config.storage.root
+            storage_kwargs.update(config.storage.extra_kwargs)
+            storage = StorageRegistry.create(config.storage.backend, **storage_kwargs)
+            owns_storage = True
 
         # Tools nativas — input al ensamblado del pool, no lookup de ejecución
         tool_registry = create_tools(
@@ -286,6 +291,7 @@ class RuntimeFactory:
             task_registry=config.task_registry,
             hook_runner=config.hook_runner,
             storage=storage,
+            owns_storage=owns_storage,
             presentation=presentation,
             exec_env=exec_env,
             fs=config.fs,
