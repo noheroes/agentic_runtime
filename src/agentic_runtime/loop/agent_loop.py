@@ -307,24 +307,15 @@ class AgentLoop:
         return devuelto
 
     async def _inject_recall(self, ctx: ToolUseContext) -> None:
-        """Inyecta el recall del manager como `<system-reminder>` (role:"user").
-
-        Dedup: no reinyecta un contenido ya presente en `ctx.messages` (espejo de
-        `collectSurfacedMemories`). El manager agrega los `active_context` de todos
-        los providers; el loop los rinde — los providers no conocen el formato de
-        reminder ni el rol final."""
         if self._capability_manager is None:
             return
-        existing = {m.get("content") for m in ctx.messages if m.get("role") == "user"}
         for msg in self._capability_manager.active_context(ctx):
             content = (msg.get("content") or "").strip()
             if not content:
                 continue
-            rendered = _as_reminder(content)
-            if rendered in existing:
-                continue
-            await self._append(ctx, {"role": "user", "content": rendered}, origin="recall")
-            existing.add(rendered)
+            await self._append(
+                ctx, {"role": "user", "content": _as_reminder(content)}, origin="recall"
+            )
 
     def _resolve_deferred_strategy(self) -> DeferredToolStrategy:
         """Estrategia diferida del loop. Inyectada → se usa tal cual; si no, se resuelve
@@ -556,10 +547,6 @@ class AgentLoop:
             system_sections: list[str] = []
             if self._capability_manager is not None:
                 system_sections = self._capability_manager.system_prompt_sections(ctx)
-                # Canal de recall por turno: cada mensaje de `active_context` se rinde
-                # como `role:"user"` envuelto en `<system-reminder>`, con dedup contra
-                # la historia ya presente (la compactación, al recortar, rehabilita el
-                # re-surface). Activa también Skills S3 sin tocar su provider.
                 await self._inject_recall(ctx)
 
             logger.debug(

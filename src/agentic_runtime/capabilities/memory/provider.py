@@ -29,10 +29,24 @@ def _last_user_text(context: ToolUseContext) -> str:
     return ""
 
 
+_RECALL_MARKER = "Memoria posiblemente relevante"
+
+
 def _render_recall(header: MemoryHeader) -> str:
-    # Incluye el path: marcador estable que el dedup del loop usa, y le dice al modelo
-    # dónde está el fichero para leerlo completo con `read_file` si decide usarlo.
-    return f"Memoria posiblemente relevante — {header.name} ({header.path}):\n{header.description}".strip()
+    return f"{_RECALL_MARKER} — {header.name} ({header.path}):\n{header.description}".strip()
+
+
+def _surfaced_recalls(context: ToolUseContext) -> list[str]:
+    surfaced: list[str] = []
+    for message in context.messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or "<system-reminder>" not in content:
+            continue
+        if _RECALL_MARKER in content:
+            surfaced.append(content)
+    return surfaced
 
 
 class MemoryProvider:
@@ -98,18 +112,19 @@ class MemoryProvider:
         return build_memory_activation(str(memory_dir), index)
 
     def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
-        """Recall: ≤5 memorias relevantes al último texto del usuario.
-
-        Scoped por agente (un subagente no ve memorias de otro). Excluye `MEMORY.md`
-        (ya va en el system prompt) — el `scan` del store lo omite. Devuelve dicts
-        `role:"system"`; el loop los rinde como recordatorio."""
         agent = self._scope(context)
         headers = self._store.scan(agent)
         ranked = rank_memories(headers, _last_user_text(context))
-        return [{"role": "system", "content": _render_recall(header)} for header in ranked]
+        surfaced = _surfaced_recalls(context)
+        out: list[dict[str, Any]] = []
+        for header in ranked:
+            token = f"({header.path}):"
+            if any(token in content for content in surfaced):
+                continue
+            out.append({"role": "system", "content": _render_recall(header)})
+        return out
 
     def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
-        """Tras compactación: mismas memorias relevantes (sobreviven al recorte)."""
         return self.active_context(context)
 
 

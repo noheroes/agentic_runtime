@@ -1,21 +1,9 @@
-"""`PlanModeProvider` — capa de instrucciones de plan mode (por-turno) + one-shot de salida.
-
-Homólogo de la capa de attachments del canónico (`utils/messages.ts:getPlanModeV2Instructions`
-+ `getPlanModeV2SparseInstructions` + `getPlanModeV2SubAgentInstructions`, y el `plan_mode_exit`).
-NO es system prompt base: es contexto por-turno que se regenera MIENTRAS `mode==='plan'`, con
-cadencia **full→sparse** (la primera iteración rinde el workflow completo de 5 fases; las
-siguientes, un recordatorio escueto). Al salir, rinde UNA vez el plan aprobado.
-
-Sin tools ni catálogo: contexto puro (como `MemoryProvider`). El plan-file es la fuente de verdad
-(el modelo lo escribe durante plan mode vía la write-tool); ver `plan_file.py`.
-"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from .plan_file import (
     _PLAN_EXIT_PENDING_KEY,
-    _PLAN_FULL_SHOWN_KEY,
     _PLAN_KEY,
     _PLAN_MODE_KEY,
     EXPLORE_AGENT_TYPE,
@@ -28,6 +16,59 @@ if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
     from ...tools.protocol import ToolProtocol
     from ..contracts import CapabilitySummary
+
+TURNS_BETWEEN_ATTACHMENTS = 5
+FULL_REMINDER_EVERY_N_ATTACHMENTS = 5
+
+_REMINDER_TAG = "<system-reminder>"
+_PLAN_MARKERS = ("Plan mode is active", "Plan mode still active")
+_REENTRY_MARKER = "## Re-entering Plan Mode"
+_EXIT_MARKER = "## Exited Plan Mode"
+
+
+def _marked(message: dict[str, Any], markers: tuple[str, ...]) -> bool:
+    if message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if not isinstance(content, str) or _REMINDER_TAG not in content:
+        return False
+    return any(marker in content for marker in markers)
+
+
+def _is_human_turn(message: dict[str, Any]) -> bool:
+    if message.get("role") != "user":
+        return False
+    content = message.get("content")
+    return not isinstance(content, str) or _REMINDER_TAG not in content
+
+
+def _plan_attachment_turn_count(messages: list[dict[str, Any]]) -> tuple[int, bool]:
+    turns = 0
+    for message in reversed(messages):
+        if _marked(message, (*_PLAN_MARKERS, _REENTRY_MARKER)):
+            return turns, True
+        if _is_human_turn(message):
+            turns += 1
+    return turns, False
+
+
+def _plan_attachments_since_exit(messages: list[dict[str, Any]]) -> int:
+    count = 0
+    for message in reversed(messages):
+        if _marked(message, (_EXIT_MARKER,)):
+            break
+        if _marked(message, _PLAN_MARKERS):
+            count += 1
+    return count
+
+
+def _reentry_pending(messages: list[dict[str, Any]]) -> bool:
+    for message in reversed(messages):
+        if _marked(message, (_REENTRY_MARKER,)):
+            return False
+        if _marked(message, (_EXIT_MARKER,)):
+            return True
+    return False
 
 
 def _plan_file_info(token: str, exists: bool) -> str:
@@ -109,6 +150,23 @@ def _render_subagent_reminder() -> str:
     )
 
 
+def _render_plan_reentry(context: ToolUseContext) -> str:
+    token = get_plan_file_path(context)
+    return f"""## Re-entering Plan Mode
+
+You are returning to plan mode after having previously exited it. A plan file exists at {token} from your previous planning session.
+
+**Before proceeding with any new planning, you should:**
+1. Read the existing plan file to understand what was previously planned
+2. Evaluate the user's current request against that plan
+3. Decide how to proceed:
+   - **Different task**: If the user's request is for a different task—even if it's similar or related—start fresh by overwriting the existing plan
+   - **Same task, continuing**: If this is explicitly a continuation or refinement of the exact same task, modify the existing plan while cleaning up outdated or irrelevant sections
+4. Continue on with the plan process and most importantly you should always edit the plan file one way or the other before calling ExitPlanMode
+
+Treat this as a fresh planning session. Do not assume the existing plan is relevant without evaluating it first."""
+
+
 def _render_exit_reminder(plan: str) -> str:
     """Espejo de `plan_mode_exit` con el plan aprobado inline (cacheado del plan-file en `native`).
 
@@ -140,31 +198,33 @@ class PlanModeProvider:
         return []
 
     def active_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
-        """Orientación de plan mode:
-
-        - MIENTRAS `plan_mode` activo:
-          - subagente → recordatorio read-only (no orquesta);
-          - root → workflow de 5 fases con cadencia full (1ª iter) → sparse (siguientes).
-        - AL SALIR (`ExitPlanMode` armó el one-shot): rinde el plan aprobado UNA vez.
-
-        Excluyentes por estado: `ExitPlanMode` hace `pop(plan_mode)` y arma el exit_pending en el
-        mismo turno, así que nunca coinciden."""
         native = context.app_state.native
-        if native.get(_PLAN_MODE_KEY):
-            if context.is_subagent:
-                return [{"role": "system", "content": _render_subagent_reminder()}]
-            if not native.get(_PLAN_FULL_SHOWN_KEY):
-                native[_PLAN_FULL_SHOWN_KEY] = True
-                return [{"role": "system", "content": _render_plan_full(context)}]
-            return [{"role": "system", "content": _render_plan_sparse(context)}]
-        if not native.pop(_PLAN_EXIT_PENDING_KEY, False):
+        if not native.get(_PLAN_MODE_KEY):
+            if not native.pop(_PLAN_EXIT_PENDING_KEY, False):
+                return []
+            plan = native.get(_PLAN_KEY, "")
+            return [{"role": "system", "content": _render_exit_reminder(plan)}]
+
+        native.pop(_PLAN_EXIT_PENDING_KEY, None)
+        messages = context.messages
+        turns, found = _plan_attachment_turn_count(messages)
+        if found and turns < TURNS_BETWEEN_ATTACHMENTS:
             return []
-        plan = native.get(_PLAN_KEY, "")
-        return [{"role": "system", "content": _render_exit_reminder(plan)}]
+
+        out: list[dict[str, Any]] = []
+        if _reentry_pending(messages) and plan_file_exists(context):
+            out.append({"role": "system", "content": _render_plan_reentry(context)})
+        if context.is_subagent:
+            out.append({"role": "system", "content": _render_subagent_reminder()})
+            return out
+        count = _plan_attachments_since_exit(messages) + 1
+        if count % FULL_REMINDER_EVERY_N_ATTACHMENTS == 1:
+            out.append({"role": "system", "content": _render_plan_full(context)})
+        else:
+            out.append({"role": "system", "content": _render_plan_sparse(context)})
+        return out
 
     def compact_context(self, context: ToolUseContext) -> list[dict[str, Any]]:
-        # Tras compactación el flag ya se consumió; el plan sigue en `app_state.native`
-        # y el modelo puede re-leerlo, pero no se re-emite el one-shot.
         return []
 
 
