@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-# La capa plan-file (token + lectura vía storage inyectado) vive en un módulo hoja para que tanto
-# esta tool como el `PlanModeProvider` la importen sin ciclo. Re-exportados aquí por compat.
 from ...capabilities.plan.plan_file import (
     _PLAN_EXIT_PENDING_KEY,
     _PLAN_FULL_SHOWN_KEY,
@@ -12,7 +10,7 @@ from ...capabilities.plan.plan_file import (
     get_plan,
     get_plan_file_path,
 )
-from ..protocol import ToolCategory, ToolResult
+from ..protocol import PermissionDecision, ToolCategory, ToolResult
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
@@ -20,23 +18,25 @@ if TYPE_CHECKING:
 ENTER_PLAN_MODE_TOOL_NAME = "EnterPlanMode"
 EXIT_PLAN_MODE_TOOL_NAME = "ExitPlanMode"
 
+NOT_IN_PLAN_MODE_MESSAGE = (
+    "You are not in plan mode. This tool is only for exiting plan mode after writing a "
+    "plan. If your plan was already approved, continue with implementation."
+)
+PLAN_APPROVED_TEMPLATE = (
+    "User has approved your plan. You can now start coding. Start with updating your todo "
+    "list if applicable\n\n## Approved Plan:\n{plan}"
+)
+PLAN_APPROVED_EMPTY = "User has approved exiting plan mode. You can now proceed."
+PLAN_REJECTION_PREFIX = (
+    "The agent proposed a plan that was rejected by the user. The user chose to stay in "
+    "plan mode rather than proceed with implementation.\n\nRejected plan:\n"
+)
+
 
 class EnterPlanModeTool:
     name = ENTER_PLAN_MODE_TOOL_NAME
-    # `shouldDefer: true` del canónico (`EnterPlanModeTool/EnterPlanModeTool.ts:55`) — `GAP-TOOL4`.
     deferred = True
-    # `searchHint` del canónico, grafía literal (`EnterPlanModeTool.ts:38`). Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "switch to plan mode to design an approach before coding"
-    # Homologada contra `EnterPlanModeTool/prompt.ts:16-99`, `GAP-PROMPT-1`, rama **EXTERNAL**
-    # (`getEnterPlanModeToolPromptExternal`). El selector es `process.env.USER_TYPE ===
-    # 'ant'` (`:166-170`): B no es un build interno, así que la rama Ant (`:101-164`),
-    # que es MÁS restrictiva («genuine ambiguity»), no le corresponde.
-    # Incluye `WHAT_HAPPENS_SECTION` (`:4-14`) porque en B no hay `plan_mode` attachment
-    # que la traiga por otra vía; en A se omite justo cuando esa vía existe (`:19-21`).
-    # ADAPTADO: los nombres de tool son los de B (`glob`, `grep`, `read_file`).
-    # OMITIDO Y DECLARADO: «with explore agent» (`:63`) — B no publica ningún listado de
-    # subagentes (`FIND-AGENT-LIST-1`), así que nombrar uno concreto sería falso.
     description = """Use this tool proactively when you're about to start a non-trivial \
 implementation task. Getting user sign-off on your approach before writing code prevents wasted \
 effort and ensures alignment. This tool transitions you into plan mode where you can explore the \
@@ -135,25 +135,6 @@ than to redo work
     safe_for_background = False
     timeout_seconds = 5.0
 
-    # `FIND-TOOL-ENABLED-1` — plan mode es una PUERTA DE UN SOLO SENTIDO cuando no
-    # hay humano: se entra sin aprobación (`requires_permission = False`, pese a que
-    # la descripción de arriba promete «This tool REQUIRES user approval»), el régimen
-    # que impone dice «This supercedes any other instructions you have received», y la
-    # única salida —`ExitPlanMode`— cierra el turno esperando una aprobación que nadie
-    # va a dar. Medido dos veces en el E2g (`GATE_E2G_SEED` 29525785 y 1561952726).
-    #
-    # Es LITERALMENTE el caso que A guarda, y con la misma razón escrita en el
-    # canónico (`EnterPlanModeTool.ts:56-67`): *«ExitPlanMode is disabled (its approval
-    # dialog needs the terminal). Disable entry too so plan mode isn't a trap the model
-    # can enter but never leave»*. Se apagan LAS DOS, como en A: apagar sólo la entrada
-    # dejaría a `ExitPlanMode` publicada sin nada que la haga alcanzable.
-    #
-    # ⚠ NO se paga aquí, y queda DECLARADO — `FIND-PLAN-FILE-1`: aun con host
-    # interactivo, el recordatorio de 5 fases ordena escribir el plan en `/plans/plan.md`
-    # (`capabilities/plan/provider.py:41`) y `is_session_plan_file` —la exención del
-    # candado que `plan_file.py:58-63` documenta como «lo consume el integrador»— no
-    # tiene NINGÚN consumidor fuera de tests, en ninguno de los dos repos. Este apagado
-    # saca plan mode de la medida headless; no arregla el cable que le falta.
     def __init__(self, *, interactive: bool = False) -> None:
         self._interactive = interactive
 
@@ -161,9 +142,6 @@ than to redo work
         return self._interactive
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
-        # El discriminador de subagente es `is_subagent`, no `agent_id` (que también se
-        # asigna al contexto raíz como identidad). Mismo criterio que el resto del runtime
-        # (resolver/agent_loop/runtime). Canónico: EnterPlanMode es root-only.
         if ctx.is_subagent:
             return ToolResult.error(
                 self.name, "EnterPlanMode cannot be used inside a subagent."
@@ -171,7 +149,6 @@ than to redo work
 
         def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native[_PLAN_MODE_KEY] = True
-            # Reinicia la cadencia: la primera iteración del nuevo plan mode rinde el reminder full.
             c.app_state.native.pop(_PLAN_FULL_SHOWN_KEY, None)
             return c
 
@@ -188,15 +165,8 @@ than to redo work
 
 class ExitPlanModeTool:
     name = EXIT_PLAN_MODE_TOOL_NAME
-    # `shouldDefer: true` del canónico (`ExitPlanModeTool/ExitPlanModeV2Tool.ts:166`) — `GAP-TOOL4`.
     deferred = True
-    # `searchHint` del canónico, grafía literal (`ExitPlanModeV2Tool.ts:149`). Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "present plan for approval and start coding (plan mode only)"
-    # Homologada contra `ExitPlanModeTool/prompt.ts:7-27` (`EXIT_PLAN_MODE_V2_TOOL_PROMPT`),
-    # `GAP-PROMPT-1`. Portada ÍNTEGRA: el stub externo del canónico ya excluye la sección
-    # Ant-only (`:1`), y la conducta de B coincide — el plan se lee del plan-file, no se
-    # pasa por parámetro, que es justo lo que el texto explica en `:11`.
     description = """Use this tool when you are in plan mode and have finished writing your plan \
 to the plan file and are ready for user approval.
 
@@ -232,56 +202,51 @@ have finished planning the implementation steps of the task.
 (OAuth, JWT, etc.), use AskUserQuestion first, then use exit plan mode tool after clarifying the \
 approach.
 """
-    # Sin arg `plan`: el plan se lee del plan-file (fuente de verdad que el modelo escribió durante
-    # plan mode). Homólogo de `ExitPlanModeV2Tool` (inputSchema interno sin `plan`, plan leído de
-    # disco vía `getPlan`). Schema vacío = el modelo lo llama sin argumentos.
     input_schema: dict[str, Any] = {"type": "object", "properties": {}}  # noqa: RUF012
     category = ToolCategory.SYSTEM
     requires_permission = False
     safe_for_background = False
     timeout_seconds = 5.0
 
-    # Ver `EnterPlanModeTool.is_enabled`: en A la premisa del apagado es justamente que
-    # ESTA tool no puede operar sin terminal, y la entrada se apaga en consecuencia.
     def __init__(self, *, interactive: bool = False) -> None:
         self._interactive = interactive
 
     def is_enabled(self) -> bool:
         return self._interactive
 
-    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
+    async def check_permissions(
+        self, input: dict[str, Any], ctx: ToolUseContext
+    ) -> PermissionDecision:
+        if not ctx.app_state.native.get(_PLAN_MODE_KEY):
+            return PermissionDecision.deny(NOT_IN_PLAN_MODE_MESSAGE)
+
         plan = await get_plan(ctx)
         if not plan or not plan.strip():
-            return ToolResult.error(
-                self.name,
+            return PermissionDecision.deny(
                 f"No plan found at {get_plan_file_path(ctx)}. Write your plan to the plan file "
-                "before calling ExitPlanMode.",
+                "before calling ExitPlanMode."
             )
         plan = plan.strip()
+        return PermissionDecision.ask(
+            plan,
+            remember=False,
+            deny_message=f"{PLAN_REJECTION_PREFIX}{plan}",
+        )
+
+    async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
+        plan = (await get_plan(ctx) or "").strip()
 
         def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native.pop(_PLAN_MODE_KEY, None)
             c.app_state.native.pop(_PLAN_FULL_SHOWN_KEY, None)
-            # Cachea el plan leído del plan-file para el one-shot de salida del provider (sync),
-            # que no puede releer storage (async). La fuente de verdad sigue siendo el plan-file.
             c.app_state.native[_PLAN_KEY] = plan
             c.app_state.native[_PLAN_EXIT_PENDING_KEY] = True
             return c
 
-        # Presentar el plan CIERRA el turno: el agente se detiene a esperar la aprobación del
-        # usuario en vez de seguir generando (sin esto el modelo narra el plan como aprobado y
-        # anuncia implementación).
-        #
-        # ⚠ Esto **no** es espejo del canónico, y la nota anterior que lo llamaba «espejo de
-        # `requiresUserInteraction()->true`» sobre-afirmaba: `requiresUserInteraction()` existe
-        # en A (`AskUserQuestionTool.tsx:155`) pero NO cierra el turno — marca que la tool
-        # necesita al usuario para que el gate de permisos la resuelva por
-        # `checkPermissions → behavior:'ask' + updatedInput`, y el turno **continúa**. `endsTurn`
-        # no existe en A. Es cable propio de B mientras esa capa de interacción (`GAP-02`/`K1`)
-        # esté por encima de la línea de corte. Ver `ToolResult.ends_turn`.
         return ToolResult(
             tool_name=self.name,
-            output=f"Plan submitted for approval:\n\n{plan}",
+            output=(
+                PLAN_APPROVED_TEMPLATE.format(plan=plan) if plan else PLAN_APPROVED_EMPTY
+            ),
             context_modifier=modifier,
-            ends_turn=True,
         )

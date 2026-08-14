@@ -83,9 +83,9 @@ _OFFICE_SKILL = (
     "---\n"
     "name: office\n"
     "description: edita documentos de oficina\n"
-    "allowed-tools: echo_upper\n"
+    "allowed-tools: mcp__local__echo_upper\n"
     "---\n"
-    "Para editar, usa la tool echo_upper."
+    "Para editar, usa la tool mcp__local__echo_upper."
 )
 
 
@@ -121,7 +121,7 @@ class _ScriptedCaller:
                 yield ToolCallEvent(tool_name="Skill", tool_input={"command": "office"}, call_id="c1")
                 yield DoneEvent(stop_reason="tool_calls")
             elif n == 2:
-                yield ToolCallEvent(tool_name="echo_upper", tool_input={"text": "hola mundo"}, call_id="c2")
+                yield ToolCallEvent(tool_name="mcp__local__echo_upper", tool_input={"text": "hola mundo"}, call_id="c2")
                 yield DoneEvent(stop_reason="tool_calls")
             else:
                 yield TokenEvent(content="listo")
@@ -182,9 +182,9 @@ async def test_register_and_operate_mcp_and_skill_end_to_end(tmp_path):
     # turno 1: Skill y ToolSearch visibles; echo_upper diferido oculto
     assert "Skill" in caller.turns[0]
     assert "ToolSearch" in caller.turns[0]
-    assert "echo_upper" not in caller.turns[0]
+    assert "mcp__local__echo_upper" not in caller.turns[0]
     # turno 2: tras invocar la skill, echo_upper anunciado (descubierto + permitido)
-    assert "echo_upper" in caller.turns[1]
+    assert "mcp__local__echo_upper" in caller.turns[1]
     # operó con normalidad: el server MCP REAL (Streamable HTTP/TLS) devolvió mayúsculas
     contents = " ".join(str(m.get("content", "")) for m in caller.last_messages)
     assert "HOLA MUNDO" in contents

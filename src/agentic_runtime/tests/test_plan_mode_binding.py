@@ -81,8 +81,13 @@ async def test_exit_cierra_el_turno():
 
 
 async def test_exit_sin_plan_file_es_error():
-    """Sin plan-file escrito, `ExitPlanMode` es error (homólogo del guard del canónico): no se
-    puede salir a "aprobación" sin un plan en disco. No arma el one-shot ni sale de plan mode."""
+    """Sin plan-file escrito, `ExitPlanMode` es error: no se puede salir a "aprobación" sin un
+    plan en disco. No arma el one-shot ni sale de plan mode.
+
+    CORRECCIÓN (`FIND-EXITPLAN`): esta guarda **no** es el homólogo del guard del canónico, como
+    decía antes esta docstring. La del canónico es la de MODO (`ExitPlanModeV2Tool.ts:203-218`,
+    errorCode 1) y vive aparte, delante de ésta. Ésta es propia de B y no tiene equivalente en A,
+    porque A recibe el plan por input y nosotros lo leemos del plan-file."""
     ctx = _ctx_in_plan(None)
     result = await ExitPlanModeTool().execute({}, ctx)
     assert result.is_error

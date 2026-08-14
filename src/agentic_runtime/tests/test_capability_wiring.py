@@ -97,16 +97,19 @@ async def test_loop_assembles_native_plus_capability_pool_and_announces():
         capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("mcp_ping")
+    ctx = _ctx_allowing("mcp__srv__mcp_ping")
     await loop.run("hola", ctx)
 
     announced = {t["name"] for t in type(caller).captured_tools}
     # native se anuncia; la MCP es diferida (M3) → NO se anuncia hasta descubrirse,
     # pero ambas viven en el MISMO pool ensamblado (y son ejecutables desde él).
     assert "echo" in announced
-    assert "mcp_ping" not in announced
+    assert "mcp__srv__mcp_ping" not in announced
     pool_names = {t.name for t in ctx.tool_pool.assemble()}
-    assert {"echo", "mcp_ping"} <= pool_names
+    assert {"echo", "mcp__srv__mcp_ping"} <= pool_names
+    # `FIND-MCP1`: el nombre CUALIFICADO es el único que existe. El desnudo no es un
+    # alias tolerado: si volviera al pool, dos servers con la misma tool colisionarían.
+    assert "mcp_ping" not in pool_names
 
 
 async def test_loop_executes_capability_tool_from_pool():
@@ -115,7 +118,7 @@ async def test_loop_executes_capability_tool_from_pool():
     reg = ToolRegistry()  # registry nativo VACÍO — la tool MCP no vive aquí
 
     caller = _make_caller(
-        ToolCallEvent(tool_name="mcp_ping", tool_input={"x": 1}, call_id="c1"),
+        ToolCallEvent(tool_name="mcp__srv__mcp_ping", tool_input={"x": 1}, call_id="c1"),
         DoneEvent(stop_reason="stop"),
     )
     loop = AgentLoop(
@@ -124,7 +127,7 @@ async def test_loop_executes_capability_tool_from_pool():
         capability_manager=manager,
         tool_dispatcher=ToolDispatcher(),
     )
-    ctx = _ctx_allowing("mcp_ping")
+    ctx = _ctx_allowing("mcp__srv__mcp_ping")
     await loop.run("usa mcp", ctx)
 
     tool_msgs = [m for m in ctx.messages if m.get("role") == "tool"]

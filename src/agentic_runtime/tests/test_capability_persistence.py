@@ -87,7 +87,7 @@ async def test_provider_loads_registered_servers_from_store_on_startup():
 
     assert "wiki" in provider.state.servers
     assert provider.state.status("wiki").value == "connected"
-    assert [t.name for t in provider.tools(_ctx())] == ["wiki_search"]
+    assert [t.name for t in provider.tools(_ctx())] == ["mcp__wiki__wiki_search"]
     await provider.shutdown()
 
 
@@ -132,7 +132,7 @@ async def test_startup_skips_disabled_servers():
 
     assert provider.state.status("on").value == "connected"
     assert provider.state.status("off").value == "configured"  # registrado, no conectado
-    assert [t.name for t in provider.tools(_ctx())] == ["on_t"]
+    assert [t.name for t in provider.tools(_ctx())] == ["mcp__on__on_t"]
     await provider.shutdown()
 
 
@@ -158,7 +158,7 @@ async def test_set_server_enabled_persists_and_survives_restart():
     # re-habilitar reconecta y vuelve a aportar tools
     reconnected = await fresh.set_server_enabled("srv", True)
     assert reconnected is True
-    assert [t.name for t in fresh.tools(_ctx())] == ["srv_t"]
+    assert [t.name for t in fresh.tools(_ctx())] == ["mcp__srv__srv_t"]
     assert (await store.load())["srv"]["enabled"] is True
     await fresh.shutdown()
 

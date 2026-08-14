@@ -1,6 +1,27 @@
-"""Reexport del contrato T1 de tools (`contracts.tools`)."""
 from __future__ import annotations
 
-from ..contracts.tools import ToolCategory, ToolContext, ToolProtocol, ToolResult
+from ..contracts.tools import (
+    PERMISSION_ONCE_KEY,
+    PermissionBehavior,
+    PermissionDecision,
+    ToolCategory,
+    ToolContext,
+    ToolProtocol,
+    ToolResult,
+    consume_permission_once,
+    grant_permission_once,
+    tool_check_permissions,
+)
 
-__all__ = ["ToolCategory", "ToolContext", "ToolProtocol", "ToolResult"]
+__all__ = [
+    "PERMISSION_ONCE_KEY",
+    "PermissionBehavior",
+    "PermissionDecision",
+    "ToolCategory",
+    "ToolContext",
+    "ToolProtocol",
+    "ToolResult",
+    "consume_permission_once",
+    "grant_permission_once",
+    "tool_check_permissions",
+]

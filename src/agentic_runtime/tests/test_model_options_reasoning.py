@@ -145,7 +145,11 @@ async def test_a_budget_without_a_level_is_refused_even_where_the_api_reads_it(m
 # ---------------------------------------------------------------------------
 
 def _assistant_parts(message: dict[str, object], model_id: str = "gpt-5.4-mini"):
-    context = _dict_messages_to_context([message], [], None, model_id)
+    from agentic_models import get_registry, register_builtins
+
+    register_builtins()
+    model = get_registry().get_by_provider("azure-openai-responses", model_id)
+    context = _dict_messages_to_context([message], [], None, model)
     return context.messages[0].content
 
 
@@ -334,3 +338,45 @@ async def test_the_options_of_the_seam_reach_the_caller():
     assert caller.kwargs[0]["effort"] is Effort.XHIGH
     # Sólo lo poblado: nadie inventa `thinking` porque nadie lo pidió.
     assert "thinking" not in caller.kwargs[0]
+
+
+# ---------------------------------------------------------------------------
+# El round-trip, hasta el final: el item tiene que llegar al REQUEST
+# ---------------------------------------------------------------------------
+
+def test_reasoning_reaches_the_request_and_is_not_downgraded_on_the_way():
+    """Que el bloque tenga firma no basta: el provider la descarta si no sabe de quién es.
+
+    `transform_messages` compara la identidad del MENSAJE (`model`/`provider`/`api`)
+    con la del modelo en curso y, si no coincide, degrada el pensamiento a texto
+    plano — el comportamiento correcto, porque las firmas están atadas al modelo.
+    Un mensaje rearmado sin identidad cae siempre en esa rama: el item se pierde
+    en silencio y el modelo re-razona en cada tool call, que es justo lo que el
+    round-trip existe para evitar.
+    """
+    from agentic_models import get_registry, register_builtins
+    from agentic_models.providers.openai_responses_shared import convert_responses_messages
+
+    register_builtins()
+    model = get_registry().get_by_provider("azure-openai-responses", "gpt-5.4-mini")
+
+    context = _dict_messages_to_context(
+        [{
+            "role": "assistant",
+            "content": "voy a leerlo",
+            "thinking_blocks": [{
+                "thinking": "razoné",
+                "signature": '{"id":"rs_1","type":"reasoning","summary":[],"encrypted_content":"ENC"}',
+                "model_id": model.id,
+            }],
+        }],
+        [], None, model,
+    )
+
+    assistant = context.messages[0]
+    assert (assistant.model, assistant.provider, assistant.api) == (model.id, model.provider, model.api)
+
+    entrada = convert_responses_messages(model, context, (model.provider,))
+    items = [m for m in entrada if m.get("type") == "reasoning"]
+    assert len(items) == 1, "el item de razonamiento no llegó al request"
+    assert items[0]["encrypted_content"] == "ENC"

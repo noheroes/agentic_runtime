@@ -331,7 +331,9 @@ def test_the_helper_matches_what_the_loop_actually_writes():
                 and "now available via ToolSearch" in (m.get("content") or "")]
 
     del_loop = asyncio.run(run())[0]
-    assert del_loop == _reminder_msg(added=["drawio_create"])["content"]
+    # El bucle anuncia lo que el pool tiene, y el pool guarda el nombre CUALIFICADO
+    # (`FIND-MCP1`): el helper debe coincidir con ESO, no con el nombre del server.
+    assert del_loop == _reminder_msg(added=["mcp__srv__drawio_create"])["content"]
 
 
 async def test_a_hostile_name_from_a_real_server_converges_through_the_loop():

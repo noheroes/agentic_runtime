@@ -1341,6 +1341,16 @@ _NATIVE_CENSUS = frozenset({
 #: Siguen EN el censo: el registry las construye siempre; lo que cambia es la publicación.
 _PUERTA_UNICA = frozenset({"AskUserQuestion", "EnterPlanMode", "ExitPlanMode"})
 
+#: `D-19`/`GAP-TOOL4`: las nativas con `shouldDefer:true` en A. NO se anuncian —se nombran
+#: en el reminder de diferidas y se cargan por `ToolSearch`—, así que el censo que llega al
+#: modelo es «anunciadas ∪ nombradas en el reminder». Se escribe a mano, como `_NATIVE_CENSUS`,
+#: para que diferir una tool nueva (o dejar de diferir una) tenga que pasar por aquí.
+_META_DIFERIDAS = frozenset({
+    "AskUserQuestion", "Config", "EnterPlanMode", "EnterWorktree", "ExitPlanMode",
+    "ExitWorktree", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+    "TaskUpdate", "TodoWrite", "WebFetch", "WebSearch",
+})
+
 
 def test_e2c_the_native_census_is_exactly_what_the_factory_registers():
     """Ancla del barrido: 25 tools en 18 módulos, ni una menos.
@@ -1357,6 +1367,15 @@ def test_e2c_the_native_census_is_exactly_what_the_factory_registers():
     )
     modules = {type(t).__module__.rsplit(".", 1)[-1] for t in create_tools().all_tools()}
     assert len(modules) == 18, f"18 módulos nativos, medidos {len(modules)}: {sorted(modules)}"
+    # `D-19`: y quién se DIFIERE también es censo. Sin esto, marcar `deferred` en una
+    # nativa la saca del anuncio sin que nada se ponga rojo.
+    from agentic_runtime.tools.deferred import is_deferred_tool
+
+    diferidas = {t.name for t in create_tools().all_tools() if is_deferred_tool(t)}
+    assert diferidas == set(_META_DIFERIDAS), (
+        f"censo de diferidas desincronizado: sobran {sorted(diferidas - _META_DIFERIDAS)}, "
+        f"faltan {sorted(_META_DIFERIDAS - diferidas)}"
+    )
 
 
 async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
@@ -1370,22 +1389,32 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
     versión aseveraba «las 25 siempre» y se puso ROJA por `ToolSearch`. No es un
     fallo: `deferred_strategy.py:64-66` la omite a propósito cuando no hay ninguna
     diferida en el pool («sin diferidas, no hay nada que buscar»), igual que el
-    canónico. Así que se aseveran **las dos ramas** — que es más fuerte que lo que
-    yo había escrito: 24 SIEMPRE, y `ToolSearch` **si y sólo si** hay diferidas.
+    canónico.
+
+    **Reescrito por `D-19`**, que difirió las 15 meta y dejó falsa la premisa «24
+    anunciadas siempre». Lo que se mide ahora es el censo que LLEGA AL MODELO, que
+    tiene dos canales —el anuncio y el reminder de diferidas—; medir sólo el primero
+    daría por perdidas 15 tools que sí llegan. La rama negativa de `ToolSearch` («sin
+    diferidas no se anuncia») ya no se puede producir desde el pool de producción,
+    porque ahí SIEMPRE hay diferidas: se mide donde sí es producible, en
+    `test_deferred_loading.py:160` y `test_deferred_strategy.py:309`.
     """
     from agentic_runtime.contracts.events import DoneEvent
+    from agentic_runtime.tools.deferred_delta import _announced_deferred_names
 
-    always = _NATIVE_CENSUS - {"ToolSearch"}
+    always = _NATIVE_CENSUS - _META_DIFERIDAS - {"ToolSearch"}
 
     class _CensusCaller:
         def __init__(self) -> None:
             self.announced: set[str] = set()
+            self.deferred: set[str] = set()
 
         def supports_native_tool_search(self, model_id: str = "") -> bool:
             return False
 
         async def complete(self, messages, tools, *, stop=None, **kwargs):
             self.announced = {t.get("name") for t in tools}
+            self.deferred = _announced_deferred_names(list(messages))
 
             async def _gen():
                 yield DoneEvent(stop_reason="end_turn")
@@ -1405,7 +1434,9 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
         async def execute(self, input: dict, ctx: ToolUseContext) -> ToolResult:
             return ToolResult(tool_name=self.name, output="ok")
 
-    async def _announce(extras: tuple, tag: str, *, interactive: bool = True) -> set[str]:
+    async def _announce(
+        extras: tuple, tag: str, *, interactive: bool = True
+    ) -> tuple[set[str], set[str]]:
         caller = _CensusCaller()
         runtime = _runtime(
             tmp_path / tag, caller, extras, Scope(f"scope-e2c-{tag}"), interactive=interactive
@@ -1417,19 +1448,28 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
         ))
         await runtime._task_registry.get(task_id).asyncio_task
         assert caller.announced, "el turno no llegó a llamar al modelo"
-        return caller.announced
+        return caller.announced, caller.deferred
 
-    # Rama A — sin diferidas en el pool.
-    plain = await _announce((), "plain")
+    # Rama A — el pool de producción tal cual.
+    plain, plain_dif = await _announce((), "plain")
     assert always <= plain, (
         f"tools nativas que NO llegan al anuncio: {sorted(always - plain)}"
     )
-    assert "ToolSearch" not in plain, (
-        "`ToolSearch` se anuncia sin haber ninguna diferida que buscar"
+    assert plain & _META_DIFERIDAS == set(), (
+        f"`D-19`: una meta diferida se está anunciando: {sorted(plain & _META_DIFERIDAS)}"
+    )
+    # …y no por diferidas dejan de llegar: el reminder las nombra, que es lo que las
+    # hace alcanzables por `ToolSearch`. Sin esta mitad, diferir sería perderlas.
+    assert _META_DIFERIDAS <= plain | plain_dif, (
+        f"diferidas que NO llegan al modelo por ningún canal: "
+        f"{sorted(_META_DIFERIDAS - (plain | plain_dif))}"
+    )
+    assert "ToolSearch" in plain, (
+        "hay diferidas en el pool y `ToolSearch` no se anunció: son inalcanzables"
     )
 
-    # Rama B — con una diferida: aparece ToolSearch, y la diferida NO se anuncia.
-    with_deferred = await _announce((_DeferredWitness(),), "deferred")
+    # Rama B — una diferida MÁS: tampoco se anuncia, y se nombra en el reminder.
+    with_deferred, with_deferred_dif = await _announce((_DeferredWitness(),), "deferred")
     assert always <= with_deferred, (
         f"tools nativas que NO llegan al anuncio: {sorted(always - with_deferred)}"
     )
@@ -1437,28 +1477,36 @@ async def test_e2c_the_production_pool_announces_the_whole_census(tmp_path):
         "hay una diferida en el pool y `ToolSearch` no se anunció: es inalcanzable"
     )
     assert "censo_diferida" not in with_deferred, "una diferida no descubierta no se anuncia"
+    assert "censo_diferida" in with_deferred_dif, (
+        "la diferida no se nombra en el reminder: ni anunciada ni buscable, o sea muerta"
+    )
 
     # Rama C — el HOST. Mismo tratamiento que se le dio a `ToolSearch` arriba: el
     # censo no se anuncia entero incondicionalmente, se anuncia entero **si y sólo si**
     # el host puede sostener las tools de puerta única (`FIND-TOOL-ENABLED-1`,
     # `Tool.isEnabled()` en `tools.ts:325-326`). Aseverar las dos ramas es más fuerte
     # que aseverar «las 24 siempre», que era la premisa vieja y ya no es cierta.
-    headless = await _announce((), "headless", interactive=False)
+    # Tras `D-19` las tres de puerta única son además DIFERIDAS, así que la comparación
+    # con y sin humano se hace sobre el censo COMPLETO —anuncio ∪ reminder—: mirar sólo
+    # el anuncio daría verde trivial (allí no están en ninguna de las dos ramas).
+    headless, headless_dif = await _announce((), "headless", interactive=False)
+    censo_plain = plain | plain_dif
+    censo_headless = headless | headless_dif
     assert always - _PUERTA_UNICA <= headless, (
         f"tools nativas que NO llegan al anuncio headless: "
         f"{sorted((always - _PUERTA_UNICA) - headless)}"
     )
-    assert headless & _PUERTA_UNICA == set(), (
-        f"un host SIN humano anuncia tools que ceden el turno esperando a uno: "
-        f"{sorted(headless & _PUERTA_UNICA)} — turno vacío garantizado (medido en `E2g`)"
+    assert censo_headless & _PUERTA_UNICA == set(), (
+        f"un host SIN humano publica tools que ceden el turno esperando a uno: "
+        f"{sorted(censo_headless & _PUERTA_UNICA)} — turno vacío garantizado (medido en `E2g`)"
     )
-    assert _PUERTA_UNICA <= plain, (
+    assert _PUERTA_UNICA <= censo_plain, (
         "las de puerta única no vuelven con `interactive=True`: el apagado dejó de ser "
         "condicional y se comió el censo"
     )
-    assert plain - headless == _PUERTA_UNICA, (
+    assert censo_plain - censo_headless == _PUERTA_UNICA, (
         f"la diferencia entre host con y sin humano no es exactamente el conjunto de "
-        f"puerta única: {plain - headless}"
+        f"puerta única: {censo_plain - censo_headless}"
     )
 
 
@@ -1939,8 +1987,14 @@ async def test_e2e_tool_search_discovers_a_deferred_tool_and_it_becomes_announce
     assert match["parameters"].get("properties", {}).get("url"), (
         f"la descubierta llegó sin schema invocable: {match}"
     )
-    assert payload["total_deferred_tools"] == 2, (
-        f"el censo de diferidas del pool no cuadra: {payload['total_deferred_tools']}"
+    # `D-19` difirió las 15 meta, así que el censo de diferidas del pool ya no son las
+    # dos de red: son todas ellas menos las de puerta única, que este host —headless por
+    # defecto (`_runtime`)— no publica. Escrito como conjunto y no como número para que
+    # un cambio en el censo diga QUÉ cambió, no sólo que la cuenta bailó.
+    esperadas = _META_DIFERIDAS - _PUERTA_UNICA
+    assert payload["total_deferred_tools"] == len(esperadas), (
+        f"el censo de diferidas del pool no cuadra: {payload['total_deferred_tools']} "
+        f"medidas contra {len(esperadas)} esperadas ({sorted(esperadas)})"
     )
 
 
@@ -3973,6 +4027,16 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
         )
         rnd.shuffle(escenarios)
 
+        # BANCO, no puerta: `GATE_E11_ONLY=id,id` corre un subconjunto para medir una
+        # conducta concreta a coste razonable. Sin la variable —o sea, en CI y en toda
+        # corrida normal— se corren los 11 y el cierre por `conducidas == _E11_OBJETIVO`
+        # sigue siendo el de siempre. Filtrar es una herramienta de medición; si alguien
+        # la deja puesta, el assert final de conducción total lo delata.
+        solo = {x.strip() for x in (os.getenv("GATE_E11_ONLY") or "").split(",") if x.strip()}
+        if solo:
+            escenarios = [sc for sc in escenarios if sc["id"] in solo]
+            assert escenarios, f"GATE_E11_ONLY no casó con ningún escenario: {sorted(solo)}"
+
         for n, sc in enumerate(escenarios):
             objetivo = {sc["must_use"], *sc.get("tambien", set())}
             probe = ModelSeamProbe(_build_caller(_E11_SYSTEM))
@@ -4006,6 +4070,25 @@ async def test_e11_the_model_conducts_the_eleven_never_conducted_tools(tmp_path,
             invocadas = _invoked_tool_names(probe.calls)
             conducidas |= invocadas & _E11_OBJETIVO
             anunciadas = {t.get("name") for call in probe.calls for t in call["tools"]}
+
+            # BANCO: `GATE_E11_TRACE=<fichero>` vuelca la secuencia REAL de llamadas con
+            # sus argumentos. Sin él no se ve QUÉ comando corrió ese `bash`, y sin eso
+            # cualquier diagnóstico de por qué el modelo no eligió la tool dedicada es
+            # una suposición. No cambia ninguna aserción: sólo escribe lo ya ocurrido.
+            traza = os.getenv("GATE_E11_TRACE")
+            if traza:
+                secuencia = [
+                    {"tool": (tc.get("function") or {}).get("name"),
+                     "args": (tc.get("function") or {}).get("arguments")}
+                    for call in probe.calls for msg in call["messages"]
+                    for tc in (msg.get("tool_calls") or ())
+                ]
+                with open(traza, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "escenario": sc["id"], "objetivo": sorted(objetivo),
+                        "secuencia": secuencia, "respuesta": answer,
+                        "status": str(status), "seed": seed,
+                    }, ensure_ascii=False) + "\n")
 
             problemas: list[str] = []
             # `AskUserQuestion` cede el turno: la tarea no «completa» resolviendo, y

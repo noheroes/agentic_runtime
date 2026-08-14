@@ -122,8 +122,26 @@ ensures you complete all requirements successfully.
         todos = input.get("todos", [])
         old_todos = ctx.app_state.native.get(_TODOS_KEY, [])
 
+        # `TodoWriteTool/TodoWriteTool.ts:69-70`: `allDone ? [] : todos` — cuando TODO
+        # queda `completed`, lo que se ALMACENA es la lista vacía; el depósito se vacía
+        # solo. Lo que se DEVUELVE sigue siendo `todos` (`:99` devuelve `todos`, no
+        # `newTodos`): A informa al modelo lo que el modelo escribió y guarda el vaciado.
+        # `all([])` ≡ `[].every()` en JS (ambos ciertos) ⇒ lista vacía se guarda vacía por
+        # la misma rama, sin caso especial.
+        all_done = all(todo.get("status") == "completed" for todo in todos)
+        new_todos: list[Any] = [] if all_done else todos
+
+        # NO PORTADO Y DECLARADO:
+        # - `todoKey = context.agentId ?? getSessionId()` (`:67`): la clave por agente/
+        #   sesión depende del asiento de estado de sesión que aún no existe (paso 7 del
+        #   censo, la porta el paso 9). Aquí sigue habiendo slot único.
+        # - `verificationNudgeNeeded` (`:76-86`, `:104-113`): cuelga de
+        #   `feature('VERIFICATION_AGENT')` y del flag de growthbook `tengu_hive_evidence`.
+        #   Es un experimento de A, no conducta general.
+        # SALVEDAD EN PIE (la cierra el paso 7): `_TODOS_KEY` vive en `app_state.native`,
+        # que muere con el turno ⇒ el vaciado sólo es observable DENTRO del turno.
         def modifier(c: ToolUseContext) -> ToolUseContext:
-            c.app_state.native[_TODOS_KEY] = todos
+            c.app_state.native[_TODOS_KEY] = new_todos
             return c
 
         return ToolResult(

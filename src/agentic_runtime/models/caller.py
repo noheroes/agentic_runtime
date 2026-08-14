@@ -49,9 +49,18 @@ def _dict_messages_to_context(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     system_prompt: str | None,
-    model_id: str = "",
+    model: Any = None,
 ) -> Any:
-    """Convert dict messages + tool schemas to agentic_models.Context."""
+    """Convert dict messages + tool schemas to agentic_models.Context.
+
+    Recibe el `Model` entero, no sólo su id, porque el mensaje de asistente que se
+    rearma tiene que llevar la IDENTIDAD de quien lo produjo: el motor compara
+    `model`/`provider`/`api` del mensaje con los del modelo en curso y, si no
+    coinciden, degrada el pensamiento a texto plano. Es la conducta correcta —las
+    firmas están atadas al modelo—, pero un mensaje rearmado sin identidad cae
+    siempre en esa rama y el round-trip se pierde en silencio.
+    """
+    model_id = getattr(model, "id", "") or ""
     from agentic_models.model_types import (
         AssistantMessage,
         Context,
@@ -116,7 +125,16 @@ def _dict_messages_to_context(
             if not reasoning and (thinking := m.get("thinking")):
                 reasoning.append(ThinkingContent(thinking=thinking))
             parts[:0] = reasoning
-            return AssistantMessage(content=parts)
+            rebuilt = AssistantMessage(content=parts)
+            # Los bloques que sobreviven al filtro de arriba son del modelo en curso
+            # (o historia sin etiquetar, que se le atribuye), así que sellar con él es
+            # decir la verdad sobre lo que va dentro — y es lo que hace que el item
+            # llegue al request en vez de degradarse a texto.
+            if model is not None:
+                rebuilt.model = model_id
+                rebuilt.provider = getattr(model, "provider", "") or ""
+                rebuilt.api = getattr(model, "api", "") or ""
+            return rebuilt
 
         if role == "tool":
             return ToolResultMessage(
@@ -264,7 +282,7 @@ class AgenticModelsCaller:
             model = get_registry().get_by_provider(self._model.provider, model_id)
 
         context = _dict_messages_to_context(
-            messages, tools, _compose_system_prompt(base, system_sections), model.id
+            messages, tools, _compose_system_prompt(base, system_sections), model
         )
 
         from dataclasses import fields, replace

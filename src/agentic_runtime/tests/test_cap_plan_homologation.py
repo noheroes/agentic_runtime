@@ -171,12 +171,19 @@ def test_enter_has_when_to_use_prompt():
     assert "using glob, grep, and read_file tools" in text
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-PLAN2: ExitPlanMode sin guard de plan_mode activo")
 async def test_exit_outside_plan_mode_is_error():
+    """`FIND-PLAN2`/`FIND-EXITPLAN` — PAGADO. Espejo de `ExitPlanModeV2Tool.ts:203-218`
+    (`validateInput`, errorCode 1): fuera de plan mode se rechaza, **aunque haya plan-file**.
+    Con plan-file y sin modo activo, antes la salida tenía éxito y armaba el one-shot de
+    aprobación de un modo que no estaba puesto."""
     ctx = ToolUseContext(session_id="s1", storage=_FakePlanStorage({"/plans/plan.md": "p"}))
     # plan_mode NO activo
     res = await ExitPlanModeTool().execute({}, ctx)
     assert res.is_error and "plan mode" in res.output.lower()
+    # Mensaje canónico literal, no una paráfrasis nuestra.
+    assert "You are not in plan mode." in res.output
+    # No sembró el one-shot de aprobación.
+    assert _PLAN_EXIT_PENDING_KEY not in ctx.app_state.native
 
 
 @pytest.mark.xfail(strict=True, reason="FIND-PLAN3: agentes built-in Explore/Plan no registrados")

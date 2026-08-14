@@ -905,3 +905,137 @@ es la única prueba directa del round-trip.
 **Hallazgo colateral del entorno.** `agentic_runtime/.venv` tenía `agentic_models` instalado como
 **copia congelada**, no como editable: la suite del runtime estaba midiendo contra una copia
 vieja del proveedor. Reinstalado editable contra `/home/noheroes/python/agentic_models`.
+
+---
+
+## D-22 · «¿Existe en B?» NO es una razón para no portar: lo que no está SE CREA (2026-08-10)
+
+**Disparador, verbatim del usuario:** *«la respuesta no solo a este caso sino a todo caso que ocurra,
+agentic_runtime es un proyecto en fase de homologacion, lo que no este se crea si con esto se
+consigue precisamente esto, homologar comportamiento, algoritmo, etc de canonico. por tanto no
+cabria la pregunta si existe o no en B.»*
+
+**Qué la originó.** El paso 4 (`FIND-CFG-2`). Yo había cerrado media fila con el argumento *«B no
+tiene hoy ni un ajuste escribible en caliente ⇒ el registro va vacío»*, y con él había declarado no
+portables la guarda 11 (`check_permissions`) y el almacén de configuración. Eso convierte una
+**carencia** en un **criterio de alcance**, que es la forma inversa de
+`homologar-es-trasladar-conducta`: allí se doblaba la descripción hacia nuestra implementación;
+aquí se doblaba el alcance hacia nuestras ausencias. Las dos dejan la conducta del canónico fuera.
+
+**DECISIÓN.** La ausencia de referente en B **no es motivo de exclusión**. Si portar la conducta del
+canónico exige construir lo que falta —un almacén, una costura del contrato, un registro, un módulo
+entero— **se construye**. `agentic_runtime` está en fase de homologación: lo que no está, se crea.
+
+**Qué deroga.** La **pregunta 2** del esquema del censo (`CENSO §1`) deja de ser un filtro de
+alcance. Sigue siendo una pregunta útil —dice **cuánto** hay que construir y en qué capa— pero su
+respuesta «no existe» ya **no autoriza a saltar la fila**. El rótulo «sin referente en B» queda
+prohibido como cierre; se sustituye por «falta construir X».
+
+**Alcance retroactivo — lo que reabre**, todo declarado ya en el censo con ese rótulo derogado:
+`FIND-EDIT` G2 (`checkTeamMemSecrets` + `secretScanner`) · `FIND-EDIT` G8 (`.ipynb` ⇒ `NotebookEdit`)
+· `FIND-CFG-PERM` (guarda 11, exige `check_permissions` en el contrato T1) · el almacén de
+configuración de `FIND-CFG-2` · `FIND-MEM-WIRING`. Se re-abren como trabajo, no como nota.
+
+**Lo que NO deroga, y la línea que sí queda en pie.** El encuadre de capas: **el núcleo se mantiene
+genérico y el integrador se adapta a él, nunca al revés** (`D-15` adenda, `architecture-layers`).
+Por eso la lectura operativa es: **en `agentic_runtime` se construye todo lo que la conducta del
+canónico exija** —mecanismo, costura, contrato, almacén—; en `agentic_code` se cablea lo necesario
+para ejercitarlo (`D-15` paso 3). Lo que **no** se deduce de aquí es que `agentic_code` deba
+adquirir la *superficie de producto* de Claude Code —selector de temas con seis paletas,
+`editorMode`, canales de notificación, voz, teammates—: eso es dominio de producto de A, no
+algoritmo ni comportamiento, y su construcción es decisión aparte del usuario, no consecuencia
+automática de esta regla. **Si el usuario quiere también eso, lo dice y entra.**
+
+**Tampoco deroga `D-21`.** Una opción que el motor **no sabe expresar** se sigue rechazando: ahí la
+imposibilidad es del proveedor y no se arregla construyendo en el núcleo. `D-22` habla de lo que
+falta **en nuestro código**; `D-21`, de lo que no existe **fuera de él**.
+
+**Dónde se aplica.** Todo el censo de guardas y las fases siguientes. Es regla de gobierno.
+
+---
+
+## D-23 · El barrido de comentarios cubre lo que el paso ESCRIBE, no el fichero entero (2026-08-13)
+
+**Disparador.** El paso 4 (`FIND-CFG-2`) toca `agentic_code/composition.py` y
+`agentic_code/mcp_config.py`, dos ficheros con documentación extensa y **ajena al paso** (la
+doctrina de `WorkspaceCwd`/`PlanModeState`, el sourcing MCP por scope, el gate de aprobación).
+Leído al pie de la letra, el §4 del censo —*«al tocar un fichero se borran los textos en forma de
+comentario y docstring explicativos que haya»*— obligaría a borrarla toda por haber añadido tres
+líneas.
+
+**DECISIÓN.** El barrido cubre **lo que el paso escribe**: ficheros nuevos y funciones nuevas o
+reescritas van sin comentarios ni docstrings; la documentación preexistente que el paso no toca
+se queda. Es el precedente ya sentado en el paso 3 y visible en el árbol: `mcp_config.py`
+conservó su documentación mientras las funciones que aquel paso escribió (`is_mcp_project_file`,
+`validate_mcp_config_content`) van desnudas.
+
+**Por qué esta línea y no otra.** El motivo de la regla es que un comentario del tipo
+«homologado con `X.ts:123`» **sesga**: se lee como evidencia y ahorra el contraste. Ese daño lo
+produce lo que se escribe **ahora**, junto al algoritmo recién portado. La documentación
+preexistente de un fichero del integrador no afirma homologación de nada y borrarla sería
+destruir trabajo ajeno al paso bajo la excusa de una regla de higiene — además de inflar el diff
+del paso hasta hacerlo irrevisable, que es lo contrario de «una ventana, un paso».
+
+**Límite.** Si el paso **reescribe** una función, su documentación anterior cae con ella: eso ya
+es lo que el paso escribe. Y si un comentario preexistente afirma la conducta que el paso acaba
+de derogar, se borra —dejarlo sería mentir en el fuente, que es peor que el sesgo.
+
+---
+
+## D-24 · Un paso cierra por PASADA ORGÁNICA; el `--print` guionado deja de ser criterio (2026-08-13)
+
+**Disparador, verbatim del usuario:** *«yo no pruebo con --print, yo pruebo con enunciados y turnos,
+el uso de --print para mi no es un escenario real de prueba, mis pruebas son organicas, pruebo el
+entorno con un enunciado y visualizo las respuestas»*; y tras correr la guía: *«si tus pruebas con
+--print te dan como respuesta verde a situaciones donde como describes son casos puntuales guionados
+y no comportamiento organico, su valor para mi es nulo, un usuario usando honestamente el CLI no
+obtiene el resultado cuando se encadenan turnos, es simple»*. Y la regla que la fija: *«en lugar de
+gastar tokens con pruebas --print que no llevan a nada, sea la evidencia de las pruebas organicas lo
+que retroalimente binariamente funciona o no funciona como se espera»*.
+
+**Qué la originó.** El paso 4 (`FIND-CFG-2`) se había declarado CERRADO con la costura acreditada por
+corridas `--print` y por `agentic_code/tests/test_config_tool.py`. La primera sesión orgánica del
+usuario —tres enunciados encadenados en un REPL real— produjo **tres observaciones**, y ninguna la
+veía el verde: (1) el modelo contestó de memoria el catálogo de ajustes sin cargar nunca la
+descripción, porque el anuncio de diferidas **sólo lleva nombres**; (2) eligió `bash` y `Agent` para
+un objetivo que la tool cubría; (3) tras un `tool_result` de `permiso denegado por el usuario para
+'Config'`, **no volvió a invocar la tool en ningún turno posterior** — trató la denegación como
+revocación permanente y delegó en `Agent` la disculpa. Las tres son conducta **entre turnos**, y un
+`--print` es un turno único por construcción: no puede verlas ni con la aserción más dura.
+
+**DECISIÓN.**
+1. **Un paso del censo NO cierra sin una pasada orgánica** del usuario: REPL real, enunciados
+   encadenados, sin `--dangerously-skip-permissions` y sin `--allowed-tool`. El veredicto es
+   **binario** —funciona o no funciona como se espera— y lo emite lo observado en la sesión, no yo.
+2. **No se escriben más suites guionadas ni corridas `--print` como prueba de cierre**, y no se
+   invocan como aval. Las existentes quedan donde están, con rango de red de regresión, y no se
+   litigan (`suites-sinteticas-apartadas` sigue vigente para las del runtime: no se corren, no se
+   leen, no se editan).
+3. **Cada conducta que se dice portada lleva un DELATOR**: un rasgo que la respuesta no puede exhibir
+   si la conducta no está —un literal del canónico, una glosa que sólo vive en la descripción, un
+   byte en disco—. Un enunciado que una respuesta plausible de memoria puede satisfacer no es prueba:
+   es la trampa que el turno 1 de la primera guía cazó conmigo dentro.
+4. **El guion orgánico ordena los turnos por contaminación**: primero lo que no ensucia la
+   transcripción, al final lo que sí (denegaciones, errores forzados), y `/clear` o sesión nueva
+   después de cada denegación. Encadenar sin ese orden mide el poso del turno anterior, no el paso.
+
+**Qué reabre.** Los pasos 1, 2, 3 y 4 estaban rotulados CERRADO en `CENSO §5` con evidencia
+guionada. Bajan a **inyectados, pendientes de pasada orgánica**. No es que se sepan rotos —el paso 4
+tiene tramos ya acreditados en captura real: lectura sin diálogo y diálogo de escritura con su
+literal exacto—: es que el rótulo afirmaba más de lo que la evidencia sostenía.
+
+**Cuarta pregunta ciega del esquema del censo.** `CENSO §1` documenta tres cosas que la ficha por
+guarda no ve. Se añade la cuarta, que es la que este disparador destapó: **la ficha mira una guarda
+dentro de un turno y no ve la conducta ENTRE turnos**. Los pasos 1–3 portaron cada uno una conducta
+cuyo sentido vive en el turno siguiente —el vaciado `allDone ⇒ []` sólo se observa al releer, el
+literal de «no encontrado» existe para que el modelo se autocorrija después, la guarda de plan mode
+es maquinaria multi-turno—, y las tres se habían acreditado dentro de un turno.
+
+**Lo que NO deroga.** `D-15` no cambia, se afila: el consumidor real sigue siendo `agentic_code` y el
+`.jsonl` sigue siendo la evidencia; lo que se retira es la corrida **guionada** como forma de
+ejercitarlo. `D-08` sigue mandando: si la pasada orgánica sale roja, se resuelve leyendo el canónico,
+no ajustando el enunciado hasta que salga verde (`no-debilitar-la-prueba`). Y `D-12` conserva su
+reparto: el efecto en el mundo se asevera igual —el byte en disco, el fichero editado—, sólo que
+ahora se asevera **dentro** de la sesión orgánica.
+
+**Dónde se aplica.** Todo el censo de guardas y las fases siguientes. Es regla de gobierno.

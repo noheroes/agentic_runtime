@@ -1,3 +1,5 @@
+"""Tool de ejecución de comandos de shell."""
+
 from __future__ import annotations
 
 import os
@@ -12,27 +14,7 @@ if TYPE_CHECKING:
 
 class BashTool:
     name = "bash"
-    # `searchHint` del canónico, grafía literal (`BashTool.tsx:422`). Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "execute shell commands"
-    # Homologada contra `getSimplePrompt()` (`BashTool/prompt.ts:275-369`) — `GAP-PROMPT-1`.
-    # El bloque PORTANTE es el de preferencia de tools (`:280-291` + el IMPORTANT de `:359`):
-    # es como A DIRIGE la elección hacia las tools dedicadas, y su ausencia en B costaba ~25 %
-    # de las corridas de `E2g` (el modelo llegaba a `glob` y se rendía sin leer el fichero).
-    # A lo emite CONDICIONALMENTE (`:276-286`: lo retira si el build lleva find/grep embebidos),
-    # luego es deliberado, no decorativo.
-    # OMITIDO A PROPÓSITO lo que B no tiene: `timeout` y `run_in_background` como parámetros
-    # (el timeout aquí es fijo) y el sandbox.
-    # OMITIDA TAMBIÉN, y esto NO es una carencia: la frase de A «The shell environment is
-    # initialized from the user's profile (bash or zsh)» (`:357`). Aquí sería FALSA —
-    # `create_subprocess_shell` (`exec_env.py:166`) lanza `sh -c`, ni login ni interactivo,
-    # y ningún perfil se lee. Copiarla era describir un entorno que no existe.
-    # El bloque de git/PR de `:81-160` SÍ entra, contra lo que decía la nota anterior: se
-    # había descartado como «flujo del integrador» y la comprobación dice que **ningún sitio
-    # de B lo lleva** —ni esta descripción ni el prompt del integrador—, así que la conducta
-    # de A ahí no estaba trasladada, estaba perdida. Es la mitad del texto de A en esta tool.
-    # De ese bloque se adapta lo que es de A y no nuestro: la atribución interpolada
-    # (`getAttributionTexts()`, `:79`) es política del integrador y no viaja al núcleo.
     description = """Executes a given shell command and returns its output.
 
 The working directory persists between commands, but shell state does not.
@@ -47,6 +29,14 @@ tool cannot accomplish your task. Instead, use the appropriate dedicated tool:
 - Edit files: Use Edit (NOT sed/awk)
 - Write files: Use write_file (NOT echo > or cat <<EOF)
 - Communication: Output text directly (NOT echo/printf)
+
+Do NOT use this tool for file work by way of an interpreter. A `python`, `python3`, `node`,
+`perl` or `ruby` invocation — with `-c`, with a heredoc, or with a script file — that reads,
+rewrites, renames or deletes files is the same prohibited shortcut as `sed`, and it is worse:
+it silently changes line endings, encoding and permissions that the dedicated tools preserve.
+This holds however many files are involved: to change N files, call the dedicated tool N
+times. Reach for an interpreter only when the task is computation with no file work, or when
+a dedicated tool has already failed at it.
 
 While this tool can do similar things, the dedicated tools are better: they are confined to
 the workspace, return structured results, and are easier to review.
@@ -201,26 +191,14 @@ Important:
 
     @staticmethod
     def _workspace_root(ctx: ToolUseContext) -> str | None:
-        """Raíz declarada por el integrador — el análogo de `getOriginalCwd()` de A.
-
-        Es el `write_root` del confinamiento y no una constante: el workspace al que ya
-        están confinadas `read_file`/`write_file`. Que `bash` corriera en otro sitio es
-        justo el defecto #1.
-        """
         root = getattr(getattr(ctx, "fs", None), "write_root", None)
         return str(root) if root is not None else None
 
     def _resolve_cwd(self, ctx: ToolUseContext) -> tuple[str | None, str | None]:
-        """`(cwd, error)` — recuperación calcada de `Shell.ts:220-238`.
-
-        Si el cwd vigente desapareció del disco (un comando puede borrar su propio
-        directorio), A **no** deja que el spawn reviente: cae al cwd original y, si ese
-        tampoco existe, falla con un mensaje accionable en vez de con un errno.
-        """
         fallback = self._workspace_root(ctx)
         cwd = getattr(ctx, "cwd", None) or fallback
         if cwd is None:
-            return None, None  # sin workspace declarado: comportamiento previo (cwd del proceso)
+            return None, None
         if os.path.isdir(cwd):
             return cwd, None
         if fallback is not None and fallback != cwd and os.path.isdir(fallback):
@@ -232,11 +210,6 @@ Important:
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         command = input.get("command", "")
-        # Sin costura de ejecución NO se ejecuta (problema `#2`). El default vive en el
-        # ensamblador (`factory.py:256`), no aquí: un `or LocalExecEnvironment()` local
-        # degradaba en silencio de «sandbox inyectado» a «host», que es el footgun que A
-        # cerró en #34044 (`sandbox-adapter.ts:549-560`). Se comprueba ANTES del cwd para
-        # que el motivo que sale sea el real y no el del directorio.
         try:
             exec_env = require_exec_env(ctx)
         except ExecEnvironmentUnavailable as exc:
@@ -246,26 +219,18 @@ Important:
             return ToolResult.error(self.name, cwd_error)
         try:
             result = await exec_env.run_shell(command, cwd=cwd, timeout=self.timeout_seconds)
-            # Escritura de vuelta del cwd releído (A: `setCwd(newCwd)`, `Shell.ts:385-421`):
-            # así un `cd` persiste entre comandos DEL TURNO. `None` = el backend no lo
-            # rastrea (bwrap) y entonces no se toca nada: adoptar un path no verificado
-            # sería peor que no persistir.
             tracked = getattr(result, "cwd", None)
-            # `preventCwdChanges = !isMainThread` (`Shell.ts:385`, ítem B11 de `10-tools-native`):
-            # A gatea justo esta escritura para los no-main-thread. Un subagente puede hacer
-            # `cd` dentro de SU comando, pero no mover el cwd que comparte con quien lo lanzó.
-            # Sin esta guarda, hacer persistir el cwd habría abierto un agujero que A cierra.
             if getattr(ctx, "is_subagent", False):
                 tracked = None
             if tracked:
                 try:
                     ctx.cwd = tracked
                 except (AttributeError, ValueError):
-                    pass  # ctx sin el cable (fake de test): el comando ya corrió, no se rompe
+                    pass
             return ToolResult(
                 tool_name=self.name,
                 output=result.output,
                 is_error=result.returncode != 0,
             )
-        except Exception as exc:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
+        except Exception as exc:  # noqa: BLE001
             return ToolResult.error(self.name, str(exc))
