@@ -23,28 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 class SkillsProvider:
-    """`CapabilityProvider` de Skills — catálogo conectado por contrato.
-
-    El runtime no accede a `skills.loader`: pide el catálogo al `CapabilityManager`,
-    que lo pide a este provider. S0 (shell): carga tolerante + catálogo. La
-    invocación de skills (mensajes meta, allowed-tools al contexto, estado activo
-    por `agent_id`) llega en S1–S3; la compactación en S5. Por eso `tools`,
-    `active_context` y `compact_context` devuelven vacío hoy — declarado, no fingido.
-
-    Robustez ante skills de terceros — directivas estándar vs. operativas:
-
-    | directiva       | estándar | ausente/malformada → comportamiento          |
-    |-----------------|----------|----------------------------------------------|
-    | `name`          | sí       | identidad ← nombre del directorio            |
-    | `description`   | sí       | se deriva del primer párrafo del cuerpo      |
-    | `allowed-tools` | no       | `[]` → no activa tools extra                 |
-    | `model`         | no       | `None`/`inherit` → hereda el modelo del padre|
-
-    Estrictez reservada a seguridad/identidad: aquí no hay borde estricto porque la
-    identidad siempre se resuelve desde el directorio; el aislamiento por ítem evita
-    que un `SKILL.md` corrupto tumbe la carga del resto.
-    """
-
     name = "skills"
 
     def __init__(
@@ -55,22 +33,14 @@ class SkillsProvider:
         is_enabled: Callable[[SkillDefinition], bool] | None = None,
     ) -> None:
         self._state = state or SkillsState()
-        # Puerto de persistencia de skills (dónde se registran / se escribe el SKILL.md).
-        # Lo provee/inyecta quien integra el runtime; se lee en startup().
         self._skill_store = skill_store
-        # Predicado de enablement (espejo del `isEnabled` canónico): default declarativo
-        # por frontmatter (`enabled`). El integrador puede inyectar otro (p.ej. feature
-        # flags). Una skill deshabilitada no se lista ni es invocable.
         self._is_enabled = is_enabled or default_is_enabled
 
     @property
     def state(self) -> SkillsState:
         return self._state
 
-    # --- carga (lo usa el integrador) ------------------------------------
-
     def load_dir(self, root: str | Path) -> list[SkillDefinition]:
-        """Carga tolerante de un directorio de skills (aislamiento por ítem)."""
         skills = load_skills_dir(Path(root))
         self._state.add_skills(skills)
         return skills
@@ -78,43 +48,29 @@ class SkillsProvider:
     def add_skill_text(
         self, name: str, text: str, *, source_path: str = ""
     ) -> SkillDefinition:
-        """Registra una skill desde texto (carga explícita, p.ej. tests)."""
         skill = load_skill_text(name, text, source_path=source_path)
         self._state.set_skill(skill)
         return skill
 
     def process_slash_command(self, text: str, context: ToolUseContext) -> str | None:
-        """Procesa `/<skill> args` (S4): activa la skill en el contexto y devuelve sus
-        instrucciones, o None si no aplica. El loop NO importa esto — lo usa el integrador."""
         from .commands import process_slash_command
 
         return process_slash_command(text, self._state, context, is_enabled=self._is_enabled)
 
     async def register_skill(self, name: str, content: str) -> SkillDefinition:
-        """Registra un skill EN runtime: lo escribe en el store (si hay) y lo carga.
-
-        `write(name, content)` persiste el SKILL.md donde decida el store del integrador."""
         if self._skill_store is not None:
             await self._skill_store.write(name, content)
         return self.add_skill_text(name, content)
 
     async def unregister(self, name: str) -> bool:
-        """Borra un skill: lo quita del store (si hay) y del estado vivo (`SkillsState`).
-
-        Inverso de `register_skill`. Sin esto, un skill borrado del store seguiría
-        invocable en el catálogo vivo hasta reiniciar (gap de un server long-running).
-        Devuelve si estaba cargado en el estado."""
         if self._skill_store is not None:
             try:
                 await self._skill_store.remove(name)
-            except Exception as exc:  # noqa: BLE001 — el unload del estado no debe fallar por el store
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("skills: no se pudo borrar %r del store: %s", name, exc)
         return self._state.remove(name)
 
-    # --- contrato CapabilityProvider -------------------------------------
-
     async def startup(self) -> None:
-        """Carga los skills persistidos en el store (si hay). Aislamiento por ítem."""
         if self._skill_store is None:
             return
         try:
@@ -135,19 +91,6 @@ class SkillsProvider:
         return None
 
     def catalog(self, context: ToolUseContext) -> list[CapabilitySummary]:
-        """Catálogo VISIBLE AL MODELO — aquí vive la elegibilidad de `FIND-SKILL17`.
-
-        El predicado de A (`getSkillToolCommands`, `commands.ts:563-581`) mira campos del
-        `Command`, que en B son campos de la `SkillDefinition`, así que el filtro va donde
-        vive el dato y no en el módulo que rinde el listado. Dos criterios:
-
-        - enablement (ya estaba), y
-        - `disable_model_invocation` (`commands.ts:568`), que retira la skill del modelo
-          **sin** retirársela al usuario: sigue siendo invocable por `/nombre`.
-
-        `when_to_use` se emite ya como campo propio; antes se rellenaba con la misma
-        `description`, así que no aportaba nada — era un duplicado con nombre de otro dato.
-        """
         return [
             CapabilitySummary(
                 name=skill.name,
@@ -162,8 +105,6 @@ class SkillsProvider:
         ]
 
     def tools(self, context: ToolUseContext) -> list[ToolProtocol]:
-        # La tool `Skill` (invocación) solo si hay skills HABILITADAS que invocar (S1):
-        # si todas están deshabilitadas, no se ofrece una tool que rechazaría todo.
         if not any(self._is_enabled(s) for s in self._state.all_skills()):
             return []
         from .skill_tool import SkillTool

@@ -2639,8 +2639,9 @@ async def test_e2g_the_model_reaches_for_tool_search_when_what_it_needs_is_hidde
 #   1. **Se asevera el EFECTO OBSERVABLE, nunca `is_error is False`.** Un
 #      `is_error` falso sólo dice que la tool no reventó. Lo que se mira es el
 #      archivo en disco, el registro en el registry, el estado en `app_state`, el
-#      árbol de git, los segundos de reloj. Donde el único efecto de una tool es su
-#      contrato de turno (`AskUserQuestion`), se dice y se asevera ESO.
+#      árbol de git, los segundos de reloj. Donde el efecto de una tool es su decisión
+#      de permiso (`ExitPlanMode`) o lo que rinde de la costura (`AskUserQuestion`), se
+#      dice y se asevera ESO.
 #   2. **Cableado real**: `ConfinedFilesystem` real sobre un workspace real,
 #      `LocalExecEnvironment` real (subprocesos de verdad), `InMemoryTaskRegistry`
 #      real, git real sobre un repo real, servidor HTTP real en `127.0.0.1` para
@@ -3122,20 +3123,51 @@ async def _e10_clone_repository(tool: Any, env: _E10Env) -> str:
 
 
 async def _e10_config(tool: Any, env: _E10Env) -> str:
+    from agentic_runtime.storage.config_store import ConfigStore
+    from agentic_runtime.tools.native.config import ConfigRegistry, ConfigTool
+    from agentic_runtime.tools.native.supported_settings import (
+        MODEL_SETTING,
+        SUPPORTED_SETTINGS,
+    )
+
     marca = env.tag("CFG")
     ctx = env.ctx()
-    r = await tool.execute({"setting": "model", "value": marca}, ctx)
-    assert not r.is_error, r.output
-    ctx = _aplicar(r, ctx)
-    assert (ctx.app_state.native.get("config") or {}).get("model") == marca, (
-        f"el `set` no dejó el valor en `app_state`: {ctx.app_state.native.get('config')}"
+    r0 = await tool.execute({"setting": "ajuste.inventado", "value": marca}, ctx)
+    assert r0.is_error and "Unknown setting" in r0.output, (
+        f"la tool del pool aceptó una clave que el catálogo NO declara: {r0.output!r}"
     )
-    assert json.loads(r.output)["operation"] == "set"
-    r2 = await tool.execute({"setting": "model"}, ctx)
-    assert json.loads(r2.output)["value"] == marca, f"el `get` no lee lo escrito: {r2.output}"
-    r3 = await tool.execute({"setting": ""}, ctx)
+    for clave in SUPPORTED_SETTINGS:
+        assert clave in tool.description, (
+            f"la tool del pool no le anuncia al modelo el ajuste {clave!r} de su catálogo"
+        )
+    r0b = await tool.execute({"setting": MODEL_SETTING, "value": marca}, ctx)
+    assert r0b.is_error and "Invalid setting source" in r0b.output, (
+        "la tool del pool escribió un ajuste sin que el host le cableara ningún store: "
+        f"{r0b.output!r}"
+    )
+
+    fichero = env.tmp / "config_e10" / "settings.json"
+    registro = ConfigRegistry(
+        SUPPORTED_SETTINGS,
+        {SUPPORTED_SETTINGS[MODEL_SETTING].source: ConfigStore(fichero)},
+    )
+    con_registro = ConfigTool(registro)
+
+    r = await con_registro.execute({"setting": "model", "value": marca}, ctx)
+    assert not r.is_error, r.output
+    assert json.loads(fichero.read_text(encoding="utf-8")).get("model") == marca, (
+        f"el `set` no llegó al fichero del store: {fichero.read_text(encoding='utf-8')!r}"
+    )
+    ctx = _aplicar(r, ctx)
+    assert ctx.app_state.native.get("model") == marca, (
+        f"el `set` no sincronizó `app_state`: {ctx.app_state.native.get('model')!r}"
+    )
+    r2 = await con_registro.execute({"setting": "model"}, ctx)
+    assert r2.output == f'model = "{marca}"', f"el `get` no lee lo escrito: {r2.output!r}"
+    r3 = await con_registro.execute({"setting": ""}, ctx)
     assert r3.is_error, "aceptó un `setting` vacío"
-    return "el `set` deja el valor en `app_state` y el `get` posterior lo lee"
+    return ("anuncia su catálogo en tree, escribe en el `ConfigStore` REAL de su registro "
+            "y el `get` lo relee; una clave fuera del catálogo es error")
 
 
 async def _e10_todo_write(tool: Any, env: _E10Env) -> str:
@@ -3148,14 +3180,26 @@ async def _e10_todo_write(tool: Any, env: _E10Env) -> str:
         f"la lista no quedó en `app_state`: {ctx.app_state.native.get('todos')}"
     )
     assert json.loads(r.output)["old_todos"] == [], r.output
-    nuevos = [{"id": "1", "content": marca, "status": "completed", "priority": "high"}]
-    r2 = await tool.execute({"todos": nuevos}, ctx)
+    en_curso = [{"id": "1", "content": marca, "status": "in_progress", "priority": "high"}]
+    r2 = await tool.execute({"todos": en_curso}, ctx)
     assert json.loads(r2.output)["old_todos"] == todos, (
         f"no reporta la lista anterior: {r2.output}"
     )
     ctx = _aplicar(r2, ctx)
-    assert ctx.app_state.native["todos"] == nuevos, "el segundo write no reemplazó"
-    return "escribe la lista en `app_state` y reporta la anterior en el reemplazo"
+    assert ctx.app_state.native["todos"] == en_curso, "el segundo write no reemplazó"
+
+    hechos = [{"id": "1", "content": marca, "status": "completed", "priority": "high"}]
+    r3 = await tool.execute({"todos": hechos}, ctx)
+    ctx = _aplicar(r3, ctx)
+    assert ctx.app_state.native["todos"] == [], (
+        "con TODO en `completed` el depósito no se vació (`TodoWriteTool.ts:69-70`): "
+        f"{ctx.app_state.native['todos']}"
+    )
+    assert json.loads(r3.output)["new_todos"] == hechos, (
+        f"al vaciar dejó de informarle al modelo lo que escribió: {r3.output}"
+    )
+    return ("escribe la lista en `app_state`, reporta la anterior en el reemplazo y con "
+            "todo completado vacía el depósito informando lo escrito")
 
 
 async def _e10_tool_search(tool: Any, env: _E10Env) -> str:
@@ -3193,21 +3237,37 @@ async def _e10_tool_search(tool: Any, env: _E10Env) -> str:
 
 
 async def _e10_ask_user_question(tool: Any, env: _E10Env) -> str:
-    """Su efecto ES el contrato de turno: `ends_turn` y no bloquear. Se asevera eso."""
     ctx = env.ctx()
-    t0 = time.monotonic()
-    r = await tool.execute({"questions": [{
-        "question": "¿seguimos?", "header": "rumbo",
+    pregunta = "¿seguimos?"
+    entrada: dict[str, Any] = {"questions": [{
+        "question": pregunta, "header": "rumbo",
         "options": [{"label": "si", "description": "d"}, {"label": "no", "description": "d"}],
-    }]}, ctx)
+    }]}
+    t0 = time.monotonic()
+    r = await tool.execute(entrada, ctx)
     transcurrido = time.monotonic() - t0
     assert not r.is_error, r.output
-    assert r.ends_turn is True, "no cedió el turno: el HITL multi-turno no arranca"
     assert transcurrido < 2.0, (
         f"BLOQUEÓ {transcurrido:.1f}s (su `timeout_seconds` es 300): la tool debe volver ya"
     )
+    assert r.ends_turn is False, (
+        "cedió el turno: en el canónico las respuestas las recoge la costura de permiso "
+        "(`AskUserQuestionTool.tsx:182-188`) y el tool_result se rinde en el MISMO turno"
+    )
     assert r.output.strip(), "volvió sin placeholder para el tool_result"
-    return "cede el turno (`ends_turn`) y vuelve en el acto en vez de bloquear 300s"
+
+    marca = env.tag("RESP")
+    r2 = await tool.execute(
+        {**entrada, "answers": {pregunta: marca}, "annotations": {pregunta: {"notes": "la nota"}}},
+        ctx,
+    )
+    assert not r2.is_error, r2.output
+    assert pregunta in r2.output and marca in r2.output, (
+        f"no rindió lo que respondió la costura: {r2.output!r}"
+    )
+    assert "la nota" in r2.output, f"perdió la anotación del usuario: {r2.output!r}"
+    return ("vuelve en el acto sin ceder el turno y rinde en el tool_result la respuesta "
+            "y la anotación que recogió la costura")
 
 
 async def _e10_agent(tool: Any, env: _E10Env) -> str:
@@ -3264,6 +3324,8 @@ async def _e10_exit_plan_mode(tool: Any, env: _E10Env) -> str:
         _PLAN_KEY,
         _PLAN_MODE_KEY,
     )
+    from agentic_runtime.contracts.tools import PermissionBehavior
+    from agentic_runtime.tools.native.plan_mode import NOT_IN_PLAN_MODE_MESSAGE
 
     marca = env.tag("PLAN")
 
@@ -3291,11 +3353,18 @@ async def _e10_exit_plan_mode(tool: Any, env: _E10Env) -> str:
     raiz = env.tmp / "plan_storage"
     storage = _StoragePlanReal(raiz)
 
-    # NEGATIVA primero: sin plan-file en disco, error — y no toca el estado.
+    fuera = env.ctx(storage=storage)
+    d0 = await tool.check_permissions({}, fuera)
+    assert d0.behavior is PermissionBehavior.DENY, (
+        "dejó pasar la salida sin estar en plan mode"
+    )
+    assert NOT_IN_PLAN_MODE_MESSAGE in (d0.message or ""), d0.message
+
     ctx_vacio = env.ctx(storage=storage)
     ctx_vacio.app_state.native[_PLAN_MODE_KEY] = True
-    r0 = await tool.execute({}, ctx_vacio)
-    assert r0.is_error, "salió de plan mode sin plan escrito"
+    d1 = await tool.check_permissions({}, ctx_vacio)
+    assert d1.behavior is PermissionBehavior.DENY, "salió de plan mode sin plan escrito"
+    assert "No plan found" in (d1.message or ""), d1.message
     assert ctx_vacio.app_state.native.get(_PLAN_MODE_KEY) is True, (
         "el camino de error ya había desactivado plan mode"
     )
@@ -3306,15 +3375,25 @@ async def _e10_exit_plan_mode(tool: Any, env: _E10Env) -> str:
 
     ctx = env.ctx(storage=storage)
     ctx.app_state.native[_PLAN_MODE_KEY] = True
+    d2 = await tool.check_permissions({}, ctx)
+    assert d2.behavior is PermissionBehavior.ASK, (
+        "no pidió aprobación: sin ASK el plan se aplica sin que el usuario lo vea"
+    )
+    assert marca in (d2.message or ""), f"no llevó el plan a la petición: {d2.message!r}"
+    assert d2.remember is False, "ofreció recordar la aprobación de un plan"
+    assert marca in (d2.deny_message or ""), (
+        f"la negativa no lleva el plan rechazado: {d2.deny_message!r}"
+    )
+
     r = await tool.execute({}, ctx)
     assert not r.is_error, r.output
     assert marca in r.output, f"no leyó el plan del disco: {r.output!r}"
-    assert r.ends_turn is True, "no cedió el turno para esperar aprobación"
     ctx = _aplicar(r, ctx)
     assert ctx.app_state.native.get(_PLAN_MODE_KEY) is None, "no salió de plan mode"
     assert marca in ctx.app_state.native[_PLAN_KEY], "no cacheó el plan leído"
     assert ctx.app_state.native[_PLAN_EXIT_PENDING_KEY] is True, "no armó el one-shot"
-    return "leyó el plan-file REAL de disco, salió de plan mode y armó el one-shot"
+    return ("la guarda niega fuera de plan mode y sin plan-file, pide aprobación con el "
+            "plan REAL de disco, y al ejecutar sale de plan mode y arma el one-shot")
 
 
 async def _e10_enter_worktree(tool: Any, env: _E10Env) -> str:

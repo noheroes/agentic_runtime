@@ -6,7 +6,7 @@ y el naming prompt-vs-skill de `services/mcp/utils.ts`).
 
 Los tests que PASAN codifican lo YA homologado (loader tolerante, identidad desde el directorio, description
 derivada, model=inherit→None, allowed-tools CSV/lista, aislamiento por-ítem, tool `Skill` con context_modifier
-que activa allowed-tools + active_skills, active/compact_context "continúa siguiendo", slash-command desacoplado,
+que activa allowed-tools + active_skills, compact_context "continúa siguiendo", slash-command desacoplado,
 store inyectable + unregister-en-vivo, SkillTool no-diferida, base_dir en el render).
 
 Los `xfail(strict=True)` codifican los gaps FIND-SKILL/FIND-MCP16: fallan HOY (comportamiento ausente) y su
@@ -122,15 +122,19 @@ def test_skill_tool_activates_allowed_tools_and_active_skills():
     assert "Bash" in ctx.app_state.permissions.always_allow_command
 
 
-def test_active_and_compact_context_continue_to_follow():
+def test_la_skill_activa_sobrevive_a_la_compactacion_y_no_se_reinyecta_por_turno():
     prov = SkillsProvider()
     prov.add_skill_text("greet", _SKILL_MD)
     ctx = _ctx()
     build_skill_context_modifier(prov.state.get("greet"))(ctx)
-    active = prov.active_context(ctx)
-    assert active and "greet" in active[0]["content"]
-    # la compactación preserva el contenido, no sólo el nombre
-    assert prov.compact_context(ctx) == active
+
+    assert prov.active_context(ctx) == []
+
+    compact = prov.compact_context(ctx)
+    assert len(compact) == 1
+    assert "greet" in compact[0]["content"]
+    assert "Di hola de forma amable." in compact[0]["content"]
+    assert "reinvoc" not in compact[0]["content"].lower()
 
 
 def test_slash_command_desacoplado():

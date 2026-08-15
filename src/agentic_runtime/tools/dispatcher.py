@@ -67,7 +67,9 @@ class ToolDispatcher:
         if decision.behavior is PermissionBehavior.ASK:
             granted = tool_name in ctx.permission_context.allowed_names()
             if not granted and not consume_permission_once(ctx, tool_name):
-                return ToolResult.error(tool_name, f"permiso denegado para '{tool_name}'")
+                return ToolResult.error(
+                    tool_name, decision.deny_message or f"permiso denegado para '{tool_name}'"
+                )
         elif decision.updated_input is not None:
             validated = decision.updated_input
 

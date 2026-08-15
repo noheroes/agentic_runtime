@@ -23,13 +23,24 @@ from agentic_runtime.capabilities.plan.plan_file import (
     get_plan_file_path,
     is_session_plan_file,
 )
+from agentic_runtime.capabilities.plan.provider import TURNS_BETWEEN_ATTACHMENTS
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.tools import PermissionBehavior
+from agentic_runtime.loop.agent_loop import _as_reminder
 from agentic_runtime.tools.native.plan_mode import (
     _PLAN_EXIT_PENDING_KEY,
     _PLAN_MODE_KEY,
+    PLAN_APPROVED_TEMPLATE,
     EnterPlanModeTool,
     ExitPlanModeTool,
 )
+
+
+def _attach(provider: PlanModeProvider, ctx: ToolUseContext) -> list[str]:
+    emitidos = provider.active_context(ctx)
+    for msg in emitidos:
+        ctx.messages.append({"role": "user", "content": _as_reminder(msg["content"])})
+    return [msg["content"] for msg in emitidos]
 
 
 class _FakePlanStorage:
@@ -95,12 +106,17 @@ async def test_enter_root_ok_subagent_blocked():
     assert res.is_error and "subagent" in res.output.lower()
 
 
-async def test_exit_reads_disk_arms_oneshot_and_ends_turn():
-    """B1/B3/B9/B10: lee plan de disco, cierra turno, arma one-shot con plan inline."""
+async def test_exit_reads_disk_asks_for_approval_and_arms_oneshot():
+    """B1/B3/B9/B10: lee plan de disco, pide aprobación en el gate, arma one-shot con plan inline."""
     ctx = _ctx_in_plan("1. foo\n2. verify")
-    res = await ExitPlanModeTool().execute({}, ctx)
+    tool = ExitPlanModeTool()
+    decision = await tool.check_permissions({}, ctx)
+    assert decision.behavior is PermissionBehavior.ASK
+    assert decision.message == "1. foo\n2. verify"
+
+    res = await tool.execute({}, ctx)
     assert not res.is_error
-    assert getattr(res, "ends_turn", False) is True
+    assert res.output == PLAN_APPROVED_TEMPLATE.format(plan="1. foo\n2. verify")
     ctx = res.context_modifier(ctx)  # type: ignore[attr-defined]
     assert _PLAN_MODE_KEY not in ctx.app_state.native
     assert ctx.app_state.native[_PLAN_EXIT_PENDING_KEY] is True
@@ -116,15 +132,19 @@ def test_provider_full_then_sparse_and_subagent_reminder():
     prov = PlanModeProvider()
     ctx = ToolUseContext(session_id="s1")
     ctx.app_state.native[_PLAN_MODE_KEY] = True
-    full = prov.active_context(ctx)[0]["content"]
+    full = _attach(prov, ctx)[0]
     assert "Phase 1" in full and "Phase 5" in full
     assert EXPLORE_AGENT_TYPE in full and PLAN_AGENT_TYPE in full
-    sparse = prov.active_context(ctx)[0]["content"]
+
+    for _ in range(TURNS_BETWEEN_ATTACHMENTS):
+        assert _attach(prov, ctx) == []
+        ctx.messages.append({"role": "user", "content": "sigue"})
+    sparse = _attach(prov, ctx)[0]
     assert sparse != full and "still active" in sparse
 
     sub = ToolUseContext(session_id="s1", is_subagent=True, agent_id="a1")
     sub.app_state.native[_PLAN_MODE_KEY] = True
-    rem = prov.active_context(sub)[0]["content"]
+    rem = _attach(prov, sub)[0]
     assert "READ-ONLY" in rem and "Phase 1" not in rem
 
 
@@ -178,10 +198,10 @@ async def test_exit_outside_plan_mode_is_error():
     aprobación de un modo que no estaba puesto."""
     ctx = ToolUseContext(session_id="s1", storage=_FakePlanStorage({"/plans/plan.md": "p"}))
     # plan_mode NO activo
-    res = await ExitPlanModeTool().execute({}, ctx)
-    assert res.is_error and "plan mode" in res.output.lower()
+    decision = await ExitPlanModeTool().check_permissions({}, ctx)
+    assert decision.behavior is PermissionBehavior.DENY
     # Mensaje canónico literal, no una paráfrasis nuestra.
-    assert "You are not in plan mode." in res.output
+    assert "You are not in plan mode." in (decision.message or "")
     # No sembró el one-shot de aprobación.
     assert _PLAN_EXIT_PENDING_KEY not in ctx.app_state.native
 

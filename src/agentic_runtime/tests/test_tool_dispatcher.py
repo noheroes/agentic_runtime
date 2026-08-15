@@ -391,3 +391,51 @@ async def test_web_search_tampoco_bloquea_el_event_loop(monkeypatch):
     assert not result.is_error, result.output
     assert "resultados de" in result.output, result.output
     assert latidos >= 5, f"el event loop estuvo congelado: {latidos} latidos"
+
+
+class AskingTool:
+    name = "asking_tool"
+    description = "Pide aprobación y trae su propia negativa"
+    input_schema: dict = {}  # noqa: RUF012
+    category = ToolCategory.SYSTEM
+    requires_permission = False
+    safe_for_background = True
+    timeout_seconds = 5.0
+    deny_message = "el usuario rechazó el plan:\n\nel plan entero"
+
+    async def check_permissions(self, input: dict, ctx: ToolUseContext):
+        from agentic_runtime.contracts.tools import PermissionDecision
+
+        return PermissionDecision.ask(
+            "¿aprobar?", remember=False, deny_message=self.deny_message
+        )
+
+    async def execute(self, input: dict, ctx: ToolUseContext) -> ToolResult:
+        return ToolResult(tool_name=self.name, output="ejecutada")
+
+
+@pytest.mark.asyncio
+async def test_un_ask_sin_resolver_rinde_la_negativa_que_trae_la_decision():
+    tool = AskingTool()
+    result = await ToolDispatcher().dispatch(
+        tool_name=tool.name, tool_input={}, ctx=_ctx(tool)
+    )
+
+    assert result.is_error
+    assert result.output == tool.deny_message, (
+        "el dispatcher sustituyó por una frase genérica la negativa que la tool redactó: "
+        "sin esto el modelo nunca lee POR QUÉ se le negó ni con qué texto"
+    )
+
+
+@pytest.mark.asyncio
+async def test_un_ask_concedido_ejecuta_y_no_rinde_la_negativa():
+    tool = AskingTool()
+    ctx = _ctx(tool)
+    ctx.app_state.permissions = PermissionContext(always_allow_command=[tool.name])
+    ctx.permission_context.always_allow_command.append(tool.name)
+
+    result = await ToolDispatcher().dispatch(tool_name=tool.name, tool_input={}, ctx=ctx)
+
+    assert not result.is_error, result.output
+    assert result.output == "ejecutada"

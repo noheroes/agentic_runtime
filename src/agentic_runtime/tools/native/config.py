@@ -3,12 +3,12 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...contracts.tools import PermissionDecision
 from ...storage.config_store import ConfigStore
 from ..protocol import ToolCategory, ToolResult
+from .supported_settings import SUPPORTED_SETTINGS, SettingDescriptor
 
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
@@ -18,25 +18,15 @@ CONFIG_TOOL_NAME = "Config"
 _MISSING = object()
 
 
-@dataclass(frozen=True)
-class SettingDescriptor:
-    source: str
-    type: str
-    description: str
-    path: tuple[str, ...] | None = None
-    options: Sequence[str] | Callable[[], Sequence[str]] | None = None
-    validate_on_write: Callable[[Any], Any] | None = None
-    format_on_read: Callable[[Any], Any] | None = None
-    app_state_key: str | None = None
-
-
 class ConfigRegistry:
     def __init__(
         self,
-        settings: Mapping[str, SettingDescriptor],
-        stores: Mapping[str, ConfigStore],
+        settings: Mapping[str, SettingDescriptor] | None = None,
+        stores: Mapping[str, ConfigStore] | None = None,
         source_labels: Mapping[str, str] | None = None,
     ) -> None:
+        settings = SUPPORTED_SETTINGS if settings is None else settings
+        stores = stores or {}
         self._settings = dict(settings)
         self._stores = dict(stores)
         self._source_labels = dict(source_labels or {})
@@ -77,7 +67,7 @@ class ConfigRegistry:
         return self._stores.get(source)
 
 
-EMPTY_REGISTRY = ConfigRegistry({}, {})
+DEFAULT_REGISTRY = ConfigRegistry()
 
 
 def _stringify(value: Any) -> str:
@@ -192,7 +182,7 @@ class ConfigTool:
     timeout_seconds = 5.0
 
     def __init__(self, registry: ConfigRegistry | None = None) -> None:
-        self.registry = registry if registry is not None else EMPTY_REGISTRY
+        self.registry = registry if registry is not None else DEFAULT_REGISTRY
         self.description = generate_description(self.registry)
 
     async def check_permissions(
@@ -294,6 +284,8 @@ def _option_text(value: Any) -> str:
 
 __all__ = [
     "CONFIG_TOOL_NAME",
+    "DEFAULT_REGISTRY",
+    "SUPPORTED_SETTINGS",
     "ConfigRegistry",
     "ConfigTool",
     "SettingDescriptor",

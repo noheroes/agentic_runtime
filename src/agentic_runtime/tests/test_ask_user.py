@@ -1,11 +1,3 @@
-"""Contrato de `AskUserQuestion`: cuestionario canónico de 1-4 preguntas + HITL MULTI-TURNO.
-
-El schema es `questions: array[1..4]` (fuente canónica `AskUserQuestionTool.tsx:62`). El `execute`
-NO bloquea: emite las preguntas (el consumidor las detecta por el `tool_call` en el stream) y CIERRA
-el turno vía `ends_turn`; la respuesta llega en un turno nuevo y el consumidor reinyecta el resultado
-real. Esto homologa AskUserQuestion al HITL multi-turno propio del integrador (plan/tool approval),
-no al modelo bloqueante del CLI canónico.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -62,11 +54,32 @@ def test_description_es_la_que_A_manda_al_modelo():
         assert trozo in d, trozo
 
 
-def test_execute_cierra_el_turno_sin_bloquear():
+def test_execute_rinde_las_respuestas_inyectadas_y_no_corta_el_turno():
     ctx = ToolUseContext(session_id="s1")
     q = [{"question": "¿Tipo?", "header": "Tipo", "options": [{"label": "Correr"}, {"label": "Fuerza"}]}]
-    result = asyncio.run(AskUserQuestionTool().execute({"questions": q}, ctx))
-    # Señala corte de turno (HITL multi-turno); el resultado real lo reinyecta el consumidor.
-    assert getattr(result, "ends_turn", False) is True
-    assert "Awaiting" in result.output
+    result = asyncio.run(
+        AskUserQuestionTool().execute({"questions": q, "answers": {"¿Tipo?": "Correr"}}, ctx)
+    )
+    assert getattr(result, "ends_turn", False) is False
+    assert result.output == (
+        'User has answered your questions: "¿Tipo?"="Correr". '
+        "You can now continue with the user's answers in mind."
+    )
     assert not result.is_error
+
+
+def test_execute_traslada_preview_y_notas_de_la_anotacion():
+    ctx = ToolUseContext(session_id="s1")
+    q = [{"question": "¿Tipo?", "header": "Tipo", "options": [{"label": "Correr"}, {"label": "Fuerza"}]}]
+    result = asyncio.run(
+        AskUserQuestionTool().execute(
+            {
+                "questions": q,
+                "answers": {"¿Tipo?": "Correr"},
+                "annotations": {"¿Tipo?": {"preview": "km/h", "notes": "por la mañana"}},
+            },
+            ctx,
+        )
+    )
+    assert "selected preview:\nkm/h" in result.output
+    assert "user notes: por la mañana" in result.output

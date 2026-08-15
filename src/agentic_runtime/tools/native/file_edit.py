@@ -34,14 +34,19 @@ class FileEditTool:
     description = """Performs exact string replacements in files.
 
 Usage:
-- When editing text taken from read_file output, preserve the exact indentation as it appears
-  AFTER the line-number prefix. The prefix format is right-aligned number + arrow; everything
-  after the arrow is the actual file content to match. NEVER include any part of the prefix
-  in old_string or new_string.
-- The edit FAILS if `old_string` is not found, and also if it matches more than once. Provide
-  more surrounding context to make it unique — usually 2-4 adjacent lines is enough.
-- ALWAYS prefer editing existing files over writing new ones.
-- Only use emojis if the user explicitly requests it."""
+- When editing text from read_file output, ensure you preserve the exact indentation
+  (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is:
+  spaces + line number + arrow. Everything after that is the actual file content to match.
+  Never include any part of the line number prefix in the old_string or new_string.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless
+  explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless
+  asked.
+- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger
+  string with more surrounding context to make it unique, or
+  use `replace_all` to change every instance of `old_string`.
+- Use `replace_all` for replacing and renaming strings across the file. This parameter is
+  useful if you want to rename a variable for instance."""
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
@@ -57,6 +62,11 @@ Usage:
                 "type": "string",
                 "description": "The string to replace old_string with.",
             },
+            "replace_all": {
+                "type": "boolean",
+                "default": False,
+                "description": "Replace all occurrences of old_string (default false).",
+            },
         },
         "required": ["file_path", "old_string", "new_string"],
     }
@@ -69,6 +79,7 @@ Usage:
         file_path = input.get("file_path", "")
         old_string = input.get("old_string", "")
         new_string = input.get("new_string", "")
+        replace_all = bool(input.get("replace_all", False))
 
         if is_unc_path(file_path):
             return ToolResult.error(
@@ -126,18 +137,20 @@ Usage:
                 )
 
             matches = content.count(actual_old_string)
-            if matches > 1:
+            if matches > 1 and not replace_all:
                 return ToolResult.error(
                     self.name,
-                    f"Found {matches} matches of the string to replace. Provide more context "
-                    f"to uniquely identify the instance.\nString: {old_string}",
+                    f"Found {matches} matches of the string to replace, but replace_all is "
+                    f"false. To replace all occurrences, set replace_all to true. To replace "
+                    f"only one occurrence, please provide more context to uniquely identify "
+                    f"the instance.\nString: {old_string}",
                 )
             new_string = preserve_quote_style(old_string, actual_old_string, new_string)
         else:
             actual_old_string = ""
 
         try:
-            updated = apply_edit(content, actual_old_string, new_string)
+            updated = apply_edit(content, actual_old_string, new_string, replace_all)
         except EditNotApplied as exc:
             return ToolResult.error(self.name, str(exc))
 

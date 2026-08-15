@@ -2,7 +2,8 @@
 
 Invocar `Skill` deja estado activo estructurado y habilita allowed-tools vía
 context_modifier (aplicado por el loop). El catálogo sirve para selección, no para
-reinvocación; las skills activas sobreviven a la compactación.
+reinvocación; las skills activas no se reinyectan por turno —eso ya lo dijo el
+tool_result— y sobreviven a la compactación.
 """
 from agentic_runtime.capabilities import CapabilityManager
 from agentic_runtime.capabilities.skills import SkillsProvider, SkillTool
@@ -94,25 +95,25 @@ async def test_loop_applies_skill_modifier_enabling_tools():
     assert "drawio_create" in ctx.permission_context.allowed_names()
 
 
-# ---------------------------------------------------------------------------
-# S3: catálogo para selección + active_context para 'continuar'
-# ---------------------------------------------------------------------------
-
 def test_provider_exposes_skill_tool_only_when_skills_present():
     empty = SkillsProvider()
     assert empty.tools(_ctx()) == []
     assert [t.name for t in _provider_with_skill().tools(_ctx())] == ["Skill"]
 
 
-def test_active_context_says_continue_not_reinvoke():
+async def test_active_context_no_reinyecta_lo_que_ya_dijo_el_tool_result():
     provider = _provider_with_skill()
     ctx = _ctx()
-    # simula skill activa
-    ctx.app_state.capabilities["active_skills"] = {"diagrams": {"content": "Usa drawio."}}
-    msgs = provider.active_context(ctx)
-    assert len(msgs) == 1
-    assert "continúa siguiendo" in msgs[0]["content"].lower()
-    assert "Usa drawio." in msgs[0]["content"]
+    result = await SkillTool(provider.state).execute({"command": "diagrams"}, ctx)
+    ctx = result.context_modifier(ctx)
+
+    assert "Usa drawio." in result.output
+    assert provider.active_context(ctx) == []
+
+    compact = provider.compact_context(ctx)
+    assert len(compact) == 1
+    assert "Usa drawio." in compact[0]["content"]
+    assert "continúa siguiendo" in compact[0]["content"].lower()
 
 
 # ---------------------------------------------------------------------------

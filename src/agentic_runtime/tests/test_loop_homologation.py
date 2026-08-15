@@ -290,14 +290,19 @@ async def test_loop_tool_result_ends_turn_stops_reprompt():
     assert not any("NO_DEBERIA_LLEGAR" in str(m.get("content", "")) for m in ctx.messages)
 
 
-async def test_loop_injects_recall_as_system_reminder_with_dedup():
-    """Recall del manager rendido como role:user en `<system-reminder>`, deduplicado
-    contra la historia ya presente (espejo collectSurfacedMemories)."""
+async def test_loop_injects_recall_as_system_reminder_each_turn():
+    """El loop rinde el recall del manager como role:user en `<system-reminder>`, POR TURNO.
+
+    El dedup contra la historia ya presente (espejo de `collectSurfacedMemories`) es del
+    provider —que es quien conoce la identidad de lo que emite— y se mide sobre el
+    `MemoryProvider` real en `test_capability_systemprompt_and_recall.py`. El loop no
+    filtra: entrega lo que el manager le da, y esta prueba lo fija para que nadie
+    reintroduzca aquí un dedup por contenido."""
     tool = RecordingTool()
     caps = FakeCapabilityManager(recall=[{"role": "system", "content": "MEMORIA_X"}])
     caller = ScriptedCaller([
-        _tool_call_turn("echo", "a", "c1"),  # turno 1 inyecta
-        [DoneEvent(stop_reason="stop")],      # turno 2 debe deduplicar
+        _tool_call_turn("echo", "a", "c1"),
+        [DoneEvent(stop_reason="stop")],
     ])
     loop = AgentLoop(
         model_caller=caller,
@@ -312,7 +317,8 @@ async def test_loop_injects_recall_as_system_reminder_with_dedup():
         m for m in ctx.messages
         if m["role"] == "user" and "<system-reminder>" in m["content"] and "MEMORIA_X" in m["content"]
     ]
-    assert len(reminders) == 1  # inyectado una sola vez pese a dos turnos
+    assert len(reminders) == 2
+    assert reminders[0]["content"] == "<system-reminder>\nMEMORIA_X\n</system-reminder>"
 
 
 async def test_loop_subagent_pool_filtered_to_background():

@@ -355,7 +355,9 @@ def test_reasoning_reaches_the_request_and_is_not_downgraded_on_the_way():
     round-trip existe para evitar.
     """
     from agentic_models import get_registry, register_builtins
-    from agentic_models.providers.openai_responses_shared import convert_responses_messages
+    from agentic_models.providers.openai_responses_shared import (
+        convert_responses_messages,
+    )
 
     register_builtins()
     model = get_registry().get_by_provider("azure-openai-responses", "gpt-5.4-mini")

@@ -6,10 +6,45 @@ Verifica el cableado genérico (cualquier provider lo aprovecha, también Skills
   con dedup contra la historia ya presente.
 - Un manager sin aporte no altera ni el system prompt ni la historia.
 """
+from pathlib import Path
+
 from agentic_runtime.capabilities import CapabilityManager
+from agentic_runtime.capabilities.memory.provider import MemoryProvider
+from agentic_runtime.capabilities.memory.store import FilesystemMemoryStore
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.identity import Scope
 from agentic_runtime.events import DoneEvent
-from agentic_runtime.loop.agent_loop import AgentLoop
+from agentic_runtime.loop.agent_loop import AgentLoop, _as_reminder
+
+_PROMPT = "cómo va el despliegue"
+_MEMORIA = """---
+name: despliegue
+description: notas del despliegue en produccion
+metadata:
+  type: project
+---
+
+cuerpo
+"""
+
+
+def _memory_manager(root: Path) -> CapabilityManager:
+    directorio = root / "s" / "main"
+    directorio.mkdir(parents=True)
+    (directorio / "despliegue.md").write_text(_MEMORIA, encoding="utf-8")
+    return CapabilityManager([MemoryProvider(FilesystemMemoryStore(root))])
+
+
+def _memory_ctx() -> ToolUseContext:
+    return ToolUseContext(session_id="s1", scope=Scope("s"))
+
+
+def _recall_rendido(root: Path) -> str:
+    ruta = root / "s" / "main" / "despliegue.md"
+    return _as_reminder(
+        f"Memoria posiblemente relevante — despliegue ({ruta}):\n"
+        "notas del despliegue en produccion"
+    )
 
 
 class _FakeProvider:
@@ -127,19 +162,20 @@ async def test_recall_injected_as_user_system_reminder():
     assert reminders[0]["role"] == "user"
 
 
-async def test_recall_no_se_reinyecta_si_ya_esta_en_la_historia():
-    """Dedup contra un contenido YA presente (el caso de la historia recuperada)."""
-    recall = [{"role": "system", "content": "Memoria relevante X"}]
-    manager = CapabilityManager([_FakeProvider(recall=recall)])
+async def test_recall_no_se_reinyecta_si_ya_esta_en_la_historia(tmp_path):
+    """Dedup contra un contenido YA presente (el caso de la historia recuperada).
+
+    El dedup vive en el provider, no en el loop: el loop rinde lo que el manager le da.
+    Por eso la prueba corre el `MemoryProvider` real, que es quien mira la historia."""
+    manager = _memory_manager(tmp_path)
     caller = _CapturingCaller(DoneEvent(stop_reason="stop"))
-    ctx = _ctx()
-    rendered = "<system-reminder>\nMemoria relevante X\n</system-reminder>"
+    ctx = _memory_ctx()
+    rendered = _recall_rendido(tmp_path)
     ctx.messages.append({"role": "user", "content": rendered})
 
-    await _loop(manager, caller).run("hola", ctx)
+    await _loop(manager, caller).run(_PROMPT, ctx)
 
-    reminders = [m for m in ctx.messages if m["content"] == rendered]
-    assert len(reminders) == 1  # no se reinyecta el ya presente
+    assert [m["content"] for m in ctx.messages].count(rendered) == 1
 
 
 class _TwoTurnCaller(_CapturingCaller):
@@ -161,7 +197,7 @@ class _TwoTurnCaller(_CapturingCaller):
         return _gen()
 
 
-async def test_recall_deduped_across_turns():
+async def test_recall_deduped_across_turns(tmp_path):
     """`_inject_recall` corre **por turno**, no por `run()`. Sin dedup real, un `run()` de
     N turnos mete el mismo recordatorio N veces y el contexto se llena de copias.
 
@@ -169,15 +205,14 @@ async def test_recall_deduped_across_turns():
     y pre-sembraba el mensaje a mano — media prueba con nombre de prueba entera. Aquí el
     loop da dos vueltas de verdad y el recall se emite en las dos, así que el dedup es lo
     único que puede evitar el duplicado."""
-    recall = [{"role": "system", "content": "Memoria relevante X"}]
-    manager = CapabilityManager([_FakeProvider(recall=recall)])
+    manager = _memory_manager(tmp_path)
     caller = _TwoTurnCaller()
-    ctx = _ctx()
+    ctx = _memory_ctx()
 
-    await _loop(manager, caller).run("hola", ctx)
+    await _loop(manager, caller).run(_PROMPT, ctx)
 
     assert len(caller.messages_seen) == 2, "hicieron falta dos turnos para que la prueba mida algo"
-    rendered = "<system-reminder>\nMemoria relevante X\n</system-reminder>"
+    rendered = _recall_rendido(tmp_path)
     assert [m["content"] for m in ctx.messages].count(rendered) == 1
     # …y el segundo turno tampoco lo vio duplicado al llamar al modelo.
     assert [m["content"] for m in caller.messages_seen[1]].count(rendered) == 1

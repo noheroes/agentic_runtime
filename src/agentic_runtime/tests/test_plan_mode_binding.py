@@ -12,15 +12,35 @@ import tempfile
 from pathlib import Path
 
 from agentic_runtime.capabilities.plan import PlanModeProvider
+from agentic_runtime.capabilities.plan.provider import (
+    FULL_REMINDER_EVERY_N_ATTACHMENTS,
+    TURNS_BETWEEN_ATTACHMENTS,
+)
 from agentic_runtime.context.tool_use import ToolUseContext
+from agentic_runtime.contracts.tools import PermissionBehavior
+from agentic_runtime.loop.agent_loop import _as_reminder
 from agentic_runtime.tools.native.plan_mode import (
     _PLAN_EXIT_PENDING_KEY,
     _PLAN_KEY,
     _PLAN_MODE_KEY,
+    NOT_IN_PLAN_MODE_MESSAGE,
+    PLAN_APPROVED_TEMPLATE,
+    PLAN_REJECTION_PREFIX,
     ExitPlanModeTool,
 )
 
 PLAN = "1. Tocar foo.py\n2. Verificar: pytest tests/test_foo.py"
+
+
+def _attach(provider: PlanModeProvider, ctx: ToolUseContext) -> list[str]:
+    emitidos = provider.active_context(ctx)
+    for msg in emitidos:
+        ctx.messages.append({"role": "user", "content": _as_reminder(msg["content"])})
+    return [msg["content"] for msg in emitidos]
+
+
+def _human_turn(ctx: ToolUseContext) -> None:
+    ctx.messages.append({"role": "user", "content": "sigue"})
 
 
 class _FakePlanStorage:
@@ -70,28 +90,37 @@ async def test_exit_persists_plan_and_arms_one_shot():
     assert ctx.app_state.native[_PLAN_EXIT_PENDING_KEY] is True
 
 
-async def test_exit_cierra_el_turno():
-    """Presentar el plan CIERRA el turno (espejo del canónico `requiresUserInteraction()->true`):
-    el agente se detiene a esperar aprobación en vez de narrar el plan como aprobado. Mismo
-    primitivo `ends_turn` que `AskUserQuestion`."""
+async def test_exit_pide_aprobacion_y_el_execute_no_cierra_el_turno():
     ctx = _ctx_in_plan(PLAN)
-    result = await ExitPlanModeTool().execute({}, ctx)
-    assert getattr(result, "ends_turn", False) is True
+    tool = ExitPlanModeTool()
+
+    decision = await tool.check_permissions({}, ctx)
+    assert decision.behavior is PermissionBehavior.ASK
+    assert decision.message == PLAN
+    assert decision.remember is False
+    assert decision.deny_message == f"{PLAN_REJECTION_PREFIX}{PLAN}"
+
+    result = await tool.execute({}, ctx)
     assert not result.is_error
+    assert getattr(result, "ends_turn", False) is False
+    assert result.output == PLAN_APPROVED_TEMPLATE.format(plan=PLAN)
 
 
-async def test_exit_sin_plan_file_es_error():
-    """Sin plan-file escrito, `ExitPlanMode` es error: no se puede salir a "aprobación" sin un
-    plan en disco. No arma el one-shot ni sale de plan mode.
-
-    CORRECCIÓN (`FIND-EXITPLAN`): esta guarda **no** es el homólogo del guard del canónico, como
-    decía antes esta docstring. La del canónico es la de MODO (`ExitPlanModeV2Tool.ts:203-218`,
-    errorCode 1) y vive aparte, delante de ésta. Ésta es propia de B y no tiene equivalente en A,
-    porque A recibe el plan por input y nosotros lo leemos del plan-file."""
+async def test_exit_sin_plan_file_lo_deniega_el_gate_de_permiso():
     ctx = _ctx_in_plan(None)
-    result = await ExitPlanModeTool().execute({}, ctx)
-    assert result.is_error
+    decision = await ExitPlanModeTool().check_permissions({}, ctx)
+    assert decision.behavior is PermissionBehavior.DENY
+    assert "No plan found at /plans/plan.md" in (decision.message or "")
     assert _PLAN_MODE_KEY in ctx.app_state.native
+    assert _PLAN_EXIT_PENDING_KEY not in ctx.app_state.native
+
+
+async def test_exit_fuera_de_plan_mode_lo_deniega_el_gate_de_permiso():
+    ctx = _ctx_in_plan(PLAN)
+    ctx.app_state.native.pop(_PLAN_MODE_KEY)
+    decision = await ExitPlanModeTool().check_permissions({}, ctx)
+    assert decision.behavior is PermissionBehavior.DENY
+    assert decision.message == NOT_IN_PLAN_MODE_MESSAGE
 
 
 async def test_provider_emits_plan_once_on_exit():
@@ -111,33 +140,45 @@ async def test_provider_emits_plan_once_on_exit():
 
 
 def test_provider_emits_5phase_full_then_sparse_while_active():
-    """Mientras `plan_mode` activo (ROOT), el provider rinde el workflow de 5 fases con cadencia
-    full→sparse: la 1ª iteración el texto completo, las siguientes uno escueto (durable, no
-    one-shot). Homólogo de `getPlanModeV2Instructions`→`getPlanModeV2SparseInstructions`."""
     provider = PlanModeProvider()
     ctx = ToolUseContext(session_id="s1")
     ctx.app_state.native[_PLAN_MODE_KEY] = True
 
-    # 1ª iteración: full con las 5 fases y el disparo de subagentes Explore/Plan.
-    first = provider.active_context(ctx)
-    assert len(first) == 1
-    full = first[0]["content"]
+    primero = _attach(provider, ctx)
+    assert len(primero) == 1
+    full = primero[0]
     assert "Plan mode is active" in full
     assert "MUST NOT" in full
     assert "Phase 1" in full and "Phase 5" in full
     assert "Explore" in full and "Plan" in full
-    assert "/plans/plan.md" in full  # token del plan-file
+    assert "/plans/plan.md" in full
     assert "ExitPlanMode" in full
 
-    # 2ª iteración: sparse — sigue orientando (no calla) pero escueto y distinto al full.
-    second = provider.active_context(ctx)
-    assert len(second) == 1
-    sparse = second[0]["content"]
+    for _ in range(TURNS_BETWEEN_ATTACHMENTS - 1):
+        assert _attach(provider, ctx) == []
+        _human_turn(ctx)
+    assert _attach(provider, ctx) == []
+
+    _human_turn(ctx)
+    segundo = _attach(provider, ctx)
+    assert len(segundo) == 1
+    sparse = segundo[0]
     assert sparse != full
     assert "Plan mode still active" in sparse
     assert "ExitPlanMode" in sparse
-    # Sigue sparse en adelante.
-    assert provider.active_context(ctx) == second
+
+    rendidos = [full, sparse]
+    while len(rendidos) < FULL_REMINDER_EVERY_N_ATTACHMENTS + 1:
+        for _ in range(TURNS_BETWEEN_ATTACHMENTS):
+            _human_turn(ctx)
+        emitido = _attach(provider, ctx)
+        assert len(emitido) == 1
+        rendidos.append(emitido[0])
+
+    assert rendidos[1:FULL_REMINDER_EVERY_N_ATTACHMENTS] == [sparse] * (
+        FULL_REMINDER_EVERY_N_ATTACHMENTS - 1
+    )
+    assert rendidos[FULL_REMINDER_EVERY_N_ATTACHMENTS] == full
 
 
 def test_provider_subagent_gets_readonly_reminder_not_5phase():

@@ -607,10 +607,75 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 ## 5. Estado de ejecución
 
 **Pasos cerrados:** 1 — `FIND-EXITPLAN` · 2 — `FIND-TODO` (`allDone ⇒ []`) · 3 — `FIND-EDIT` ·
-4 — `FIND-CFG-2`.
+4 — `FIND-CFG-2`. Todos ellos **bajados a «inyectados, pendientes de pasada orgánica»** por `D-24`.
+**Inyectado en esta ventana:** `FIND-CFG-3` (catálogo de ajustes in-tree + cable `app_state`→petición,
+2026-08-14), igualmente **pendiente de pasada orgánica**.
 **Paso siguiente:** 5 — `FIND-WT2` (descripción de `ExitWorktree`), **sin abrir**.
 **Commiteado** (palabra del usuario, 2026-08-14, para que Codex pueda trabajar sobre el árbol):
 `agentic_code` `06e5ed0` en `fase-b/find-pool-1` · `agentic_runtime` `ff30127` en `fase-b/tramo-1`.
+
+### `FIND-CFG-3` — el catálogo de ajustes vivía fuera del árbol (2026-08-14) — INYECTADO
+
+**Cómo se destapó.** `E11` (`GATE_E11_SEED=1641356436`) midió al modelo conduciendo `Config` seis
+veces con argumentos válidos y al runtime respondiendo `Error: Unknown setting: "model"`. El
+diagnóstico que di primero —«registro vacío y sin costura para poblarlo»— **era falso en su mitad**:
+la costura existe y el integrador la usa (`composition.py`, `ToolsConfig(extras=[ConfigTool(...)])`),
+y `registry.py:18` registra por nombre, así que el extra pisa al nativo. Lo real era otra cosa.
+
+**El defecto, contra el canónico.** En A no existe una `ConfigTool` sin catálogo: `ConfigTool.ts:126`
+consulta `isSupported`, que lee `SUPPORTED_SETTINGS` del módulo hermano `supportedSettings.ts`
+(211 líneas, **in-tree**), y `prompt.ts:18-46` genera el listado recorriendo esa misma constante. En
+B el catálogo se había reducido a **una** clave declarada en el integrador, y `ConfigTool()` caía a
+`EMPTY_REGISTRY` — una tool publicada en el pool nativo que sólo sabía decir `Unknown setting`.
+
+**`isEnabled()` — no hay que homologar nada.** Leído `ConfigTool.ts` 1→EOF: el `buildTool` de
+`:67-434` **no declara `isEnabled`**. La tool se publica siempre. Lo condicional en A es el catálogo
+entrada por entrada (`supportedSettings.ts:134-185`, por `feature(...)`/`USER_TYPE`, y el
+kill-switch de `voiceEnabled` en `ConfigTool.ts:116-125` + `prompt.ts:23-28`).
+
+**Lo inyectado.**
+- `tools/native/supported_settings.py` (nuevo) — homólogo de `supportedSettings.ts`: `SettingDescriptor`
+  (se muda aquí, como el `SettingConfig` de A) y `SUPPORTED_SETTINGS` a nivel de módulo, con
+  `model`, `alwaysThinkingEnabled` y `permissions.defaultMode`.
+- `config.py` — `EMPTY_REGISTRY` **desaparece**; `ConfigRegistry()` defaultea al catálogo y
+  `ConfigTool()` con él. Sin stores cableados el `set` responde `Invalid setting source`, que dice
+  la verdad (el host no cableó almacenamiento) en vez de negar que el ajuste exista.
+- `loop/agent_loop.py` — `_resolve_model_request`: el `appStateKey` de A (`supportedSettings.ts:94`,
+  `mainLoopModel`) **no tenía cable en B**. `model_id` y `thinking` se resuelven por turno desde
+  `app_state.native`; sin nada sembrado el turno sale idéntico a antes. `D-22`: se construyó.
+- `agentic_code/composition.py` — deja de declarar ajustes (sólo aporta stores y etiquetas) y siembra
+  en `app_state` lo persistido (`persisted_app_state`), que es lo que hace que el ajuste sobreviva
+  a la sesión.
+- `tools/dispatcher.py:69-71` — el `ASK` sin resolver **tiraba `decision.deny_message`** y rendía una
+  frase genérica. Con esto `PLAN_REJECTION_PREFIX` tiene por fin consumidor.
+
+**Red de regresión — NO es prueba de cierre (`D-24`).** Lo que sigue son suites guionadas: quedan
+como red y **no se invocan como aval**. El cierre lo emitirá la pasada orgánica del usuario, con su
+delator: pedirle al agente en REPL real que cambie el modelo de la sesión y comprobar que el turno
+siguiente sale con el modelo nuevo (y que el `config.json` del proyecto lo lleva en disco).
+
+`agentic_code` `tests/test_config_tool.py`: `test_setting_the_model_governs_the_request_of_the_next_turn`
+mide `model_ids == ["model", "modelo-elegido"]` (el cambio alcanza al **turno en curso**) y
+`["modelo-elegido"]` en la sesión siguiente; `test_disabling_thinking_reaches_the_request` mide
+`ThinkingConfig(enabled=False)` en la petición. Runtime: `test_tool_dispatcher.py` gana los dos casos
+del `deny_message` (rendido cuando el `ASK` no se resuelve, y no rendido cuando se concede).
+
+**`E11` remedido tras la inyección (`GATE_E11_SEED=2947933778`).** El escenario que destapó el
+hallazgo pasa a verde: `✔ ajuste-de-sesion → condujo ['Config']`, donde antes el runtime rendía
+`Error: Unknown setting: "model"` seis veces seguidas. `Config` entra por primera vez en la lista de
+conducidas: `['AskUserQuestion', 'Config', 'EnterWorktree', 'TaskList', 'TaskOutput', 'TaskStop']`.
+El gate **sigue rojo por otros cinco escenarios**, y ninguno toca `Config`: `traer-una-url` y
+`clonar-repo` y `editar-en-sitio` resueltos con `bash` en vez de `WebFetch`/`clone_repository`/`Edit`,
+`worktree-ida-y-vuelta` que entra pero no sale (`EnterWorktree` + `bash`, sin `ExitWorktree`), y
+`registrar-plan` delegando en `Agent` en vez de `TodoWrite`. Es el patrón gpt-5.x ya catalogado
+—preferencia por `bash` y por delegar en `Agent`—, no regresión de esta inyección. `E11` corrió al
+límite de 50 turnos. Su vigilante (`test_e11_vigila_carencias_declaradas`) cae por arrastre —el global
+`_E11_CARENCIA_OBSERVADA` sólo se puebla si el gate completa—, no por carencia excusada. **Sigue siendo red de regresión, no aval de cierre.**
+
+**Criterios reescritos, no ablandados.** `_e10_config` aseveraba que la tool del pool rechaza `model`
+con `Unknown setting` — criterio del mundo en que la tool podía existir sin catálogo. Ahora asevera
+que anuncia su catálogo, que una clave **fuera** de él sigue siendo `Unknown setting` y que sin store
+no escribe. Igual en `test_config_solo_enumera_lo_que_su_catalogo_declara`.
 
 ### Pasada orgánica en vivo — T2 y diagnóstico de la TUI (2026-08-14)
 

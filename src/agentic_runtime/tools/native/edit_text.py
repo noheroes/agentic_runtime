@@ -103,26 +103,38 @@ def preserve_quote_style(old_string: str, actual_old_string: str, new_string: st
     return result
 
 
-def apply_edit_to_file(original_content: str, old_string: str, new_string: str) -> str:
+def apply_edit_to_file(
+    original_content: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> str:
+    count = -1 if replace_all else 1
+
     if new_string != "":
-        return original_content.replace(old_string, new_string, 1)
+        return original_content.replace(old_string, new_string, count)
 
     strip_trailing_newline = not old_string.endswith("\n") and (
         old_string + "\n"
     ) in original_content
     if strip_trailing_newline:
-        return original_content.replace(old_string + "\n", "", 1)
-    return original_content.replace(old_string, "", 1)
+        return original_content.replace(old_string + "\n", "", count)
+    return original_content.replace(old_string, "", count)
 
 
-def apply_edit(file_contents: str, old_string: str, new_string: str) -> str:
+def apply_edit(
+    file_contents: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> str:
     if not file_contents and old_string == "" and new_string == "":
         return ""
 
     updated = (
         new_string
         if old_string == ""
-        else apply_edit_to_file(file_contents, old_string, new_string)
+        else apply_edit_to_file(file_contents, old_string, new_string, replace_all)
     )
     if updated == file_contents:
         raise EditNotApplied("String not found in file. Failed to apply edit.")

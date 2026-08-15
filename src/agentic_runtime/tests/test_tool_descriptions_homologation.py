@@ -20,13 +20,20 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 
 import pytest
 
 from agentic_runtime.loop import agent_loop
 from agentic_runtime.tools.native.agent import AgentTool
 from agentic_runtime.tools.native.bash import BashTool
-from agentic_runtime.tools.native.config import ConfigTool
+from agentic_runtime.tools.native.config import (
+    ConfigRegistry,
+    ConfigTool,
+    SettingDescriptor,
+)
+from agentic_runtime.tools.native.file_edit import FileEditTool
+from agentic_runtime.tools.native.supported_settings import SUPPORTED_SETTINGS
 from agentic_runtime.tools.native.plan_mode import EnterPlanModeTool, ExitPlanModeTool
 from agentic_runtime.tools.native.task_tools import (
     TaskCreateTool,
@@ -48,6 +55,7 @@ PAGADAS = [
     # el doble en la tool cuyo esquema es de UN campo y cuyo canónico anuncia tres.
     BashTool,
     ConfigTool,
+    FileEditTool,
     EnterPlanModeTool,
     ExitPlanModeTool,
     EnterWorktreeTool,
@@ -64,6 +72,36 @@ PAGADAS = [
 
 def _ids(clases):
     return [c.name for c in clases]
+
+
+def _descripcion(cls) -> str:
+    """La descripción TAL Y COMO LA VE EL MODELO.
+
+    `Config` no la tiene como atributo de clase: la genera por instancia desde su
+    `ConfigRegistry`, así que leer `cls.description` la dejaba fuera de todas las
+    aserciones de este fichero con un `AttributeError`."""
+    en_la_clase = getattr(cls, "description", None)
+    if isinstance(en_la_clase, str):
+        return en_la_clase
+    return cls().description or ""
+
+
+_PROCEDENCIA = Path(__file__).resolve().parents[2] / "HOMOLOGATION" / "PROCEDENCIA-DESCRIPCIONES.md"
+
+
+def _filas_del_censo() -> dict[str, tuple[str, str]]:
+    filas: dict[str, tuple[str, str]] = {}
+    for linea in _PROCEDENCIA.read_text(encoding="utf-8").splitlines():
+        if not linea.startswith("|"):
+            continue
+        celdas = [c.strip() for c in linea.strip().strip("|").split("|")]
+        if len(celdas) != 3:
+            continue
+        nombre = celdas[0].strip("`")
+        if not nombre or set(nombre) <= set("-: ") or nombre == "tool":
+            continue
+        filas[nombre] = (celdas[1], celdas[2])
+    return filas
 
 
 # ===========================================================================
@@ -99,7 +137,7 @@ def test_ninguna_descripcion_anuncia_parametros_que_su_esquema_no_acepta(cls):
     longitud: mira que el texto que lee el modelo no le prometa una palanca que la
     tool va a ignorar en silencio.
     """
-    texto = cls.description or ""
+    texto = _descripcion(cls)
     propiedades = set((cls.input_schema or {}).get("properties", {}))
 
     # Sólo cuentan las apariciones con FORMA DE PARÁMETRO. La primera versión de este
@@ -135,23 +173,42 @@ def test_ninguna_descripcion_anuncia_parametros_que_su_esquema_no_acepta(cls):
 
 @pytest.mark.parametrize("cls", PAGADAS, ids=_ids(PAGADAS))
 def test_la_omision_esta_declarada_y_no_meramente_hecha(cls):
-    """Toda descripción portada cita el canónico del que se portó.
+    """Toda descripción portada acredita el canónico del que se portó.
 
     `D-07`/`declarar-no-es-pagar` va en la dirección de que declarar no basta; ésta es
     la dirección contraria y también hace falta: **omitir en silencio tampoco basta**.
     Sin la cita, la próxima ventana no puede distinguir «recortado a propósito porque B
     no lo tiene» de «se portó a medias», y la deuda se vuelve invisible otra vez.
-    """
-    import inspect
 
-    fuente = inspect.getsource(cls)
-    assert "GAP-PROMPT-1" in fuente, (
-        f"{cls.name}: la descripción no cita `GAP-PROMPT-1` ni el canónico del que se "
-        f"portó. Una descripción larga sin procedencia no es homologación acreditable."
+    La cita NO se busca ya en el fuente: los comentarios no viven en el código, y el
+    barrido de `ff30127` se llevó por delante las de `bash`, `Config` y las dos de plan
+    mode. Borrar la cita no era la solución, así que la procedencia se trasladó al censo
+    y es ahí donde se mide. La fila tiene que traer el canónico con FICHERO:LÍNEA **y**
+    la columna de omisiones no vacía: una fila-sello no acredita nada.
+    """
+    filas = _filas_del_censo()
+    assert cls.name in filas, (
+        f"{cls.name}: sin fila en `{_PROCEDENCIA.name}`. Una descripción larga sin "
+        f"procedencia no es homologación acreditable."
     )
-    assert re.search(r"prompt\.ts:\d+|\.tsx:\d+", fuente), (
-        f"{cls.name}: falta la cita con FICHERO:LÍNEA del canónico portado."
+    canonico, omisiones = filas[cls.name]
+    assert re.search(r"prompt\.ts:\d+|\.tsx:\d+", canonico), (
+        f"{cls.name}: la fila no cita FICHERO:LÍNEA del canónico portado."
     )
+    assert len(omisiones) > 40, (
+        f"{cls.name}: la fila no declara qué se omitió o adaptó al portar."
+    )
+
+
+def test_el_censo_de_procedencia_no_acredita_de_mas():
+    """La contrapartida: una fila de más acredita una tool que nadie portó.
+
+    Sin esto, el censo se puede poner verde añadiendo filas, que es exactamente el
+    movimiento contrario al que persigue.
+    """
+    texto = _PROCEDENCIA.read_text(encoding="utf-8")
+    assert "GAP-PROMPT-1" in texto
+    assert set(_filas_del_censo()) == {cls.name for cls in PAGADAS}
 
 
 @pytest.mark.parametrize("cls", PAGADAS, ids=_ids(PAGADAS))
@@ -162,8 +219,8 @@ def test_ninguna_quedo_en_una_linea(cls):
     buena —eso lo mide el E2g con el modelo delante—, sólo que ninguna volvió al
     one-liner que atraía al modelo. Las 13 estaban entre 38 y 213 ch antes de pagar.
     """
-    assert len(cls.description or "") > 200, (
-        f"{cls.name}: {len(cls.description or '')} ch — volvió al one-liner sin portar."
+    assert len(_descripcion(cls)) > 200, (
+        f"{cls.name}: {len(_descripcion(cls))} ch — volvió al one-liner sin portar."
     )
 
 
@@ -236,17 +293,33 @@ def test_task_output_no_manda_al_modelo_a_un_output_file_inexistente():
     assert "Retrieves output from a running or completed task" in texto
 
 
-def test_config_no_inventa_un_dominio_de_ajustes():
-    """`FIND-CFG-2`: B no tiene registro de ajustes, así que no hay lista que enumerar.
+def test_config_solo_enumera_lo_que_su_catalogo_declara():
+    sin_host = ConfigTool().description
+    assert "## Usage" in sin_host and 'Omit the "value" parameter' in sin_host
+    assert "## Configurable settings list" in sin_host, (
+        "una `ConfigTool` sin catálogo no existe en el canónico: `ConfigTool.ts:126` "
+        "consulta `SUPPORTED_SETTINGS` del módulo hermano, no un registro que pueda faltar"
+    )
+    for clave, descriptor in SUPPORTED_SETTINGS.items():
+        assert f"- {clave}" in sin_host and descriptor.description in sin_host, (
+            f"el catálogo declara {clave!r} y la descripción no lo anuncia"
+        )
+    assert '- Get model: { "setting": "model" }' in sin_host
 
-    A genera `## Configurable settings list` recorriendo `SUPPORTED_SETTINGS`
-    (`ConfigTool/prompt.ts:18-46`). B acepta cualquier clave. Enumerar ajustes aquí
-    fabricaría un dominio que la tool no valida.
-    """
-    texto = ConfigTool.description
-    assert "Configurable settings list" not in texto
-    assert "editorMode" not in texto and "permissions.defaultMode" not in texto
-    assert "## Usage" in texto and "Omit the \"value\" parameter" in texto
+    registro = ConfigRegistry(
+        {
+            "propio.del.host": SettingDescriptor(
+                source="user",
+                type="string",
+                description="ajuste que sólo declara el host",
+                options=["uno", "otro"],
+            )
+        },
+        {},
+    )
+    texto = ConfigTool(registro).description
+    assert '- propio.del.host: "uno", "otro" - ajuste que sólo declara el host' in texto
+    assert "permissions.defaultMode" not in texto and "editorMode" not in texto
 
 
 def test_enter_worktree_dice_la_ubicacion_real_y_no_la_del_canonico():
@@ -303,6 +376,51 @@ def test_bash_no_arrastra_la_atribucion_ni_el_perfil_de_shell():
     assert "Co-Authored-By" not in texto
     assert "Generated with" not in texto
     assert "initialized from the user's profile" not in texto
+
+
+def test_edit_ofrece_replace_all_y_no_solo_lo_menciona():
+    """`EDIT-1`: los dos bullets de A sólo son legítimos si el parámetro EXISTE.
+
+    A dedica dos de sus ocho bullets a `replace_all` (`FileEditTool/prompt.ts:26-27`), y B
+    no tenía el parámetro: la descripción se quedó en cuatro bullets y el modelo, sin vía
+    para renombrar en bloque, se iba a `sed` por `bash` (pérdida `editar-en-sitio` de `E11`).
+    Se construyó el mecanismo (`D-22`), y por eso el texto puede anunciarlo.
+
+    Las dos aserciones son inseparables a propósito: el texto sin el esquema es
+    `FIND-E11-3`, y el esquema sin el texto es una palanca que el modelo no sabe que tiene.
+    """
+    texto = FileEditTool.description
+    assert "replace_all" in FileEditTool.input_schema["properties"]
+    assert "use `replace_all` to change every instance of `old_string`" in texto
+    assert "Use `replace_all` for replacing and renaming strings across the file" in texto
+
+
+def test_edit_replace_all_sustituye_todas_y_sin_el_solo_la_primera():
+    """La conducta, no la promesa: `applyEditToFile` (`FileEditTool/utils.ts:206-228`).
+
+    A conmuta entre `replaceAll` y `replace` con el mismo cuerpo, incluida la rama de
+    borrado que se come el salto de línea sobrante. Si esta rama no fuera de verdad, el
+    bullet anterior sería exactamente la mentira que este fichero persigue.
+    """
+    from agentic_runtime.tools.native.edit_text import apply_edit
+
+    assert apply_edit("a a a", "a", "b", True) == "b b b"
+    assert apply_edit("a a a", "a", "b") == "b a a"
+    assert apply_edit("x\ny\nx\n", "x", "", True) == "y\n"
+
+
+def test_edit_no_promete_la_lectura_previa_que_no_enforcea():
+    """La carencia declarada, vigilada por su lado peligroso.
+
+    `getPreReadInstruction()` (`:4-6`) promete que la tool DA ERROR si se edita sin haber
+    leído. B no tiene `readFileState`, así que no da error ninguno. Portar la frase sería
+    `FIND-E11-3` al revés: anunciar una guarda inexistente, con el modelo confiando en un
+    aviso que no va a llegar. Cuando se construya `readFileState`, la frase entra y este
+    test se invierte.
+    """
+    texto = FileEditTool.description
+    assert "before editing" not in texto
+    assert "error if you attempt an edit without reading" not in texto
 
 
 #: Las 12 tools donde A declara `searchHint` y B no lo tenía (`D-18`). Se portan con la

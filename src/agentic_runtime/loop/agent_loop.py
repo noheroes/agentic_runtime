@@ -31,7 +31,7 @@ from ..events.event_types import (
     TurnStartEvent,
 )
 from ..hooks import HookEvent
-from ..models.protocol import ModelCallerProtocol, ModelOptions
+from ..models.protocol import ModelCallerProtocol, ModelOptions, ThinkingConfig
 from ..tools.agent_listing_delta import (
     ANNOUNCED_KEY,
     compute_agent_listing_delta,
@@ -39,6 +39,10 @@ from ..tools.agent_listing_delta import (
 )
 from ..tools.dispatcher import ToolDispatcher
 from ..tools.native.agent import AGENT_TOOL_NAME
+from ..tools.native.supported_settings import (
+    MODEL_APP_STATE_KEY,
+    THINKING_APP_STATE_KEY,
+)
 from ..tools.pool import ToolPool
 from .outcome import LoopEndReason, LoopOutcome
 
@@ -165,6 +169,20 @@ class AgentLoop:
         # aquí para ENUMERAR el catálogo y anunciárselo al modelo. Un host que sólo
         # implemente `resolve` no enumera y no hay anuncio (ver `enumerate_agent_definitions`).
         self._agent_resolver = agent_resolver
+
+    def _resolve_model_request(self, ctx: ToolUseContext) -> tuple[str, ModelOptions]:
+        native = ctx.app_state.native
+        model = native.get(MODEL_APP_STATE_KEY)
+        model_id = str(model) if model else self._model_id
+        options = self._model_options
+        thinking = native.get(THINKING_APP_STATE_KEY)
+        if thinking is not None:
+            budget = options.thinking.budget_tokens if options.thinking is not None else None
+            options = replace(
+                options,
+                thinking=ThinkingConfig(enabled=bool(thinking), budget_tokens=budget),
+            )
+        return model_id, options
 
     def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:
         """Ensambla el pool del turno (= `assembleToolPool`): native (filtrado por
@@ -556,10 +574,9 @@ class AgentLoop:
             # Llama al modelo. `system_sections` se pasa solo si hay secciones:
             # robustez ante callers de terceros que aún no adoptan el kwarg (un
             # caller compatible con `ModelCallerProtocol` lo acepta con default None).
-            complete_kwargs: dict[str, Any] = {"stop": ctx.stop, "model_id": self._model_id}
-            # Sólo lo poblado: un caller de terceros que aún no adopte un kwarg de
-            # la `S1` enriquecida no se rompe si nadie pidió esa opción.
-            complete_kwargs.update(self._model_options.as_kwargs())
+            model_id, options = self._resolve_model_request(ctx)
+            complete_kwargs: dict[str, Any] = {"stop": ctx.stop, "model_id": model_id}
+            complete_kwargs.update(options.as_kwargs())
             if system_sections:
                 complete_kwargs["system_sections"] = system_sections
             # Subagente especializado: su system prompt REEMPLAZA el base del caller

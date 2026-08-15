@@ -25,22 +25,29 @@ la **divergencia con el canónico** tool a tool.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from agentic_runtime.context.tool_use import ToolUseContext
 from agentic_runtime.contracts.abort import AbortController
+from agentic_runtime.contracts.tools import PermissionBehavior
 from agentic_runtime.execution.tasks.registry import InMemoryTaskRegistry
+from agentic_runtime.storage.config_store import ConfigStore
 from agentic_runtime.tools.exec_env import LocalExecEnvironment
 from agentic_runtime.tools.factory import create_tools
 from agentic_runtime.tools.fs_env import ConfinedFilesystem
 from agentic_runtime.tools.native.ask_user import AskUserQuestionTool
 from agentic_runtime.tools.native.bash import BashTool
-from agentic_runtime.tools.native.config import ConfigTool
+from agentic_runtime.tools.native.config import (
+    ConfigRegistry,
+    ConfigTool,
+    SettingDescriptor,
+)
 from agentic_runtime.tools.native.file_edit import FileEditTool
 from agentic_runtime.tools.native.glob_tool import DEFAULT_GLOB_LIMIT, GlobTool
 from agentic_runtime.tools.native.grep_tool import DEFAULT_HEAD_LIMIT
-from agentic_runtime.tools.native.plan_mode import EnterPlanModeTool
+from agentic_runtime.tools.native.plan_mode import EnterPlanModeTool, ExitPlanModeTool
 from agentic_runtime.tools.native.read_file import ReadFileTool
 from agentic_runtime.tools.native.task_tools import (
     TaskCreateTool,
@@ -121,15 +128,25 @@ def test_context_modifier_attached_and_applicable():
     assert ctx.app_state.native.get("todos") == []
 
 
-def test_ends_turn_signalled_by_hitl_tools():
-    """AskUserQuestion/ExitPlanMode ceden el turno con `ends_turn` (homólogo de
-    requiresUserInteraction canónico, §C4/D2)."""
+def test_hitl_tools_resuelven_dentro_del_turno_sin_cerrarlo():
     ctx = _ctx()
     r = await_(AskUserQuestionTool().execute(
-        {"questions": [{"question": "¿q?", "header": "h", "options": [{"label": "a"}, {"label": "b"}]}]},
+        {
+            "questions": [
+                {"question": "¿q?", "header": "h", "options": [{"label": "a"}, {"label": "b"}]}
+            ],
+            "answers": {"¿q?": "a"},
+        },
         ctx,
     ))
-    assert getattr(r, "ends_turn", False) is True
+    assert getattr(r, "ends_turn", False) is False
+    assert '"¿q?"="a"' in r.output
+
+    salida = await_(ExitPlanModeTool().execute({}, ctx))
+    assert getattr(salida, "ends_turn", False) is False
+
+    fuera_de_plan = await_(ExitPlanModeTool().check_permissions({}, ctx))
+    assert fuera_de_plan.behavior is PermissionBehavior.DENY
 
 
 def test_enter_plan_mode_is_root_only():
@@ -174,16 +191,43 @@ def test_config_get_does_not_write_state(tmp_path):
     """
     ctx = _ctx(tmp_path)
     antes = dict(ctx.app_state.native)
-    r = await_(ConfigTool().execute({"setting": "model"}, ctx))
+    fichero = tmp_path / "config.json"
+    tool = ConfigTool(
+        ConfigRegistry(
+            {
+                "model": SettingDescriptor(
+                    source="user",
+                    type="string",
+                    description="modelo activo",
+                    options=["opus", "sonnet"],
+                    app_state_key="model",
+                )
+            },
+            {"user": ConfigStore(fichero)},
+        )
+    )
+
+    r = await_(tool.execute({"setting": "model"}, ctx))
     assert not r.is_error, r.output
+    assert r.output == "model = undefined"
     assert ctx.app_state.native == antes, (
         f"el `get` escribió en app_state: {set(ctx.app_state.native) - set(antes)}"
     )
+    assert not fichero.exists(), "el `get` escribió el fichero de configuración"
+
     # CONTROL POSITIVO: el SET sí deja efecto, y sólo a través de su `context_modifier`.
-    r2 = await_(ConfigTool().execute({"setting": "model", "value": "opus"}, ctx))
+    r2 = await_(tool.execute({"setting": "model", "value": "opus"}, ctx))
+    assert not r2.is_error, r2.output
     assert ctx.app_state.native == antes, "el `set` mutó el ctx fuera del context_modifier"
+    assert json.loads(fichero.read_text(encoding="utf-8")) == {"model": "opus"}
     r2.context_modifier(ctx)
-    assert ctx.app_state.native["config"]["model"] == "opus"
+    assert ctx.app_state.native["model"] == "opus"
+
+    # …y el `get` posterior lee lo escrito, sin volver a tocar app_state.
+    despues = dict(ctx.app_state.native)
+    r3 = await_(tool.execute({"setting": "model"}, ctx))
+    assert r3.output == 'model = "opus"'
+    assert ctx.app_state.native == despues
 
 
 def test_ask_user_announces_the_canonical_questionnaire():
@@ -245,15 +289,16 @@ def test_write_blocks_dangerous_settings_file(tmp_path):
     assert r.is_error  # homologado: validateInputForSettingsFileEdit lo rechazaría
 
 
-@pytest.mark.xfail(strict=True, reason="FIND-NATIVE-READ/A6: Edit no soporta replace_all (canónico sí)")
 def test_edit_replace_all_replaces_every_occurrence(tmp_path):
     """CONDUCTA (`H-L4`): con `replace_all`, las N ocurrencias quedan reemplazadas EN DISCO.
 
     La versión anterior aseveraba `"replace_all" in FileEditTool.input_schema["properties"]`
     —FIRMA—: añadir la clave al schema la habría puesto XPASS con `execute()` ignorando el
-    parámetro por completo, declarando pagada una deuda inexistente en la conducta. Hoy B
-    ni siquiera acepta el input: `count > 1` es error de ambigüedad (`file_edit.py:66-70`),
-    así que el fichero queda intacto.
+    parámetro por completo, declarando pagada una deuda inexistente en la conducta.
+
+    `FIND-NATIVE-READ/A6` PAGADO en la ventana de `EDIT-1`: dejó de ser `xfail(strict)` al
+    construirse el parámetro (`D-22`). Lo que vigila ahora es que no se vaya: sin el
+    mecanismo, los dos bullets de `replace_all` de la descripción vuelven a ser promesa.
     """
     f = tmp_path / "a.txt"
     f.write_text("uno x dos\ntres x cuatro\ncinco x seis\n")
