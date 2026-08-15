@@ -243,6 +243,31 @@ session`, roja de antes y ajena a este cambio. `agentic_code`: 219 pasados.
 
 Falta la pasada orgánica (`D-24`), que es lo siguiente.
 
+### Medición de `EDIT-1` bajo el criterio de `D-25` (2026-08-15)
+
+Ocho rondas, enunciado neutral —«en calc.py cambia el nombre de la variable alpha por total»—,
+`gpt-5.4-mini`, workspace y `state-dir` nuevos por ronda. Son corridas `--print`: **observación, no
+aval de cierre** (`D-24`).
+
+| | rondas |
+|---|---|
+| `Edit` con `replace_all=true` | 7 |
+| `Edit` con sustitución del bloque entero | 1 |
+| `Edit` no usada | **0** |
+| `bash` haciendo el trabajo de la tool | **0** (única aparición: un `pwd` de orientación) |
+
+Los 8 ficheros quedaron correctos. `replace_all` se ejerce en vivo y con el argumento explícito, que
+es el DELATOR que `D-24 §3` exige: no existía antes de este pago, así que ninguna respuesta de
+memoria podía exhibirlo.
+
+**Corrección de la primera lectura de esta misma medición.** Se reportó «4 rondas perdidas por
+delegación en `Agent`» mirando sólo la sesión padre. Con la traza del subagente leída —clave
+`tool_calls`, no bloques en `content`— las cuatro delegadas también usaron `Edit` con `replace_all`.
+No hubo pérdida: hubo un instrumento que no leía donde estaba el dato. Es lo que fija `D-25 §4`.
+
+Sigue en pie, como observación y sin ser criterio: la mitad de las rondas delega un renombrado de
+una línea, y una de ellas anidó `Agent` dentro de `Agent` (`P12`).
+
 ---
 
 ## 5. Qué queda, y en qué orden

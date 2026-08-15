@@ -1038,4 +1038,61 @@ no ajustando el enunciado hasta que salga verde (`no-debilitar-la-prueba`). Y `D
 reparto: el efecto en el mundo se asevera igual —el byte en disco, el fichero editado—, sólo que
 ahora se asevera **dentro** de la sesión orgánica.
 
+---
+
+## D-25 · La RUTA no es criterio de cierre; lo son la SEMÁNTICA y la TRAZA (2026-08-15)
+
+**Disparador, verbatim del usuario:** *«cuando tu propones aumentar a 12 rondas, implicitamente
+estas aceptando que solo buscas que mejore le % no que se solucione un problema, lo que necesitamos
+es algo casi casi determinista, sino no vale, nunca podre lograr que un asistente haga algo bien, si
+estoy pensando que hay veces que puede fallar.»*
+
+**Qué la originó.** Medida la línea base de `Edit` con enunciado neutral —renombrar una variable en
+un fichero de cuatro líneas—, 8 rondas, `gpt-5.4-mini`, workspace y `state-dir` nuevos por ronda:
+`Edit` en la sesión padre 4 veces (3 con `replace_all`), **delegación en `Agent` las otras 4**, y
+`bash` **ninguna**. Propuse subir a 12 rondas por brazo para justificar un párrafo de capa 2 en la
+descripción de `Edit`. Eso concede el fenómeno de antemano: un marcador que pasa de 4/8 a 1/12 sigue
+siendo un asistente que a veces delega.
+
+**El hecho técnico que la sostiene, y que ninguna redacción cambia.** Las superficies 1–4 —prompt,
+nombre, `function.description`, esquema— son entradas que el motor **pondera**. Ninguna decide. Lo
+único que traslada la fiabilidad del modelo al harness es la superficie 5 (`tool_choice`,
+`allowed_tools`), y exige que el integrador **clasifique la intención antes de llamar al modelo**,
+que es precisamente lo que un asistente de codificación general no puede hacer sin un clasificador.
+Medido además que el mecanismo del propio canónico tampoco lo compra: `TodoWrite` y las seis `Task*`
+**ya están diferidas** en B como en A, y aun así dos de las cuatro rondas delegadas entraron por
+`TaskCreate`/`TaskList` — porque diferir esconde el esquema pero el anuncio **sigue llevando los
+nombres** (`VOLCADO-DESCRIPCIONES-2026-08-15 § 0`).
+
+**DECISIÓN.**
+1. **La ruta elegida deja de ser criterio de cierre.** Se registra como observación, con su traza, y
+   no bloquea ni acredita ningún paso.
+2. **Cierran los pasos dos cosas, y las dos admiten garantía porque son código:** la **semántica** de
+   la tool —lo que hace con los argumentos, sus errores, lo que preserva en disco— y la **traza**,
+   que debe ser legible aunque el modelo delegue.
+3. **No se escriben más hints ni párrafos de capa 2 cuyo objetivo sea mover un porcentaje de ruteo.**
+   Queda retirada la propuesta de párrafo de completitud para la descripción de `Edit`, que era de
+   esa clase.
+4. **La ceguera bajo delegación es del instrumento, no pérdida de datos.** Verificado leyendo el
+   contenido, no la existencia del fichero: las rondas delegadas dejan
+   `runtime/…/session-*/subagents/agent_*/session.json`, y ahí está **todo** — nombre de tool y
+   argumentos íntegros. Viajan en la clave `tool_calls` del mensaje del asistente, forma OpenAI
+   (`[{id, function:{name, arguments}}]`, puesta en `loop/agent_loop.py:673-677`), y el resultado
+   se empareja por `tool_call_id` (`:726-730`). **No** son bloques `tool_use` dentro de `content`:
+   un lector que sólo mire `content` ve mensajes de asistente vacíos y concluye que no hay traza.
+   Todo instrumento de medida lee `tool_calls`; una medición que sólo mire la sesión padre, o sólo
+   `content`, no vale.
+
+**Qué corrige de `P12`.** El catálogo dice que bajo delegación la conducta *«es inmedible»* y que
+*«no hay nada que leer»*. Es falso: hay traza completa en disco. Lo que no se puede es leerla desde
+la sesión padre. `P12` sigue en pie como conducta observada —incluida una ronda que abrió **dos**
+subagentes para un renombrado de una línea—, pero pierde su corolario de inmedibilidad, y con él la
+razón por la que los pasos 1, 2 y 3·T1 de la primera pasada orgánica se dieron por no medibles.
+
+**Lo que NO deroga.** `D-24` manda igual: el cierre de conducta lo da la pasada orgánica del usuario,
+y las corridas `--print` —incluidas las 8 de esta medición— son observación, nunca aval. `D-08` sigue
+mandando sobre lo que sí cierra: la semántica se resuelve leyendo el fuente de A. Y no deroga el
+catálogo `gpt-5.x-conducta-vs-claude.md`: los fenómenos siguen anotados, sólo dejan de ser deuda que
+se paga en redacción.
+
 **Dónde se aplica.** Todo el censo de guardas y las fases siguientes. Es regla de gobierno.
