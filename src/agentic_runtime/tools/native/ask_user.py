@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..protocol import ToolCategory, ToolResult
 
@@ -10,6 +10,38 @@ if TYPE_CHECKING:
 ASK_USER_QUESTION_TOOL_NAME = "AskUserQuestion"
 
 ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12
+
+QuestionPreviewFormat = Literal["markdown", "html"]
+
+PREVIEW_FEATURE_PROMPT: dict[str, str] = {
+    "markdown": (
+        "\n"
+        "Preview feature:\n"
+        "Use the optional `preview` field on options when presenting concrete artifacts that "
+        "users need to visually compare:\n"
+        "- ASCII mockups of UI layouts or components\n"
+        "- Code snippets showing different implementations\n"
+        "- Diagram variations\n"
+        "- Configuration examples\n"
+        "\n"
+        "Preview content is rendered as markdown in a monospace box. Multi-line text with "
+        "newlines is supported. Do not use previews for simple preference questions where "
+        "labels and descriptions suffice.\n"
+    ),
+    "html": (
+        "\n"
+        "Preview feature:\n"
+        "Use the optional `preview` field on options when presenting concrete artifacts that "
+        "users need to visually compare:\n"
+        "- HTML mockups of UI layouts or components\n"
+        "- Formatted code snippets showing different implementations\n"
+        "- Visual comparisons or diagrams\n"
+        "\n"
+        "Preview content must be a self-contained HTML fragment (no <html>/<body> wrapper, no "
+        "<script> or <style> tags — use inline style attributes instead). Do not use previews "
+        "for simple preference questions where labels and descriptions suffice.\n"
+    ),
+}
 
 _ANSWERED_TEMPLATE = (
     "User has answered your questions: {answers}. "
@@ -121,30 +153,33 @@ def render_answers(
     return ", ".join(rendered)
 
 
+ASK_USER_QUESTION_TOOL_PROMPT = (
+    "Use this tool when you need to ask the user questions during execution. This allows you to:\n"
+    "1. Gather user preferences or requirements\n"
+    "2. Clarify ambiguous instructions\n"
+    "3. Get decisions on implementation choices as you work\n"
+    "4. Offer choices to the user about what direction to take.\n"
+    "\n"
+    "Usage notes:\n"
+    '- Users will always be able to select "Other" to provide custom text input\n'
+    "- Use multiSelect: true to allow multiple answers to be selected for a question\n"
+    "- If you recommend a specific option, make that the first option in the list and add "
+    '"(Recommended)" at the end of the label\n'
+    "\n"
+    "Plan mode note: In plan mode, use this tool to clarify requirements or choose between "
+    'approaches BEFORE finalizing your plan. Do NOT use this tool to ask "Is my plan ready?" or '
+    '"Should I proceed?" - use ExitPlanMode for plan approval. IMPORTANT: Do not reference '
+    '"the plan" in your questions (e.g., "Do you have feedback about the plan?", "Does the plan '
+    'look good?") because the user cannot see the plan in the UI until you call ExitPlanMode. If '
+    "you need plan approval, use ExitPlanMode instead.\n"
+)
+
+
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
     deferred = True
     search_hint = "prompt the user with a multiple-choice question"
-    description = (
-        "Use this tool when you need to ask the user questions during execution. This allows you to:\n"
-        "1. Gather user preferences or requirements\n"
-        "2. Clarify ambiguous instructions\n"
-        "3. Get decisions on implementation choices as you work\n"
-        "4. Offer choices to the user about what direction to take.\n"
-        "\n"
-        "Usage notes:\n"
-        '- Users will always be able to select "Other" to provide custom text input\n'
-        "- Use multiSelect: true to allow multiple answers to be selected for a question\n"
-        "- If you recommend a specific option, make that the first option in the list and add "
-        '"(Recommended)" at the end of the label\n'
-        "\n"
-        "Plan mode note: In plan mode, use this tool to clarify requirements or choose between "
-        "approaches BEFORE finalizing your plan. Do NOT use this tool to ask \"Is my plan ready?\" or "
-        "\"Should I proceed?\" - use ExitPlanMode for plan approval. IMPORTANT: Do not reference "
-        '"the plan" in your questions (e.g., "Do you have feedback about the plan?", "Does the plan '
-        'look good?") because the user cannot see the plan in the UI until you call ExitPlanMode. If '
-        "you need plan approval, use ExitPlanMode instead.\n"
-    )
+    description = ASK_USER_QUESTION_TOOL_PROMPT
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
@@ -190,8 +225,21 @@ class AskUserQuestionTool:
     safe_for_background = False
     timeout_seconds = 300.0
 
-    def __init__(self, *, interactive: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        interactive: bool = False,
+        question_preview_format: QuestionPreviewFormat | None = None,
+    ) -> None:
         self._interactive = interactive
+        if question_preview_format is None:
+            self.description = ASK_USER_QUESTION_TOOL_PROMPT
+        elif question_preview_format in PREVIEW_FEATURE_PROMPT:
+            self.description = (
+                ASK_USER_QUESTION_TOOL_PROMPT + PREVIEW_FEATURE_PROMPT[question_preview_format]
+            )
+        else:
+            raise ValueError(f"unknown question preview format: {question_preview_format!r}")
 
     def is_enabled(self) -> bool:
         return self._interactive

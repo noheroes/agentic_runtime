@@ -28,19 +28,8 @@ _TODO_SCHEMA = {
 
 class TodoWriteTool:
     name = TODO_WRITE_TOOL_NAME
-    # `shouldDefer: true` del canónico (`TodoWriteTool/TodoWriteTool.ts:51`) — `GAP-TOOL4`.
     deferred = True
-    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "manage the session task checklist"
-    # Homologada contra `TodoWriteTool/prompt.ts:3-181` (`PROMPT`), `GAP-PROMPT-1`.
-    # OMITIDO Y DECLARADO: `activeForm` (`:151-153`, `:176-178`) y las dos formas
-    # imperativa/continua que lo acompañan — el esquema de B no tiene ese campo, y
-    # anunciarlo repetiría `FIND-E11-3`.
-    # ⚠ DIVERGENCIA EN PIE, no pagada aquí: B tiene un `priority` (high/medium/low)
-    # que A **no tiene**. Es invención de B; por `L10` una divergencia no es mejora
-    # hasta demostrarlo. No se retira en esta ventana porque tocar el esquema no es
-    # pagar `GAP-PROMPT-1`; queda anotada para que no se acredite como homologada.
     description = """Use this tool to create and manage a structured task list for your current \
 coding session. This helps you track progress, organize complex tasks, and demonstrate \
 thoroughness to the user.
@@ -70,6 +59,145 @@ Skip using this tool when:
 
 NOTE that you should not use this tool if there is only one trivial task to do. In this case you \
 are better off just doing the task directly.
+
+## Examples of When to Use the Todo List
+
+<example>
+User: I want to add a dark mode toggle to the application settings. Make sure you run the tests \
+and build when you're done!
+Assistant: *Creates todo list with the following items:*
+1. Creating dark mode toggle component in Settings page
+2. Adding dark mode state management (context/store)
+3. Implementing CSS-in-JS styles for dark theme
+4. Updating existing components to support theme switching
+5. Running tests and build process, addressing any failures or errors that occur
+*Begins working on the first task*
+
+<reasoning>
+The assistant used the todo list because:
+1. Adding dark mode is a multi-step feature requiring UI, state management, and styling changes
+2. The user explicitly requested tests and build be run afterward
+3. The assistant inferred that tests and build need to pass by adding "Ensure tests and build \
+succeed" as the final task
+</reasoning>
+</example>
+
+<example>
+User: Help me rename the function getCwd to getCurrentWorkingDirectory across my project
+Assistant: *Uses grep or search tools to locate all instances of getCwd in the codebase*
+I've found 15 instances of 'getCwd' across 8 different files.
+*Creates todo list with specific items for each file that needs updating*
+
+<reasoning>
+The assistant used the todo list because:
+1. First, the assistant searched to understand the scope of the task
+2. Upon finding multiple occurrences across different files, it determined this was a complex \
+task with multiple steps
+3. The todo list helps ensure every instance is tracked and updated systematically
+4. This approach prevents missing any occurrences and maintains code consistency
+</reasoning>
+</example>
+
+
+<example>
+User: I need to implement these features for my e-commerce site: user registration, product \
+catalog, shopping cart, and checkout flow.
+Assistant: *Creates a todo list breaking down each feature into specific tasks based on the \
+project architecture*
+Let's start with user registration. This will involve creating database models, API endpoints, \
+and frontend forms that integrate with your existing authentication system.
+
+<reasoning>
+The assistant used the todo list because:
+1. The user provided multiple complex features to implement in a comma separated list
+2. The todo list helps organize these large features into manageable tasks
+3. This approach allows for tracking progress across the entire implementation
+</reasoning>
+</example>
+
+<example>
+User: Can you help optimize my React application? It's rendering slowly and has performance \
+issues.
+Assistant: *Reviews component structure, render patterns, state management, and data fetching*
+After analyzing your codebase, I've identified several performance issues.
+*Creates todo list with items like: 1) Implementing memoization for expensive calculations in \
+ProductList, 2) Adding virtualization for long lists in Dashboard, 3) Optimizing image loading in \
+Gallery component, 4) Fixing state update loops in ShoppingCart, 5) Reviewing bundle size and \
+implementing code splitting*
+Let's start by implementing memoization for the expensive calculations in your ProductList \
+component.
+
+<reasoning>
+The assistant used the todo list because:
+1. First, the assistant examined the codebase to identify specific performance issues
+2. Based on this analysis, it identified multiple optimization opportunities
+3. Performance optimization is a non-trivial task requiring multiple steps
+4. The todo list helps methodically track improvements across different components
+5. This systematic approach ensures all performance bottlenecks are addressed
+</reasoning>
+</example>
+
+## Examples of When NOT to Use the Todo List
+
+<example>
+User: How do I print 'Hello World' in Python?
+Assistant: In Python, you can print "Hello World" with this simple code:
+
+python
+print("Hello World")
+
+This will output the text "Hello World" to the console when executed.
+
+<reasoning>
+The assistant did not use the todo list because this is a single, trivial task that can be \
+completed in one step. There's no need to track multiple tasks or steps for such a \
+straightforward request.
+</reasoning>
+</example>
+
+<example>
+User: What does the git status command do?
+Assistant: The git status command shows the current state of your working directory and staging \
+area. It displays which changes have been staged, which haven't, and which files aren't being \
+tracked by Git. This is a fundamental command for understanding the current state of your \
+repository before making commits.
+
+<reasoning>
+The assistant did not use the todo list because this is an informational request with no actual \
+coding task to complete. The user is simply asking for an explanation, not for the assistant to \
+perform multiple steps or tasks.
+</reasoning>
+</example>
+
+<example>
+User: Can you add a comment to the calculateTotal function to explain what it does?
+Assistant: Sure, let me add a comment to the calculateTotal function to explain what it does.
+* Uses the Edit tool to add a comment to the calculateTotal function *
+
+<reasoning>
+The assistant did not use the todo list because this is a single, straightforward task confined \
+to one location in the code. Adding a comment doesn't require tracking multiple steps or \
+systematic organization.
+</reasoning>
+</example>
+
+<example>
+User: Run npm install for me and tell me what happens.
+Assistant: I'll run the npm install command for you.
+
+*Executes: npm install*
+
+The command completed successfully. Here's the output:
+[Output of npm install command]
+
+All dependencies have been installed according to your package.json file.
+
+<reasoning>
+The assistant did not use the todo list because this is a single command execution with \
+immediate results. There are no multiple steps to track or organize, making the todo list \
+unnecessary for this straightforward task.
+</reasoning>
+</example>
 
 ## Task States and Management
 
@@ -122,24 +250,9 @@ ensures you complete all requirements successfully.
         todos = input.get("todos", [])
         old_todos = ctx.app_state.native.get(_TODOS_KEY, [])
 
-        # `TodoWriteTool/TodoWriteTool.ts:69-70`: `allDone ? [] : todos` — cuando TODO
-        # queda `completed`, lo que se ALMACENA es la lista vacía; el depósito se vacía
-        # solo. Lo que se DEVUELVE sigue siendo `todos` (`:99` devuelve `todos`, no
-        # `newTodos`): A informa al modelo lo que el modelo escribió y guarda el vaciado.
-        # `all([])` ≡ `[].every()` en JS (ambos ciertos) ⇒ lista vacía se guarda vacía por
-        # la misma rama, sin caso especial.
         all_done = all(todo.get("status") == "completed" for todo in todos)
         new_todos: list[Any] = [] if all_done else todos
 
-        # NO PORTADO Y DECLARADO:
-        # - `todoKey = context.agentId ?? getSessionId()` (`:67`): la clave por agente/
-        #   sesión depende del asiento de estado de sesión que aún no existe (paso 7 del
-        #   censo, la porta el paso 9). Aquí sigue habiendo slot único.
-        # - `verificationNudgeNeeded` (`:76-86`, `:104-113`): cuelga de
-        #   `feature('VERIFICATION_AGENT')` y del flag de growthbook `tengu_hive_evidence`.
-        #   Es un experimento de A, no conducta general.
-        # SALVEDAD EN PIE (la cierra el paso 7): `_TODOS_KEY` vive en `app_state.native`,
-        # que muere con el turno ⇒ el vaciado sólo es observable DENTRO del turno.
         def modifier(c: ToolUseContext) -> ToolUseContext:
             c.app_state.native[_TODOS_KEY] = new_todos
             return c

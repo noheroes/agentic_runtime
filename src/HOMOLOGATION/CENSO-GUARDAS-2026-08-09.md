@@ -606,6 +606,36 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-16 — etapa 0 del embudo cerrada salvo dos declaraciones; abierta la etapa 1
+
+La fase viva **no es este censo**: es el embudo `D-28`, y su marcador vive en
+`EMBUDO-FASE-A.md`. Este censo aporta a la etapa 1 sólo el **orden de ataque 1→12** del § 3.
+
+- **`T1` PAGADO** — `todo_write.py` recibe el bloque `## Examples` de
+  `TodoWriteTool/prompt.ts:27-142` (4 ejemplos de uso + 4 de no uso, con sus `<reasoning>`),
+  entre `## When NOT to Use This Tool` y `## Task States and Management`.
+  `${FILE_EDIT_TOOL_NAME}` ⇒ `Edit`. **Barridos los comentarios del fichero** por la regla del
+  § 4: lo que decían —`allDone ⇒ []`, `todoKey = agentId ?? sessionId`,
+  `verificationNudgeNeeded` y la salvedad per-turno de `app_state.native`— está íntegro en el
+  § Paso 2 de este censo, verificado antes de borrarlo.
+- **`AUQ-1` PAGADO, con corrección del diagnóstico.** El `preview` del `inputSchema` de A es
+  estático (`AskUserQuestionTool.tsx:17`) y no depende del formato: el «puntero roto» estaba
+  también en la rama por defecto de A, así que **el esquema de B era FIEL y no se toca**. Lo
+  que faltaba era la costura condicional de `prompt()`. Construida (`D-22`) como
+  `AskUserQuestionTool(question_preview_format=None|"markdown"|"html")`, la declara el
+  integrador —quien renderiza es el integrador—, y `agentic_code` declara `markdown`, que es
+  lo que su TUI hace (`decision_view.py:294-303`). Dos frases del literal de A quedan fuera
+  por FALSAS en B (layout side-by-side; «sólo single-select»), declaradas en `PROCEDENCIA`,
+  donde además se **crea** la fila de `AskUserQuestion`, que no existía.
+- **Queda de la etapa 0:** las declaraciones SIN NOTA de `bash` (§ 3.1 del volcado) y `Config`
+  (§ 3.6), y la pasada orgánica de `FIND-WT6`.
+- **Etapa 1 abierta.** Tool nº 1 = `TodoWrite` (paso 2 del orden de ataque; el paso 1,
+  `FIND-EXITPLAN`, es puerta de modo y va a la etapa 2). Sus 4 enunciados de grado 1 + un
+  control de no uso están escritos en `EMBUDO-FASE-A.md`, con la receta de corrida y el pool
+  de 20 verificado. **Ronda 1 pendiente de la pasada orgánica del usuario** (`D-24`).
+- Prueba de no regresión de lo tocado: suite de `agentic_code` **216 passed**; `ruff` y `mypy`
+  limpios en los tres fuentes. No acredita nada del embudo — es red, no aval (`D-24`).
+
 **Pasos cerrados:** 1 — `FIND-EXITPLAN` · 2 — `FIND-TODO` (`allDone ⇒ []`) · 3 — `FIND-EDIT` ·
 4 — `FIND-CFG-2`. Todos ellos **bajados a «inyectados, pendientes de pasada orgánica»** por `D-24`.
 **Inyectado en esta ventana:** `FIND-CFG-3` (catálogo de ajustes in-tree + cable `app_state`→petición,

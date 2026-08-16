@@ -474,8 +474,34 @@ cerrado.
   bloque `## Examples`), `AUQ-1` (`AskUserQuestion`: portar `PREVIEW_FEATURE_PROMPT` o retirar
   `preview` del esquema; un puntero roto no se deja) y a las declaraciones SIN NOTA de `bash`
   (§ 3.1) y `Config`. `EDIT-1` ya está pagado (§ 4bis).
+  - **`T1` — PAGADO 2026-08-16.** Portado el bloque `## Examples` íntegro
+    (`TodoWriteTool/prompt.ts:27-142`): 4 ejemplos de uso y 4 de no uso con sus `<reasoning>`,
+    entre `## When NOT to Use This Tool` y `## Task States and Management`.
+    `${FILE_EDIT_TOOL_NAME}` interpola a `Edit`, el nombre real en B. Barridos de paso los
+    comentarios de `todo_write.py` (su contenido ya estaba en el § Paso 2 del censo de guardas
+    y en `PROCEDENCIA`). Fila de `TodoWrite` de `PROCEDENCIA` actualizada.
+  - **`AUQ-1` — PAGADO 2026-08-16, y el diagnóstico del § 3.4 estaba a medias.** El `preview`
+    del `inputSchema` de A es **estático** (`AskUserQuestionTool.tsx:17`): va siempre, con su
+    glosa «See the tool description…», emita o no `prompt()` la sección. Luego el «puntero
+    roto» de B lo tiene también la rama por defecto de A, el esquema de B era FIEL y **no se
+    ha tocado**. Lo que faltaba era la costura: `prompt()` añade `PREVIEW_FEATURE_PROMPT[fmt]`
+    sólo si `getQuestionPreviewFormat()` da formato, y el default del CLI es `undefined`
+    (`bootstrap/state.ts:82`, `:307`). Construida (`D-22`) como
+    `AskUserQuestionTool(question_preview_format=None|"markdown"|"html")`, declarada por el
+    integrador igual que `interactive`, porque quien renderiza el preview es el integrador.
+    `agentic_code` declara `markdown`, que es lo que su TUI hace de verdad
+    (`decision_view.py:294-303`, `Markdown(content)`). Dos frases fuera y declaradas en
+    `PROCEDENCIA` por ser FALSAS en B: el layout side-by-side y la nota «sólo single-select».
+    Fila de `AskUserQuestion` **creada** en `PROCEDENCIA` — antes no existía.
+  - **Quedan** las declaraciones SIN NOTA de `bash` (§ 3.1) y `Config` (§ 3.6), y la pasada
+    orgánica de `FIND-WT6`.
 
 ### Etapa 1 — las tools · pool de 20
+
+**Marcador y enunciados: `EMBUDO-FASE-A.md`.** Ahí está la receta de corrida (el pool de 20
+verificado, con los cinco `--denied-tool` y por qué no vale `--print`), la tabla de las 19 y
+los enunciados escritos. Tool nº 1 = `TodoWrite` (paso 2 del orden de ataque; el paso 1 es
+`ExitPlanMode`, puerta de modo, etapa 2).
 
 19 tools × 4 = **76 rondas** de fase A (las 24 del pool sin `Agent`, menos las 4 puertas de modo
 que van en las etapas 2–3, menos `clone_repository`, apartada hasta migrar la tool de git de A).
