@@ -449,20 +449,81 @@ tarea»* aquí tiene un origen medido, no una impresión. Se ataca en su propia 
 
 ---
 
-## 5. Qué queda, y en qué orden
+## 5. Qué queda, y en qué orden — EL EMBUDO (`D-28`)
 
-Certificar el volcado exige cerrar tres filas DIVERGENTE y cuatro SIN NOTA. Orden propuesto,
-de mayor a menor efecto sobre el desequilibrio medido en `E11`:
+El orden ya no es «de mayor a menor efecto sobre `E11`». Lo fija `D-28`: **no se mide una pieza
+cuyas dependencias siguen sin calibrar**, y el pool publicado de cada etapa lleva sólo lo cerrado
+más lo que se está midiendo. Conducción por `--denied-tool`, que elimina la tool del pool
+ensamblado (`tools/pool.py:74-90`), no del permiso.
 
-1. **EDIT-1** — construir `replace_all` (`D-22`) y portar los bullets `:26`-`:27`; declarar
-   la carencia de pre-read como en `write_file`.
-2. **T1** — portar el bloque `## Examples` de `TodoWriteTool/prompt.ts`, o corregir la nota
-   para que diga la verdad sobre el rango. Lo primero; lo segundo sería rotular en vez de
-   pagar (`declarar-no-es-pagar`).
-3. **AUQ-1** — portar `PREVIEW_FEATURE_PROMPT`, o retirar `preview` del esquema. Un puntero
-   roto no se deja.
-4. **§ 3.1 `bash`** — declarar qué es de A y qué es de B. No se recorta: se declara.
-5. **SIN NOTA** — `EnterPlanMode`, `ExitPlanMode`, `Config`.
-6. Corregir el párrafo `FIND-CFG-3` del censo de guardas (`clonar-repo` está en verde).
+Protocolo por pieza, en las cuatro etapas: **fase A** — 4 rondas orgánicas con enunciados que
+apuntan inequívocamente a ella, sin alineamiento de capa 2; **fase B** — enunciados multi-tarea
+donde compite con las ya cerradas. Cierra con 4 de 4 en ambas y sin mover ningún marcador ya
+cerrado.
 
-Cada punto, una ventana. Y ninguno se acredita cerrado sin pasada orgánica (`D-24`).
+### Etapa 0 — prerrequisitos, antes de abrir el embudo
+
+- **`FIND-WT6`** (§ 4quater) — las fs-tools resuelven relativos contra `roots[0]` y no contra
+  `ctx.cwd`. Cualquier ronda dentro de un worktree mide un cable roto. **Bloquea las etapas 1 y 3.**
+- **La descripción divergente se paga antes de que su tool entre en fase A.** Calibrar un texto
+  que ya sabemos incompleto es medir dos cosas a la vez. Afecta a `T1` (`TodoWrite`: portar el
+  bloque `## Examples`), `AUQ-1` (`AskUserQuestion`: portar `PREVIEW_FEATURE_PROMPT` o retirar
+  `preview` del esquema; un puntero roto no se deja) y a las declaraciones SIN NOTA de `bash`
+  (§ 3.1) y `Config`. `EDIT-1` ya está pagado (§ 4bis).
+
+### Etapa 1 — las tools · pool de 20
+
+19 tools × 4 = **76 rondas** de fase A (las 24 del pool sin `Agent`, menos las 4 puertas de modo
+que van en las etapas 2–3, menos `clone_repository`, apartada hasta migrar la tool de git de A).
+Orden de ataque 1→12 del censo de guardas. `bash` entra con su cláusula de vecindario de worktree
+ya inyectada pero **sin acreditar**: le faltan sus 4 rondas limpias.
+
+### Etapa 2 — modo plan · pool de 22
+
+Entran `EnterPlanMode` y `ExitPlanMode` con su fase A. Aquí se paga también su fila SIN NOTA
+(§ 3.5: qué rama de A se eligió y por qué `WHAT_HAPPENS_SECTION` queda fuera). Con `Agent` fuera
+del pool, el fallo acusa al prompt del modo y a nada más — que es lo que exige el hallazgo abierto
+de que `ExitPlanMode` no llega a llamarse nunca.
+
+### Etapa 3 — modo worktree · pool de 24
+
+Entran `EnterWorktree` y `ExitWorktree`. Las **dos inyecciones ya presentes en
+`tools/native/worktree.py`** —bloque `## Ownership` y texto de salida de `EnterWorktree`— son de
+esta etapa, se hicieron fuera de turno y quedan **sin acreditar** (`D-12`): se miden aquí y, si no
+mueven marcador, salen. Las tandas `wt4` (0 de 7) y `wt5` (0 de 4) **no son prueba de ese texto**:
+midieron contra un fondo con subagentes sin prompt y `bash` sin calibrar.
+
+### Etapa 4 — los agentes · pool completo de 25
+
+**`FIND-AGENT-DEF-1`: el catálogo de agentes no existe.** `agentic_code/composition.py:272-301`
+construye `RuntimeConfig` sin `agent_resolver`, luego `factory.py:146` queda en `None` = «sin
+agentes especializados»; y el runner por defecto (`factory.py:234`) despacha al hijo **en el mismo
+runtime**, con el **mismo `model_caller`**, horneado una sola vez con el prompt del hilo principal.
+El subagente arranca con el system prompt del padre, el interactivo incluido: nadie le dice que es
+un subagente ni cómo debe devolver el resultado. A sí lo hace —`built-in/generalPurposeAgent.ts`,
+`SHARED_PREFIX` + «respond with a concise report … the caller will relay this to the user»—. Y la
+descripción de `Agent`, homologada y correcta, apunta a un listado de tipos que hoy está vacío.
+
+Es construcción (`D-22`), no calibración: primero se puebla el catálogo con `general-purpose`
+portando su prompt de A, y sólo entonces se calibra. Fuera quedan `statusline-setup` y
+`claude-code-guide` (catálogo de producto de A); `Explore` y `Plan`, decisión aparte del usuario.
+
+Aquí caen también, como conducta a medir y no como texto: `FIND-WT5` (el subagente no recibe las
+puertas de modo — conducta correcta, pero el padre delega el cierre igual) y `P12`.
+
+### Cierre — el reloj montado
+
+Con el pool completo se **repasan los marcadores de las etapas 1–3**. Las tres midieron contra un
+pool que no es el final, así que ese repaso es lo único que acredita el conjunto; es donde
+aparecería un acoplamiento como el ya observado entre la cláusula de `bash` y el canal de
+`worktree`.
+
+### Suelto, sin etapa
+
+Corregir el párrafo `FIND-CFG-3` del censo de guardas: sigue listando `clonar-repo` entre las
+pérdidas de `bash` y la traza lo da en verde (§ 3.7).
+
+---
+
+Ninguna pieza se acredita cerrada sin pasada orgánica (`D-24`), y lo que cierra un paso del censo
+sigue siendo la semántica y la traza (`D-25 · 2`), no la ruta elegida.

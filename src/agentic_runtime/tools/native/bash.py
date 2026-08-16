@@ -60,6 +60,11 @@ the workspace, return structured results, and are easier to review.
   - Never skip hooks (`--no-verify`) or bypass signing unless the user explicitly asked. If a
     hook fails, investigate and fix the underlying issue.
   - Never use interactive flags (`-i`), which cannot work here.
+  - Never end a worktree from here (`git worktree remove`, `git worktree prune`, `git branch -D`
+    on its branch, or deleting its directory). When the session is working inside a worktree,
+    ExitWorktree is what ends it, including when the user asks for it to be deleted — it takes
+    an action of "keep" or "remove". Removing it through the shell deletes the directory but
+    leaves the session pointing at a path that no longer exists.
 - Avoid unnecessary `sleep` commands:
   - Do not sleep between commands that can run immediately — just run them.
   - Do not retry failing commands in a sleep loop — diagnose the root cause.

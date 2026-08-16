@@ -110,6 +110,16 @@ specifically mention worktrees
 - Switches the session's working directory to the new worktree
 - Use ExitWorktree to leave the worktree mid-session (keep or remove)
 
+## Ownership
+
+The worktree this tool creates belongs to the session, not just to the filesystem. \
+ExitWorktree is the only supported way to end it — including when the user asks for it to be \
+deleted. Removing it through the shell (`git worktree remove`, `git branch -D`, `rm -rf`) \
+deletes the directory but leaves the session still believing it is inside a worktree: the next \
+EnterWorktree will refuse, and ExitWorktree will operate on a path that no longer exists. A \
+user asking to "exit and delete the worktree" is asking for ExitWorktree with \
+`action: "remove"` — one call, not a shell command.
+
 ## Parameters
 
 - `name` (optional): A name for the worktree. If not provided, a random name is generated.
@@ -189,7 +199,12 @@ specifically mention worktrees
 
         return ToolResult(
             tool_name=self.name,
-            output=f"Created worktree at {shown} on branch {branch}.",
+            output=(
+                f"Created worktree at {shown} on branch {branch}. The session is now working "
+                f"inside it. When the work is done, end this session with ExitWorktree "
+                f'(action "keep" or "remove"); do not delete the worktree from the shell — '
+                f"that leaves the session pointing at a directory that no longer exists."
+            ),
             context_modifier=modifier,
         )
 

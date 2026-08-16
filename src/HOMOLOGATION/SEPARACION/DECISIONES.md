@@ -1173,3 +1173,174 @@ Lo que NO se toca, y por qué: que el subagente no reciba `EnterWorktree`/`ExitW
 correcta, no el hueco. Un hijo capaz de eliminar el worktree de su padre sería el defecto.
 El modelo puede seguir delegando el TRABAJO dentro del worktree; el CIERRE es del hilo que
 lo abrió.
+
+---
+
+## D-28 · La calibración va en EMBUDO: el pool publica sólo lo cerrado más lo que se mide (2026-08-15)
+
+**Disparador, verbatim del usuario.** Tres turnos consecutivos, y los tres son la decisión:
+
+1. *«lo que pasa es que es sumamente complejo llegar a calibrar una maquina que tiene muchas
+   piezas, te imaginas un reloj que lo ajustes cuando terminaste de construirlo? tenemos 24
+   tools + agentes + modos plan y worktree.»*
+2. *«lo que se tendria que hacer, según mi punto de vista, hipotesis empirica, probar sets
+   organicos pero de la misma tool e ir cerrando cuando la calibracion de su prompt nos de
+   resultados consistentes y asi vamos cerrando el embudo, seguido de los modos plan y worktree
+   de forma individual, ahora con enunciados que requieren el uso de tools que ya sabemos que si
+   fallan es el prompt del modo y no de la tool y finalmente los agentes.»*
+3. *«primero haria una ronda individual de 4 casos … enunciados que deberian lograr que la tool
+   siendo probada sea consistente, luego enunciados que requieran usarlas en varias tareas, para
+   ver la competencia.»*
+
+Y antes, fijando el tamaño de muestra: *«el tamaño de la muestra por mas que lo pongas a 100, no
+nos da un indicador de si ese enunciado es suficiente, para esto con 4 se puede conseguir y luego
+se ve, esto es un tema de calibracion, ensayo / error hasta que este estable.»*
+
+**Qué la originó.** Dos tandas de calibración del cierre de worktree (`wt4`, 7 sesiones válidas;
+`wt5`, 4) dieron `0` cierres correctos con `ExitWorktree` **en ambas**, y ninguna de las dos medía
+lo que decía medir: los borrados por shell venían en su mayoría de subagentes que no tienen prompt
+propio —`agentic_code` no puebla `agent_resolver`, luego no hay catálogo de agentes ni system
+prompt de hijo— y de un `bash` cuya cláusula de vecindario no estaba calibrada. Se estaba ajustando
+el escape con el movimiento entero montado y girando.
+
+### El invariante
+
+**No se mide una pieza cuyas dependencias siguen sin calibrar.** Todo lo demás son consecuencias.
+
+### Las cuatro etapas, y el pool de cada una
+
+El embudo no ordena sólo las mediciones: **ordena el pool publicado**. Cada etapa anuncia las
+piezas ya cerradas más la que se está calibrando, y nada más. Conducción por `--denied-tool`, que
+**no deniega la llamada: elimina la tool del pool ensamblado** (`assemble_tool_pool`,
+`tools/pool.py:74-90`, homologado de `tools.ts:311-326`) — el modelo ni la ve. Verificado en vivo:
+pool 25 sin deny, 24 con `--denied-tool Agent`, diferencia exactamente `{Agent}`.
+
+| etapa | pool publicado | qué acusa un fallo |
+|---|---|---|
+| 1 · tools | 25 − `Agent` − `Enter/ExitPlanMode` − `Enter/ExitWorktree` = **20** | la descripción o el nombre de la tool |
+| 2 · modo plan | + `Enter/ExitPlanMode` = 22 | el prompt del modo |
+| 3 · modo worktree | + `Enter/ExitWorktree` = 24 | el prompt del modo |
+| 4 · agentes | + `Agent` = **25** | el prompt del agente |
+
+Esto elimina la contaminación en vez de descartarla a posteriori. En la etapa 1, si el modelo
+delega, la tool acaba llamándose en el hijo con el mismo pool y la ronda deja de medir la
+descripción; con `Agent` fuera, no puede ocurrir. En las etapas 2 y 3 no hay rondas contaminadas
+que descartar: la delegación es imposible.
+
+**El precio, dicho:** las etapas 1–3 miden contra un pool que no es el final, luego un marcador
+cerrado ahí **no está cerrado contra el reloj montado**. Eso no es un defecto del método sino su
+última etapa: al abrir la 4 se publica el pool completo y **se repasan los marcadores de las tres
+anteriores**. Ese repaso es la prueba del reloj montado, y es donde aparecería un acoplamiento como
+el ya observado entre la cláusula de `bash` y el canal de `worktree`.
+
+### El protocolo por tool: dos fases, dos preguntas, dos arreglos
+
+- **Fase A — aislamiento.** 4 rondas orgánicas con enunciados que apuntan inequívocamente a esa
+  tool y sin alineamiento de capa 2 que le sirva de muleta. Mide si la descripción nombra su propio
+  oficio. Fallo aquí ⇒ el problema está en las superficies 2 (nombre) o 3 (`function.description`).
+- **Fase B — competencia.** Enunciados que la piden dentro de un trabajo de varias tareas, con
+  otras tools en juego. Fase A verde y fase B roja ⇒ la descripción se sostiene sola pero pierde
+  con rivales, y el arreglo **no es describir mejor lo que hace sino delimitar el vecindario** — la
+  cláusula de «esto no se hace desde aquí», que es lo que el canónico pone en `bash` con su bloque
+  de `find`/`grep`/`cat` (`BashTool/prompt.ts:275-291`).
+
+Una tool no cierra sin pasar las dos.
+
+**El enunciado no nombra la tool.** Decisión del usuario: *«y en los enunciado de prueba igual no
+forzar con frases que digan que se debe usar la tool que estamos probando»*. Es la misma regla del
+texto aplicada al instrumento — un enunciado que nombra la pieza no mide su descripción, mide la
+obediencia, y saldría verde con la descripción vacía. «Apuntar inequívocamente a esa tool» significa
+por tanto **que el objetivo sólo sea satisfacible por su oficio**, no que se la mencione. Tres
+grados, con distinto valor probatorio:
+
+1. **Objetivo puro** — se describe el resultado y jamás el mecanismo (*«renombra la variable alpha
+   por total en calc.py»*). Es el único grado que acredita de verdad.
+2. **Vocabulario del dominio** — se nombra el concepto, no la tool (*«trabaja en un worktree
+   aparte»*). Admisible cuando es lenguaje que un usuario real emplea, con la evidencia declarada
+   como más débil. Las tandas `wt2`–`wt5` estaban en este grado y cerca del borde: *«sal del
+   worktree eliminándolo»* casi dicta la acción.
+3. **Dirigido** — se nombra la tool. Reservado a la excepción que `D-12 · c` ya preveía —cuando el
+   objetivo no puede discriminar dos tools redundantes por diseño— y **con su régimen más débil
+   declarado en el propio caso**. Disfrazarlo de objetivo es `no-debilitar-la-prueba`.
+
+**Los rivales de la fase B tienen que estar ya cerrados** — el invariante un nivel más abajo. La
+fase B de cada tool se corre contra el conjunto ya cerrado, siguiendo el orden de ataque 1→12 del
+censo, y las primeras tools tienen fase B pobre por definición; lo cubre el segundo término del
+criterio de cierre. **La fase B se amortiza:** la competencia es propiedad del conjunto, no de una
+tool, así que un solo enunciado multi-tarea puntúa a la vez el marcador de todas las que
+intervienen.
+
+### Criterio de cierre
+
+Una tool se cierra cuando **en 4 rondas orgánicas seguidas la decisión es la prevista** y **su
+marcador no mueve el de ninguna tool ya cerrada**. El segundo término no es opcional: es lo único
+que impide que calibrar la pieza 20 descalibre la 3 sin que nadie se entere.
+
+Cuatro rondas, no más, por decisión expresa del usuario: el tamaño de muestra no indica si un
+enunciado es suficiente; esto es calibración por ensayo y error hasta que sea estable.
+
+### Cuentas
+
+El pool publica **25**; quitando `Agent` quedan **24**, y fase A son `24 × 4 = 96` rondas
+individuales. Cuatro de esas 24 son puertas de modo y su fase A cae en las etapas 2 y 3, no en la
+1. `clone_repository` sale del embudo hasta que se migre la tool de git entera de A (decisión previa
+del usuario), de modo que fase A queda en **92** rondas y la etapa 1 en **76**. A eso se suma el
+cuerpo —menor, por amortización— de rondas de competencia.
+
+### Qué retira este método
+
+- **`wt4` y `wt5` dejan de ser prueba del enunciado de `EnterWorktree`.** `0 de 7` y `0 de 4` no
+  acusan a ese texto: acusan al conjunto. Se conservan como observación de que los subagentes sin
+  prompt borran worktrees por shell, que es hallazgo de la **etapa 4**.
+- **Las dos inyecciones en `tools/native/worktree.py`** (bloque `## Ownership` y texto de salida de
+  `EnterWorktree`) son material de la etapa 3 hecho fuera de turno y medido contra fondo sucio.
+  Quedan en el árbol **sin acreditar** (`D-12`: efecto sin conducción no acredita) y se vuelven a
+  medir cuando le toque a `worktree`; si no mueven marcador, salen.
+- **La cláusula de worktree en `bash.py`** sí es de la etapa 1 y sí movió su propio canal (borrados
+  por shell de 6/7 a 2/4), pero le faltan sus 4 rondas limpias: entra a la cola de la etapa 1 como
+  pieza a cerrar, no como cerrada.
+
+### Bloqueo previo a abrir la etapa 1
+
+**`FIND-WT6`** — las fs-tools resuelven los relativos contra `roots[0]` y no contra `ctx.cwd`
+(`tools/fs_env.py:135-136`, `:170`, `:186`). Mientras eso siga así, cualquier ronda que ocurra
+dentro de un worktree mide un cable roto, no un enunciado. Es dependencia de cableado, no de
+prompt, y se paga antes de abrir el embudo.
+
+### Tensión con `D-25`, declarada y no disimulada
+
+`D-25` retiró la ruta elegida como criterio de cierre y prohibió escribir párrafos cuyo objetivo
+sea **mover un porcentaje** de ruteo. `D-28` no lo deroga, lo modula, y la diferencia es el listón:
+
+- `D-25` nació contra la propuesta de subir a 12 rondas para justificar un párrafo que llevara el
+  marcador de 4/8 a 1/12 — mejora de porcentaje, que concede el fenómeno de antemano. Aquí el
+  listón es **consistencia 4/4**, no mejora; un 3/4 no cierra nada.
+- `D-25` estableció que la única superficie que traslada fiabilidad al arnés es la **5**
+  (`tool_choice`/`allowed_tools`). El embudo la usa **como instrumento de calibración**, que es
+  precisamente lo que la hace utilizable sin clasificador de intención.
+- **La línea que separa lo prohibido de lo legítimo la fija el usuario, verbatim:** *«en fase de
+  calibración mientras no usemos explicitamente en el prompt algo que se alinie a un caso en
+  particular, sino se expresa de forma clara y generica no estamos violando nada.»* Lo prohibido
+  nunca fue redactar: es **redactar hacia un caso**. Escribir el párrafo que pone verde ESE
+  enunciado sigue vedado por `D-20 · 6`; enunciar de forma clara y genérica lo que la pieza hace, y
+  dónde termina su vecindario, **es el trabajo de esta fase**. `D-25 · 3` queda modulada en ese
+  sentido: lo que sigue retirado es el parche ajustado al caso y la persecución de porcentajes, no
+  la redacción genérica.
+- **Prueba de admisión, dos preguntas.** ¿Hace falta decir «cuando el usuario pida X» para
+  enunciarlo? (`D-20 · 6`, en pie). ¿El texto sólo se entiende teniendo delante el enunciado de la
+  ronda? Si cualquiera de las dos da que sí, es texto de caso y no entra — por muy verde que lo
+  ponga el marcador.
+- **Lo que `D-28` NO afirma:** que el ruteo quede determinista en producción. En la etapa 4 vuelve
+  el pool completo y la ruta observada allí se **registra**, no se rotula como puerta — `D-25 · 1`
+  sigue vigente para eso.
+- **`D-25 · 2` sigue siendo lo que cierra un paso del censo**: la semántica y la traza. `D-28` es
+  método de la fase de calibración, no un criterio de cierre nuevo para el censo de guardas.
+- **`D-24` sigue mandando:** el veredicto binario lo emite la pasada orgánica del usuario.
+
+**Origen de cada pieza, por honestidad.** El embudo, su orden, las dos fases y las 4 rondas son del
+usuario. Son míos y quedan sujetos a revocación: la tabla de pools por etapa, el segundo término del
+criterio de cierre (no mover marcadores ya cerrados), la amortización de la fase B y el bloqueo por
+`FIND-WT6`.
+
+**Dónde se aplica.** Toda la fase de calibración de prompts de tools, modos y agentes. Es regla de
+gobierno.
