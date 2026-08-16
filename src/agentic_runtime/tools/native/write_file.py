@@ -11,13 +11,7 @@ if TYPE_CHECKING:
 
 class WriteFileTool:
     name = "write_file"
-    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "create or overwrite files"
-    # Homologada contra `getWriteToolDescription()` (`FileWriteTool/prompt.ts:10-18`).
-    # OMITIDA la línea de lectura previa obligatoria (`:7`): A la puede prometer porque su tool
-    # FALLA si no leíste antes; B no lo comprueba. Anunciar una comprobación inexistente sería
-    # peor que callarla — queda como carencia declarada, no como texto falso.
     description = """Writes a file to the local filesystem.
 
 Usage:
@@ -42,14 +36,12 @@ Usage:
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         try:
-            path = ctx.fs.resolve(input["path"], for_write=True)
+            path = ctx.fs.resolve(input["path"], for_write=True, cwd=ctx.cwd)
         except PathOutsideWorkspace as exc:
             return ToolResult.error(self.name, str(exc))
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(input["content"])
-            # `S12`: la ruta resuelta es HOST. El modelo debe verla en los términos del
-            # deployment (`/workspace/...` bajo fake-path), no la real. Bajo identidad es no-op.
             return ToolResult(tool_name=self.name, output=ctx.presentation.to_llm(path))
-        except Exception as exc:  # noqa: BLE001 — idem dispatcher: el fallo vuelve al modelo como texto
+        except Exception as exc:  # noqa: BLE001
             return ToolResult.error(self.name, str(exc))

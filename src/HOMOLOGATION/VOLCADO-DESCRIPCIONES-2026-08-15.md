@@ -463,8 +463,12 @@ cerrado.
 
 ### Etapa 0 — prerrequisitos, antes de abrir el embudo
 
-- **`FIND-WT6`** (§ 4quater) — las fs-tools resuelven relativos contra `roots[0]` y no contra
-  `ctx.cwd`. Cualquier ronda dentro de un worktree mide un cable roto. **Bloquea las etapas 1 y 3.**
+- **`FIND-WT6`** (§ 4quater) — **INYECTADO 2026-08-16, pendiente de pasada orgánica** (`D-29`).
+  `resolve` toma `cwd` como keyword **obligatorio** y expande contra `cwd or roots[0]`; los siete
+  llamantes de `tools/native/` pasan `cwd=ctx.cwd`. Delator verde en sus cuatro filas (dentro del
+  worktree se abre el fichero del worktree; sin `cwd` la llamada revienta; un `cwd` externo sigue
+  dando `PathOutsideWorkspace`). El censo de llamantes se hizo por propagación y no hay ninguno
+  fuera del runtime. **Deja de bloquear las etapas 1 y 3 en cuanto el usuario dé el veredicto.**
 - **La descripción divergente se paga antes de que su tool entre en fase A.** Calibrar un texto
   que ya sabemos incompleto es medir dos cosas a la vez. Afecta a `T1` (`TodoWrite`: portar el
   bloque `## Examples`), `AUQ-1` (`AskUserQuestion`: portar `PREVIEW_FEATURE_PROMPT` o retirar

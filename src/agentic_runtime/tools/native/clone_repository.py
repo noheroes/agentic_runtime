@@ -1,23 +1,3 @@
-"""Native tool: clona un repositorio git dentro del workspace de la sesión.
-
-Cubre el hueco del cliente MCP de GitHub, que expone operaciones de API (crear repo,
-fork, buscar, leer archivos) pero NO un `git clone` a un árbol de trabajo local.
-
-Divergencia consciente del canónico (que no tiene tool de clone; clona por Bash con
-credenciales ambientales del host y red normal). Aquí no es viable: el `bash` corre en
-`BwrapExecEnvironment` con `--unshare-all` (sin red) y el token de GitHub vive en el MCP,
-no en el entorno de Bash. Por eso:
-
-- **Red (decisión A):** el `git clone` corre FUERA del sandbox, como subproceso
-  privilegiado del runtime con red, escribiendo en el workspace. El árbol clonado queda
-  visible en `/workspace/...` para los `bash` sandboxeados posteriores.
-- **Credencial (decisión B):** se reutiliza el token del GitHub MCP per-tenant vía el seam
-  `ctx.git_credentials` (lo cablea el integrador desde su config MCP). El token se pasa por
-  un credential helper efímero: no aparece en `argv` ni queda persistido en el `.git/config`
-  del repo clonado, y nunca se expone al modelo.
-- **Confinamiento:** el destino se resuelve con `ctx.fs.resolve(..., for_write=True)`,
-  reusando el allow-set de workspace (traversal/symlink-escape → `PathOutsideWorkspace`).
-"""
 from __future__ import annotations
 
 import asyncio
@@ -35,9 +15,6 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class GitCredentialProvider(Protocol):
-    """Seam de credenciales git. El integrador lo implementa reutilizando el token del
-    MCP per-tenant del host correspondiente. Devuelve `None` para clonar sin auth (público)."""
-
     def token(self, host: str) -> str | None: ...
 
 
@@ -45,9 +22,6 @@ _OWNER_REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _normalize(repository: str) -> tuple[str, str, str]:
-    """`repository` → (url_https_sin_token, host, nombre_por_defecto).
-
-    Acepta `owner/repo` (asume github.com) o una URL https completa."""
     repo = repository.strip()
     if _OWNER_REPO.match(repo):
         host = "github.com"
@@ -102,11 +76,9 @@ class CloneRepositoryTool:
             return ToolResult.error(self.name, str(exc))
 
         directory = (input.get("directory") or default_name).strip() or default_name
-        # El destino es un nombre relativo al workspace (no un path del modelo): se ancla
-        # al write-root y luego se confina (traversal/symlink-escape → PathOutsideWorkspace).
         candidate = directory if os.path.isabs(directory) else str(ctx.fs.write_root / directory)
         try:
-            dest = ctx.fs.resolve(candidate, for_write=True)
+            dest = ctx.fs.resolve(candidate, for_write=True, cwd=ctx.cwd)
         except PathOutsideWorkspace as exc:
             return ToolResult.error(self.name, str(exc))
         if dest.exists():
@@ -120,8 +92,6 @@ class CloneRepositoryTool:
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         args = ["git"]
         if token:
-            # Credential helper efímero: el token viaja por env (no en argv) y NO se
-            # persiste en el .git/config del clon (los `-c` de línea no se guardan).
             env["GIT_CLONE_TOKEN"] = token
             helper = '!f() { echo username=x-access-token; echo "password=$GIT_CLONE_TOKEN"; }; f'
             args += ["-c", f"credential.helper={helper}"]
@@ -140,12 +110,6 @@ class CloneRepositoryTool:
         except TimeoutError:
             return ToolResult.error(self.name, f"git clone excedió {self.timeout_seconds:.0f}s")
 
-        # `S12`: el path host absoluto viaja en el `argv` de git, así que git lo IMPRIME
-        # (`Cloning into '/ruta/host/…'`) y el stdout se devuelve al modelo. Es el 4º punto
-        # de emisión de ruta host del árbol de tools, y el único donde la ruta no la escribe
-        # el runtime. No se deja a `sanitize_output` (red de regex CON PÉRDIDAS, `FIND-VOICE1`):
-        # aquí se conoce el string LITERAL que se le pasó a git, así que la traducción es
-        # exacta y no heurística.
         output = stdout.decode(errors="replace").replace(str(dest), ctx.presentation.to_llm(dest))
         if proc.returncode != 0:
             return ToolResult(tool_name=self.name, output=output or "git clone falló", is_error=True)

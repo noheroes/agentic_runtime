@@ -171,7 +171,7 @@ user asking to "exit and delete the worktree" is asking for ExitWorktree with \
         original_head = out.strip() if rc == 0 else ""
 
         try:
-            worktree_path = ctx.fs.resolve(str(root / relative), for_write=True)
+            worktree_path = ctx.fs.resolve(str(root / relative), for_write=True, cwd=ctx.cwd)
         except PathOutsideWorkspace as exc:
             return ToolResult.error(self.name, str(exc))
 

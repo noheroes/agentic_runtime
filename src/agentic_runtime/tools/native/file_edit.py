@@ -95,7 +95,7 @@ Usage:
         if not Path(file_path).is_absolute():
             return ToolResult.error(self.name, "file_path must be absolute.")
         try:
-            path = ctx.fs.resolve(file_path, for_write=True)
+            path = ctx.fs.resolve(file_path, for_write=True, cwd=ctx.cwd)
         except PathOutsideWorkspace as exc:
             return ToolResult.error(self.name, str(exc))
 

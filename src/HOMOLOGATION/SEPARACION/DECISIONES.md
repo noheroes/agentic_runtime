@@ -1344,3 +1344,66 @@ criterio de cierre (no mover marcadores ya cerrados), la amortización de la fas
 
 **Dónde se aplica.** Toda la fase de calibración de prompts de tools, modos y agentes. Es regla de
 gobierno.
+
+## `D-29` — `FIND-WT6` pagado: el cwd del turno es la base de expansión, y el parámetro es inesquivable
+
+**Fecha:** 2026-08-16. **Estado:** inyectado y medido por delator; **no cerrado** — falta la pasada
+orgánica del usuario (`D-24`).
+
+### El defecto
+
+`ConfinedFilesystem.resolve` expandía todo relativo contra `self._base_dir` = `roots[0]`, el root del
+workspace. `EnterWorktree` mueve `ctx.cwd` al worktree (`tools/native/worktree.py`, su `modifier`) y
+**no toca `roots`** — no ensancha el confinamiento ni monta una segunda costura, y no hace falta que
+lo haga porque `.worktrees/` cuelga del propio root. Consecuencia: dentro de un worktree,
+`read_file("calc.py")` abría el `calc.py` de la RAÍZ. El canónico no tiene ese agujero:
+`expandPath(path, baseDir?)` cae a `getCwd()` (`utils/path.ts:34`) y `GlobTool.getPath` hace
+`path ? expandPath(path) : getCwd()` (`GlobTool.ts:89`), con el cwd por sesión en `AsyncLocalStorage`
+(`utils/cwd.ts:12`).
+
+### El corte
+
+`resolve(self, token, *, for_write, cwd)` — **keyword obligatorio, sin default**. Base local
+`cwd or self._base_dir`; sustituye a `self._base_dir` en las tres apariciones del cuerpo (rama de
+plan-file, chequeo de confinamiento, path devuelto). `_base_dir` sobrevive como fallback para el
+`cwd=None` (integrador que no lo declara).
+
+**Por qué obligatorio y no opcional.** El criterio ya estaba escrito en el propio fichero: la
+expansión tiene que ocurrir en «un punto que ningún consumidor pueda esquivar». Un parámetro con
+default es por definición esquivable, y el modo de fallo que se paga aquí es exactamente el de un
+llamante que no se enteró. El censo de llamantes —hecho por propagación, no por búsqueda: la costura
+sólo se alcanza teniendo la referencia, luego basta leer dónde nace (`RuntimeConfig.fs`) y dónde se
+entrega (`execution/local/runtime.py:460-461`, raíz y fork por el mismo punto)— acota el conjunto a
+**siete**, todos en `tools/native/`, y ninguno fuera del runtime: el integrador construye la costura
+inline en `agentic_code/composition.py` y nunca llama a `resolve`. Con el conjunto acotado, romper la
+firma es barato y comprobable; dejarla opcional sería regalar el defecto al octavo llamante futuro.
+
+**Los siete pasan `cwd=ctx.cwd`:** `read_file` · `write_file` · `glob_tool` · `grep_tool` ·
+`file_edit` · `clone_repository` · `worktree`. En los tres últimos el path ya es absoluto y la base
+es indiferente; se pasa igual, porque es lo que hace inesquivable el parámetro.
+
+**El confinamiento no se relaja.** `path_in_allowed_working_path` sigue midiendo contra
+`roots`/`write_roots`: un `cwd` fuera del workspace hace que el relativo caiga fuera y dispara
+`PathOutsideWorkspace`. Un `cwd` externo no es una llave, es un error que se acusa.
+
+### Delator (`D-12`)
+
+Raíz `ws/` con `calc.py` («raiz») y `ws/.worktrees/w/calc.py` («worktree»), mismo token `"calc.py"`:
+
+| medida | resultado |
+|---|---|
+| `cwd=None` | `ws/calc.py` → «raiz» (conducta de `HEAD`) |
+| `cwd=ws/.worktrees/w` | `ws/.worktrees/w/calc.py` → «worktree» |
+| llamada sin `cwd` | `TypeError: missing 1 required keyword-only argument: 'cwd'` |
+| `cwd=/etc`, token `secreto.txt` | `PathOutsideWorkspace` |
+
+Las cuatro filas verdes. Falta el veredicto orgánico.
+
+### Efecto lateral asumido
+
+Los ocho ficheros tocados quedan **sin comentarios** (regla `sin-comentarios-en-codigo`): se borran
+los que había, incluidos los bloques de justificación de `FIND-PLAN-FILE-1` y `FIND-C6-1` en el
+cuerpo de `resolve`, el docstring de módulo de `clone_repository.py` y las notas de homologación de
+las descripciones. Sobreviven las directivas `# noqa` y el texto que es superficie de producto
+(descripciones, schemas, mensajes al modelo), que no se ha tocado en ninguno. La justificación que
+vivía en esos comentarios está aquí y en el censo.

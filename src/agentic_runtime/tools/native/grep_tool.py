@@ -9,28 +9,14 @@ from ..protocol import ToolCategory, ToolResult
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
 
-# Cap por defecto de líneas emitidas cuando `head_limit` no se especifica. Sin cap, un grep
-# sobre un árbol grande vuelca MBs al contexto (session.json crece hasta romper al proveedor).
-# Espejo de `GrepTool.DEFAULT_HEAD_LIMIT` del canónico. `head_limit=0` = ilimitado (escape hatch).
 DEFAULT_HEAD_LIMIT = 250
-# Longitud máxima por línea; evita que base64/minificados llenen la salida. Espejo de `--max-columns 500`.
 MAX_LINE_LEN = 500
-# Directorios de control de versiones excluidos (ruido de metadata). Espejo de `VCS_DIRECTORIES_TO_EXCLUDE`.
 _VCS_DIRS = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 
 
 class GrepTool:
     name = "grep"
-    # `searchHint` del canónico, grafía literal. Fuera del contrato T1
-    # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "search file contents with regex (ripgrep)"
-    # Homologada contra `GrepTool/prompt.ts:7-17` (`GAP-PROMPT-1`). La primera línea de Usage
-    # —«ALWAYS use this tool; NEVER invoke grep/rg as a shell command»— es la pieza que el
-    # canónico usa para DIRIGIR la elección de tool, y es justo la que B no tenía.
-    # DIVERGENCIA DECLARADA: A corre sobre ripgrep; B sobre `re` de Python. La descripción dice
-    # el dialecto REAL en vez de copiar el de A: prometer sintaxis ripgrep sobre un motor `re`
-    # sería peor que no decir nada. Por lo mismo se omiten `type`, `multiline` y los modos de
-    # salida, que B no implementa.
     description = """A powerful search tool for finding content inside files.
 
 Usage:
@@ -70,7 +56,7 @@ Usage:
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         try:
-            base = ctx.fs.resolve(input.get("path", "."), for_write=False)
+            base = ctx.fs.resolve(input.get("path", "."), for_write=False, cwd=ctx.cwd)
         except PathOutsideWorkspace as exc:
             return ToolResult.error(self.name, str(exc))
         pattern = input["pattern"]
@@ -85,7 +71,6 @@ Usage:
                     continue
                 if not file_path.is_file():
                     continue
-                # `S12`: ruta HOST → términos del deployment, una vez por archivo (no por línea).
                 shown_path = ctx.presentation.to_llm(file_path)
                 try:
                     for i, line in enumerate(file_path.read_text(errors="replace").splitlines(), 1):
@@ -106,5 +91,5 @@ Usage:
             return ToolResult(tool_name=self.name, output=output)
         except re.error as exc:
             return ToolResult.error(self.name, f"invalid regex: {exc}")
-        except Exception as exc:  # noqa: BLE001 — tras `re.error`: cualquier otro fallo también vuelve al modelo
+        except Exception as exc:  # noqa: BLE001
             return ToolResult.error(self.name, str(exc))
