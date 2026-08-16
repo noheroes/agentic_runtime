@@ -1096,3 +1096,80 @@ catálogo `gpt-5.x-conducta-vs-claude.md`: los fenómenos siguen anotados, sólo
 se paga en redacción.
 
 **Dónde se aplica.** Todo el censo de guardas y las fases siguientes. Es regla de gobierno.
+
+---
+
+## D-26 · Una guarda fail-open se cierra; una frase del canónico sólo entra si existe el mecanismo que la sostiene (2026-08-15)
+
+> ⚠ **Honestidad de origen: no es una decisión del usuario.** Es resolución de ejecución tomada por
+> `D-06` al pagar `FIND-WT4`/`FIND-WT2`, y se escribe aquí porque su segunda mitad —una omisión
+> deliberada— es exactamente lo que el siguiente ciclo «arreglaría» copiando la frase que falta.
+
+**Qué la originó.** El paso `W2` del censo. `ExitWorktree` prometía en su descripción rehusar el
+borrado si el worktree tiene *«uncommitted files or commits not on the original branch»*, y la
+conducta no lo sostenía en tres puntos, leídos contra `ExitWorktreeTool.ts` 1→EOF (`D-08`):
+
+1. **No contaba commits.** No existía el homólogo de `git rev-list --count ${originalHead}..HEAD`
+   (`:100-110`) porque `EnterWorktree` **nunca guardaba el HEAD de partida**. La mitad de la promesa
+   no era portable: le faltaba el dato.
+2. **La guarda era fail-OPEN.** `if rc == 0 and out.strip() and not discard` — un `git status` que
+   falla (índice bloqueado, ref corrupta) daba paso al `worktree remove --force`. A es fail-CLOSED y
+   lo dice en el propio fuente: *«callers that use this as a safety gate must treat null as "unknown,
+   assume unsafe". A silent 0/0 would let cleanupWorktree destroy real work»* (`:67-70`).
+3. **El mensaje no enumeraba nada.** Donde A dice cuántos ficheros y cuántos commits se van a
+   perder y en qué rama, B decía una frase genérica.
+
+**Lo construido** (`tools/native/worktree.py`): `original_head` capturado en `EnterWorktree` y
+guardado en `_WORKTREE_KEY`; `_count_worktree_changes` homólogo de `countWorktreeChanges` con su
+semántica de `None` = *no verificable, asumir inseguro*, incluida la rama en que el `status` va bien
+pero **falta la línea base** —ahí A también devuelve `null` en vez de afirmar 0—; la guarda pasa a
+fail-closed con los dos mensajes de A (`:198` y `:217`), el segundo enumerando ficheros y commits con
+sus plurales; el recuento se repite antes de borrar para que la salida diga qué se descartó
+(`:256-259`, `:299-309`); y los textos de salida y del no-op pasan a ser los del canónico.
+
+**La segunda mitad, que es una NO-inyección.** `prompt.ts:28` lleva un bullet más: *«Clears
+CWD-dependent caches (system prompt sections, memory files, plans directory) so the session state
+reflects the original directory»*. **No se porta.** B no tiene ninguna de las tres cachés: el prompt
+de sistema no se recomputa —se hornea una vez en `build_runtime`, `FIND-CFG-HOT`—, la memoria no está
+cableada (`FIND-MEM-WIRING`) y `get_plan_file_path` (`capabilities/plan/plan_file.py:52`) es función
+pura con token fijo por sesión, no una memoización sobre el cwd como `getPlansDirectory` de A.
+
+**Y esto NO contradice `D-22`.** `D-22` manda construir el mecanismo que falta cuando eso traslada
+**conducta** del canónico. Aquí no hay conducta que trasladar: una caché existe para no recomputar, y
+B no recomputa. Construir tres cachés para poder limpiarlas sería inventar el problema y luego
+portar la solución. Lo que sí queda dicho —y es la deuda real, ya nombrada— es que B no recompone el
+prompt de sistema al cambiar de directorio; el bullet entra el día que `FIND-CFG-HOT` se pague, no
+antes. **La regla, generalizada:** una frase de la descripción se porta cuando existe la conducta que
+la respalda; portarla antes es `FIND-E11-3` (anunciar palancas inexistentes) y borrar la carencia en
+silencio es `homologar-es-trasladar-conducta`. El camino que queda es el tercero: **declararla donde
+se mide** — `PROCEDENCIA-DESCRIPCIONES.md`, cuya fila de `ExitWorktree` decía «el resto se porta» y
+era falsa. Eso era `FIND-WT2`.
+
+**Lo que NO deroga.** `D-25`: nada de esto se acredita por la ruta que elija el modelo. Lo que cierra
+es la semántica —la guarda rehúsa, enumera y no destruye— y es código, luego admite garantía. Y
+`D-24` sigue mandando para el cierre del paso: falta la pasada orgánica del usuario.
+
+---
+
+## `D-27` — El cwd del padre viaja al fork, o el subagente trabaja en otro sitio
+
+**Resolución de ejecución bajo `D-06`, no decisión del usuario** (honestidad de origen).
+
+En A el directorio de trabajo es del PROCESO (`process.chdir` + `setCwd`,
+`EnterWorktreeTool.ts:94-96`), así que la pregunta «¿qué cwd ve un subagente?» no existe: ve
+el del padre porque sólo hay uno. En B el cwd es un CABLE del ctx (`tool_use.py:110`), y un
+cable que no se copia en el fork es un cable roto: `RuntimeContextForker.fork` construía el
+ctx del hijo sin él y `root_context_modifier` sólo corre en la raíz
+(`local/runtime.py:474`), de modo que todo subagente nacía en la raíz del confinamiento
+aunque el padre estuviera dentro de un worktree.
+
+Se resuelve propagándolo por el `ForkSnapshot`, que es el vehículo que el runtime ya usa
+para lo que el hijo hereda (permisos, pool, capabilities). No se resuelve leyendo un global
+ni haciendo `chdir` en el proceso: el runtime es multi-sesión y un `chdir` de una sesión
+mataría a las otras — la razón por la que B tiene el cable en primer lugar.
+
+Lo que NO se toca, y por qué: que el subagente no reciba `EnterWorktree`/`ExitWorktree`
+(filtro `safe_for_background`, `agent_loop.py:191-194` + `registry.py:33-34`) es conducta
+correcta, no el hueco. Un hijo capaz de eliminar el worktree de su padre sería el defecto.
+El modelo puede seguir delegando el TRABAJO dentro del worktree; el CIERRE es del hilo que
+lo abrió.

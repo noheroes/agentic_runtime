@@ -184,6 +184,7 @@ specifically to change.
             permissions=ctx.permission_context,
             tool_pool=ctx.tool_pool,
             capabilities=ctx.app_state.capabilities,
+            cwd=ctx.cwd,
         )
 
         spec = SubagentSpec(

@@ -54,6 +54,7 @@ class ForkSnapshot(BaseModel):
     # al subagente (runAgent.ts:648-656). Sin esto el delegador MCP per-tenant del
     # integrador no vería al provider del padre en subagentes.
     capabilities: dict[str, Any] = Field(default_factory=dict)
+    cwd: str | None = None
 
 
 class ForkContext(BaseModel):
@@ -110,6 +111,7 @@ class RuntimeContextForker:
             tool_pool=tool_pool,
             app_state=AppState(permissions=permissions, capabilities=capabilities),
             stop=stop,
+            cwd=snap.cwd,
         )
 
 
