@@ -8,7 +8,7 @@ Todo lo anterior de este fichero (método, enunciados, diagnósticos) está en e
 | tool | ok |
 |---|---|
 | `write_file` | ok |
-| `read_file` | |
+| `read_file` | ok |
 | `glob` | |
 | `grep` | |
 | `bash` | |
