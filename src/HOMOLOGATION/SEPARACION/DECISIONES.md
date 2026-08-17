@@ -1407,3 +1407,58 @@ cuerpo de `resolve`, el docstring de módulo de `clone_repository.py` y las nota
 las descripciones. Sobreviven las directivas `# noqa` y el texto que es superficie de producto
 (descripciones, schemas, mensajes al modelo), que no se ha tocado en ninguno. La justificación que
 vivía en esos comentarios está aquí y en el censo.
+
+---
+
+## `D-30` — El deny explícito PREVALECE sobre `--dangerously-skip-permissions` (2026-08-17)
+
+**Origen, dicho con precisión.** El usuario la elevó como decisión pendiente al cierre de la ventana
+anterior —había dos tests en rojo afirmando la conducta contraria y no los reescribí a propósito—, y
+al plantearle las opciones eligió **resolverla contra el canónico antes de decidir**. Leído el
+canónico, respondió: *«si has revisado en el canonico, entiendo que la propuesta de ajuste esta
+homologada, no es decisión mia a menos que lo que propones no lo sea»*. Es decir: `D-08` la resolvió,
+y lo que quedaba era ejecución (`D-06`).
+
+### Lo que dice el canónico, leído 1→EOF
+
+- **El orden del pipeline.** `hasPermissionsToUseToolInner` numera los pasos y resuelve el deny en el
+  **1a** (`utils/permissions/permissions.ts:1171`), ~100 líneas antes del atajo
+  `shouldBypassPermissions` del **2a** (`:1268`). No hay rama que salte el 1a.
+- **Enunciado explícito.** Al justificar por qué las ask rules de contenido sobreviven al bypass:
+  *«This must be respected even in bypass mode, just as deny rules are respected at step 1d»*
+  (`:1238-1243`). Y el encabezado de `checkRuleBasedPermissions` (`:1061-1063`) llama a los pasos
+  previos al 2a *«the subset that bypassPermissions mode respects»*. Los pasos 1a, 1b/1f, 1d, 1e y 1g
+  son inmunes al bypass **por diseño**, no por accidente.
+- **La bandera no toca la configuración.** `--dangerously-skip-permissions` sólo empuja
+  `'bypassPermissions'` a `orderedModes` (`permissionSetup.ts:725`), y
+  `initializeToolPermissionContext` arma el contexto con `mode: permissionMode` **y**
+  `alwaysDenyRules: { cliArg: parsedDisallowedToolsCli }` en el mismo objeto (`:978-991`). En todo el
+  módulo no hay un punto donde entrar en bypass vacíe `alwaysDenyRules`; lo único que se vacía son
+  las **allow** rules, y sólo al entrar en modo auto (`stripDangerousPermissionsForAutoMode:510`).
+
+### La regla
+
+**El deny es CONFIGURACIÓN, no una confirmación que el bypass pueda saltarse.** Quien pasa la bandera
+renuncia a que le pregunten, no a lo que él mismo prohibió. En B eso son los dos cortes de `823e68e`
+(`agentic_code/src/agentic_code/permissions.py`): `seed()` no vacía `always_deny` —de modo que
+`assemble_tool_pool` no publica lo denegado— y `handle()` comprueba `denied` **antes** del atajo de
+bypass.
+
+### Los dos tests en rojo eran el defecto, no el parche
+
+`test_dangerous_bypass_grants_protected_tools_without_prompt` y
+`test_dangerous_bypass_executes_protected_tool_without_reader` usaban `bash` a la vez como tool
+«protegida» y como `denied`. Con esa fixture no afirmaban lo que su nombre dice —que el bypass evita
+la pregunta— sino que **el bypass revoca configuración**, que es justo lo que el paso 1a niega. Es el
+patrón de `D-17 · 1`: un arnés que renuncia a la condición que el test dice medir. Se reescribe el
+arnés contra el criterio (tool protegida **no** denegada) y se añaden los dos casos que fijan la
+regla: uno en la política y otro **por efecto en disco** con el pool publicado como testigo. Ambos
+acreditados en rojo contra la conducta anterior por inyección revertida desde copia verificada por
+`sha256` (`D-12 · b`), nunca con `git checkout`. Suite: **218 verdes**.
+
+### Lo que NO deroga
+
+`D-28` sigue mandando sobre el método del embudo — y esta decisión es su condición de posibilidad:
+sin deny > bypass, `--denied-tool` no acota el pool bajo `--dangerously-skip-permissions` y la ronda
+deja de medir la etapa que dice medir (fue así como el defecto se detectó: pool de 21 donde tocaban
+10). `D-08` conserva su alcance: el consumidor DETECTA, el canónico DICTA.
