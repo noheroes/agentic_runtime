@@ -40,7 +40,7 @@ bajaría a 19, que no es el de la etapa. Una ronda = una sesión limpia; entre r
 
 | # | tool | rondas 4/4 | estado |
 |---|---|---|---|
-| 1 | `TodoWrite` | 0/4 | enunciados escritos, ronda 1 pendiente de pasada orgánica |
+| 1 | `TodoWrite` | 0/4 | ronda 1 corrida y **ROJA**: no la llama, entra por `TaskCreate` |
 | 2 | `Edit` | 0/4 | — |
 | 3 | `Config` | 0/4 | — |
 | 4 | `write_file` | 0/4 | — |
@@ -60,7 +60,25 @@ bajaría a 19, que no es el de la etapa. Una ronda = una sesión limpia; entre r
 | 18 | `TaskStop` | 0/4 | — |
 | 19 | `TaskUpdate` | 0/4 | — |
 
-Total: **0 de 19 estabilizadas · 0 de 76 rondas corridas**.
+Total: **0 de 19 estabilizadas · 1 de 76 rondas corridas**.
+
+### Corrección medida del pool de la etapa 1 (2026-08-16)
+
+El `TurnStartEvent` de una sesión interactiva real con los cinco `--denied-tool` publica **19**
+nombres, no 20, y **`ToolSearch` no está entre ellos**:
+
+```
+AskUserQuestion Config Edit Sleep TaskCreate TaskGet TaskList TaskOutput TaskStop
+TaskUpdate TodoWrite WebFetch WebSearch bash clone_repository glob grep read_file write_file
+deferred_names (11): AskUserQuestion Config Task*(6) TodoWrite WebFetch WebSearch
+```
+
+El request capturado lleva `tool_count = 20`: el vigésimo es el `tool_search` **server-side**
+que el puente emite cuando alguna tool difiere, no la nativa `ToolSearch`. `assemble_tool_pool`
+(`tools/pool.py:74-90`) no descarta nada por proveedor, luego la nativa no llega al pool por
+otra vía y queda **pendiente de localizar dónde se cae**. Consecuencia para el censo: la etapa 1
+mide **18** tools, no 19, y la fila de `ToolSearch` queda en suspenso mientras el proveedor
+resuelva las diferidas por su cuenta.
 
 ---
 
@@ -111,8 +129,23 @@ tan sin estabilizar como una que no dispara nunca. Se anota su resultado aparte.
 
 | ronda | enunciado | `tool_calls` observados | ¿decisión prevista? |
 |---|---|---|---|
-| 1 | R1 | — | pendiente |
+| 0 | R1 | *anulada*: corrió con `cwd` = `agentic_code`, no el workspace de prueba | no cuenta |
+| 1 | R1 | `TaskCreate` · `read_file` · `glob`+`grep`×2 · `read_file`×4 · `grep`×3 · `read_file` · `Edit`×4 · `write_file` (denegada) | **NO** — cero llamadas a `TodoWrite` |
 | 2 | R2 | — | pendiente |
 | 3 | R3 | — | pendiente |
 | 4 | R4 | — | pendiente |
 | C | C1 | — | pendiente |
+
+**Diagnóstico de la ronda 1, con la prueba que faltaba.** El corte (a)/(b) de la advertencia de
+medición queda resuelto en **(b)**: `deferred_names` del `TurnStartEvent` incluye `TodoWrite`,
+luego el nombre **sí viajó** en el anuncio del turno 1 y el modelo eligió otro. El
+`search_hint` no es el sospechoso; lo son las superficies 2 y 3 frente a `TaskCreate`.
+
+Dos observaciones de la misma traza, anotadas y sin pagar:
+
+- **`TaskCreate` se usa como nota adhesiva.** Una sola tarea creada en la primera llamada del
+  turno, con el objetivo entero dentro, y **ni un solo `TaskUpdate`/`TaskList`** en los 8
+  requests siguientes. No compite por oficio: compite por nombre.
+- **La ronda se interrumpió después de la decisión**, no antes: `write_file` del `README.md`
+  denegado por el usuario y sesión terminada en `error_killed`. El punto de medición es el
+  turno 1 y estaba limpio, así que la fila vale.
