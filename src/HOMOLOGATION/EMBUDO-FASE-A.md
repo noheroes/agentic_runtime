@@ -36,6 +36,13 @@ agentic-code \
 Interactivo, **no** `--print`: en headless las tools de puerta única no se publican y el pool
 bajaría a 19, que no es el de la etapa. Una ronda = una sesión limpia; entre rondas, `/clear`.
 
+**Cadencia, decisión del usuario (2026-08-16): ni tandas ni adelantos.** Una ronda, su lectura,
+y la siguiente — no se lanzan varias seguidas para leerlas juntas. El ciclo ajuste→medición se
+agota **dentro de la tool en curso** hasta que su resultado sea casi determinista; no se redactan
+enunciados de tools posteriores ni se toca su texto mientras la actual siga abierta. La
+competencia entre tools —vecindarios, reordenar el ataque— es fase B y va **después** de las
+rondas individuales, verbatim del usuario en `D-28`.
+
 ## Marcador
 
 | # | tool | rondas 4/4 | estado |
@@ -138,14 +145,35 @@ tan sin estabilizar como una que no dispara nunca. Se anota su resultado aparte.
 
 **Diagnóstico de la ronda 1, con la prueba que faltaba.** El corte (a)/(b) de la advertencia de
 medición queda resuelto en **(b)**: `deferred_names` del `TurnStartEvent` incluye `TodoWrite`,
-luego el nombre **sí viajó** en el anuncio del turno 1 y el modelo eligió otro. El
-`search_hint` no es el sospechoso; lo son las superficies 2 y 3 frente a `TaskCreate`.
+luego el nombre **sí viajó** en el anuncio del turno 1 y el modelo no la llamó. El
+`search_hint` no es el sospechoso; lo son las superficies 2 y 3 de `TodoWrite`.
+
+**Lo que esta ronda NO autoriza.** Que la traza abra con `TaskCreate` es observación, no
+diagnóstico: comparar dos tools y delimitar vecindarios es fase B, y el usuario fijó el orden
+—primero las cuatro rondas individuales de la tool, la competencia después—. La comparación con
+`TaskCreate` queda **en cola para la fase B** y no se toca su texto ni se reordena el ataque por
+ella. El ajuste de esta ficha, cuando haya 4 filas, se hace sobre las superficies 2 y 3 de
+`TodoWrite` y sobre nada más.
 
 Dos observaciones de la misma traza, anotadas y sin pagar:
 
-- **`TaskCreate` se usa como nota adhesiva.** Una sola tarea creada en la primera llamada del
-  turno, con el objetivo entero dentro, y **ni un solo `TaskUpdate`/`TaskList`** en los 8
-  requests siguientes. No compite por oficio: compite por nombre.
+- **`TaskCreate` se usa como nota adhesiva** (material de fase B). Una sola tarea creada en la
+  primera llamada del turno, con el objetivo entero dentro, y **ni un solo `TaskUpdate`/`TaskList`**
+  en los 8 requests siguientes.
 - **La ronda se interrumpió después de la decisión**, no antes: `write_file` del `README.md`
   denegado por el usuario y sesión terminada en `error_killed`. El punto de medición es el
   turno 1 y estaba limpio, así que la fila vale.
+
+## Hallazgos en cola — anotados, no pagados en esta fase
+
+La regla de foco: un hallazgo a medio camino se paga con este rigor sólo si bloquea la medición
+en curso. Ninguno de éstos la bloquea —el punto de medición es el turno 1—, pero encarecen la
+pasada orgánica y quedan aquí para no perderse.
+
+| # | hallazgo | dónde | efecto |
+|---|---|---|---|
+| H-1 | El diálogo de aprobación se pintó **sin las opciones de aprobar/denegar**: sólo la ventana flotante con el contenido a escribir. `ESC` cancela la tool y mata la sesión (`error_killed`). | TUI (`agentic_code`) — **no se toca**, la lleva Codex | corta toda ronda en la primera tool de escritura; hay que avisar, no parchear |
+| H-2 | Tras `error_killed`, `session.json` reinicia vacío: el «reintenta» del usuario llegó a un modelo sin conversación previa, y sólo «retoma» funcionó porque reexploró desde cero. | `agentic_runtime`, persistencia de sesión | la ronda no se puede continuar tras un corte; se rehace en workspace limpio |
+| H-3 | La tool `grep` rechaza `src/**/*.py` con «`**` can only be an entire path component»; el modelo reintentó cuatro veces partiendo el glob. | `agentic_runtime`, `grep` nativa | ruido en la traza, cuatro llamadas perdidas por ronda |
+| H-4 | `prompt-toolkit` y `wcwidth` no están declarados en `agentic_code/pyproject.toml`; cada `uv sync` los poda. | `agentic_code` | rompe el trabajo de TUI en paralelo |
+| H-5 | La `ToolSearch` nativa no llega al pool publicado con este proveedor. `pool.py:74-90` descartado como causa. | por localizar | la etapa 1 mide 18, no 19 |
