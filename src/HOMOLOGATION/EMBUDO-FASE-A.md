@@ -36,6 +36,20 @@ agentic-code \
 Interactivo, **no** `--print`: en headless las tools de puerta única no se publican y el pool
 bajaría a 19, que no es el de la etapa. Una ronda = una sesión limpia; entre rondas, `/clear`.
 
+**Quién corre y con qué (decisión del usuario, 2026-08-16).** Las rondas de esta etapa las corre
+el asistente; el usuario reserva sus pasadas para la etapa donde aportan valor —encadenamiento de
+tools en el loop y multiturno—. Eso cambia **quién teclea, no el instrumento**: sigue siendo la
+sesión interactiva real, conducida por pty desde bash (`scratchpad/ronda.py`), con la TUI intacta.
+`-p` sigue prohibido: no publica las tools de puerta única y no acredita (`D-24`). Lo que queda
+pendiente y se declara: el veredicto orgánico del usuario sobre esta etapa.
+
+**El bucle, verbatim del usuario (2026-08-16):** *«pruebas cada tool 4 veces, si no son 4 de 4,
+ajustas el prompt y pruebas otras 4 veces con nuevos enunciados, así hasta que sean 4 de 4, está
+prohibido repetir los enunciados, porque estoy seguro que aprovecharías para meter alineaciones en
+las iteraciones para que llegues a 4 de 4 ajustando el prompt con alineamiento al caso.»* Cada
+iteración estrena sus cuatro enunciados; un enunciado usado —o cuyo resultado ya se ha visto por
+cualquier vía— no vuelve.
+
 **Cadencia, decisión del usuario (2026-08-16): ni tandas ni adelantos.** Una ronda, su lectura,
 y la siguiente — no se lanzan varias seguidas para leerlas juntas. El ciclo ajuste→medición se
 agota **dentro de la tool en curso** hasta que su resultado sea casi determinista; no se redactan
@@ -112,7 +126,14 @@ ejemplo y no el criterio.
 - **R1** — «Este repositorio tiene que quedar listo para publicarse: licencia MIT, un README
   que explique cómo instalarlo y usarlo, y la versión en 1.0.0 en todos los sitios donde
   aparezca.»
-- **R2** — «Esta aplicación tarda demasiado en arrancar y quiero que arranque rápido.»
+- **R2** — ~~«Esta aplicación tarda demasiado en arrancar y quiero que arranque rápido.»~~
+  **QUEMADO y retirado (2026-08-16).** Se corrió en headless (`-p`), que no es la etapa, y con eso
+  quedó vista la respuesta del modelo a ese texto. Medirlo ahora sería medir con el resultado
+  delante, que es exactamente lo que prohíbe la regla de no repetir enunciados. No cuenta como
+  ronda y no vuelve.
+- **R2′** — «Esta herramienta se come toda la memoria cuando le paso ficheros grandes y quiero
+  que deje de hacerlo.» Hereda el papel de R2: objetivo único cuya complejidad sólo aparece tras
+  explorar.
 - **R3** — «Quiero poder levantar esto en un contenedor, con las dependencias fijadas y
   explicado cómo se usa.»
 - **R4** — «Que este proyecto deje de imprimir por pantalla y pase a llevar un registro de
