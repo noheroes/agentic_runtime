@@ -3,35 +3,40 @@
 Se anota **sólo la estabilización**: 4 de 4 con la decisión prevista. Un check y nada más.
 Todo lo anterior de este fichero (método, enunciados, diagnósticos) está en el historial de git.
 
+Dos columnas, ambas exigidas para avanzar:
+
+- **elige** — la tool gana los 4 casos que son suyos.
+- **cierra** — el resultado basta: tras su llamada no se invoca otra tool para obtener lo que ese resultado debía afirmar (existencia, efecto, alcance).
+
 ## Bloque 1 — individuales
 
-| tool | ok |
-|---|---|
-| `write_file` | ok |
-| `read_file` | ok |
-| `glob` | |
-| `grep` | |
-| `bash` | |
-| `WebSearch` | |
-| `WebFetch` | |
+| tool | elige | cierra |
+|---|---|---|
+| `write_file` | ok | |
+| `read_file` | ok | |
+| `glob` | | |
+| `grep` | | |
+| `bash` | | |
+| `WebSearch` | | |
+| `WebFetch` | | |
 
 ## Bloque 2 — compuestas
 
-| tool | ok |
-|---|---|
-| `TodoWrite` | |
-| `Edit` | |
+| tool | elige | cierra |
+|---|---|---|
+| `TodoWrite` | | |
+| `Edit` | | |
 
 ## Bloque 3 — familia `Task`, marcador único
 
-| tools | ok |
-|---|---|
-| `TaskCreate` · `TaskGet` · `TaskList` · `TaskOutput` · `TaskStop` · `TaskUpdate` | |
+| tools | elige | cierra |
+|---|---|---|
+| `TaskCreate` · `TaskGet` · `TaskList` · `TaskOutput` · `TaskStop` · `TaskUpdate` | | |
 
 ## Bloque 4 — aparte
 
-| tool | ok |
-|---|---|
-| `AskUserQuestion` | |
+| tool | elige | cierra |
+|---|---|---|
+| `AskUserQuestion` | | |
 
 Fuera del embudo: `Config` · `Sleep` · `ToolSearch`.

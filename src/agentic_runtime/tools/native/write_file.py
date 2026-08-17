@@ -40,8 +40,15 @@ Usage:
         except PathOutsideWorkspace as exc:
             return ToolResult.error(self.name, str(exc))
         try:
+            existia = path.exists()
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(input["content"])
-            return ToolResult(tool_name=self.name, output=ctx.presentation.to_llm(path))
+            mostrado = ctx.presentation.to_llm(path)
+            cierre = "(file state is current in your context — no need to read it back)"
+            if existia:
+                salida = f"The file {mostrado} has been updated successfully. {cierre}"
+            else:
+                salida = f"File created successfully at: {mostrado} {cierre}"
+            return ToolResult(tool_name=self.name, output=salida)
         except Exception as exc:  # noqa: BLE001
             return ToolResult.error(self.name, str(exc))
