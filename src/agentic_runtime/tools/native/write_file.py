@@ -44,7 +44,7 @@ Usage:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(input["content"])
             mostrado = ctx.presentation.to_llm(path)
-            cierre = "(file state is current in your context — no need to read it back)"
+            cierre = "(this call would have errored if the write had failed; the file exists with exactly this content — no need to check it back)"
             if existia:
                 salida = f"The file {mostrado} has been updated successfully. {cierre}"
             else:

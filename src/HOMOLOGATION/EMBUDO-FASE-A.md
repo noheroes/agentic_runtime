@@ -12,8 +12,8 @@ Dos columnas, ambas exigidas para avanzar:
 
 | tool | elige | cierra |
 |---|---|---|
-| `write_file` | ok | |
-| `read_file` | ok | |
+| `write_file` | ok | ok |
+| `read_file` | ok | ok |
 | `glob` | | |
 | `grep` | | |
 | `bash` | | |
