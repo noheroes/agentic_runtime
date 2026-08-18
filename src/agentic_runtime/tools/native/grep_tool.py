@@ -16,14 +16,18 @@ _VCS_DIRS = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 
 class GrepTool:
     name = "grep"
-    search_hint = "search file contents with regex (ripgrep)"
+    search_hint = "search file contents with a Python regex"
     description = """A powerful search tool for finding content inside files.
 
 Usage:
 - ALWAYS use this tool for content search. NEVER invoke `grep` or `rg` as a shell command —
   this tool is optimized for correct permissions and workspace confinement.
 - Supports Python regular expression syntax (e.g. "log.*Error", r"def\\s+\\w+")
+- Patterns are case-sensitive: prefix with `(?i)` to match regardless of case
+  (e.g. "(?i)level" finds LEVEL_NAMES, Level and level alike)
 - Filter which files are searched with the `glob` parameter (e.g. "*.py", "**/*.ts")
+- Results include every readable file under `path`, generated and binary ones among them
+  (`__pycache__`, build output): narrow with `glob` when the target is source
 - Output is one line per match, formatted `path:line: text`; version-control directories
   are skipped and very long lines are elided
 - Patterns match within a single line only
@@ -66,6 +70,8 @@ Usage:
         try:
             regex = re.compile(pattern)
             results: list[str] = []
+            searched = 0
+            matched_files = 0
             for file_path in sorted(base.glob(file_glob)):
                 if any(part in _VCS_DIRS for part in file_path.parts):
                     continue
@@ -73,20 +79,34 @@ Usage:
                     continue
                 shown_path = ctx.presentation.to_llm(file_path)
                 try:
+                    hits_before = len(results)
                     for i, line in enumerate(file_path.read_text(errors="replace").splitlines(), 1):
                         if regex.search(line):
                             if len(line) > MAX_LINE_LEN:
                                 line = line[:MAX_LINE_LEN] + "…"
                             results.append(f"{shown_path}:{i}: {line}")
+                    searched += 1
+                    if len(results) > hits_before:
+                        matched_files += 1
                 except OSError:
                     pass
             total = len(results)
+            scope = f"{searched} file(s) searched under {ctx.presentation.to_llm(base)} (glob \"{file_glob}\")"
             selected = results[offset:] if head_limit == 0 else results[offset : offset + head_limit]
             output = "\n".join(selected)
-            if head_limit != 0 and total - offset > head_limit:
+            if total == 0:
+                output = f"[No matches for this pattern: {scope}.]"
+            elif head_limit != 0 and total - offset > head_limit:
                 output += (
-                    f"\n\n[Showing {len(selected)} of {total} matches. Use a more specific "
+                    f"\n\n[Showing {len(selected)} of {total} matches in {matched_files} file(s); "
+                    f"{scope}. Each line above is quoted verbatim from the file. Use a more specific "
                     f"pattern/path, offset to paginate, or head_limit=0 for all.]"
+                )
+            else:
+                output += (
+                    f"\n\n[{total} match(es) in {matched_files} file(s); {scope}. Every match is "
+                    f"listed above, quoted verbatim from the file — open a file only when you need "
+                    f"context beyond the matched lines.]"
                 )
             return ToolResult(tool_name=self.name, output=output)
         except re.error as exc:

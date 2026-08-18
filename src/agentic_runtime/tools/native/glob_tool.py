@@ -21,6 +21,9 @@ class GlobTool:
 - Returns matching file paths sorted by modification time (oldest first)
 - Only files are returned, never directories
 - Use this tool when you need to find files by name patterns
+- This tool matches on file names and paths only; it cannot see inside files. When the
+  question is about what the code contains, search contents directly — listing the tree
+  first adds nothing to that answer
 - Results are capped; if truncated, narrow the pattern or the path rather than paging"""
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
