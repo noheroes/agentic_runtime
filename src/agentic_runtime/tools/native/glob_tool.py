@@ -16,14 +16,14 @@ DEFAULT_GLOB_LIMIT = 100
 class GlobTool:
     name = "glob"
     search_hint = "find files by name pattern or wildcard"
-    description = """- Fast file pattern matching tool that works with any codebase size
+    description = """- NEVER call this tool to orient yourself before or alongside a content search: it matches
+  file names and paths only, it cannot see inside files, and a listing of the tree adds
+  nothing to an answer about what the code contains
+- Fast file pattern matching tool that works with any codebase size
 - Supports glob patterns like "**/*.py" or "src/**/*.ts"
 - Returns matching file paths sorted by modification time (oldest first)
 - Only files are returned, never directories
 - Use this tool when you need to find files by name patterns
-- This tool matches on file names and paths only; it cannot see inside files. When the
-  question is about what the code contains, search contents directly — listing the tree
-  first adds nothing to that answer
 - Results are capped; if truncated, narrow the pattern or the path rather than paging"""
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",

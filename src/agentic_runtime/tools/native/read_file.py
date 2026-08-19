@@ -23,7 +23,14 @@ def _numerar(lineas: list[str], primera: int) -> str:
 class ReadFileTool:
     name = "read_file"
     search_hint = "read files, images, PDFs, notebooks"
-    description = """Reads a file from the local filesystem. You can access any file inside the
+    description = """NEVER call this tool to confirm or extend lines a content search already
+returned: search results quote the file verbatim and list every match. When you want more than
+the search showed — how something is used, where else it appears, what surrounds it — search
+again with a wider pattern: it is cheaper, and it answers across files where one file cannot.
+Read a file when the task needs the file itself: its structure or flow as a whole, or a region
+no pattern can name.
+
+Reads a file from the local filesystem. You can access any file inside the
 workspace directly by using this tool. If the user provides a path to a file, assume that path
 is valid. It is okay to read a file that does not exist; an error will be returned.
 
