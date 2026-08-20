@@ -1538,3 +1538,68 @@ tras editar, filtrado por `.gitignore` que cambia el conjunto de respuestas.
 `D-28` sigue mandando sobre el método del embudo. `D-08` conserva su alcance. Y la arquitectura por
 capas queda reforzada, no tocada: el núcleo no se adapta al integrador, y ahora además **no decide
 por él cuánto determinismo necesita**.
+
+---
+
+## `D-32` — `grep`: una búsqueda que no se ejecutó no puede parecerse a una que no encontró nada (2026-08-19)
+
+**Origen.** Primer paso de la fase viva tras `D-31`: pulir la `description` que llega al modelo,
+tool por tool. `grep` no tiene fila en `PROCEDENCIA-DESCRIPCIONES.md` —su descripción ya era
+divergencia declarada, no port— pero sus **defectos de resultado** sí se resuelven contra el
+canónico (`D-08`).
+
+### El principio, enunciado por el propio canónico
+
+`GrepTool.ts:436-440`: *«If ripgrep times out, it throws RipgrepTimeoutError which propagates up so
+Claude knows the search didn't complete (rather than thinking there were no matches)»*. La regla que
+de ahí se extrae y que gobierna el corte: **una búsqueda que no se ejecutó no debe parecerse a una
+búsqueda que no encontró nada.** Es criterio de resultado funcional puro, no de ruta: no induce qué
+tool usar, hace que la salida no mienta.
+
+### Los cuatro casos, reproducidos en frío antes de tocar nada
+
+| caso | conducta anterior | por qué era falsa |
+|---|---|---|
+| `glob: "a.py\|b.py"` | `[No matches for this pattern: 0 file(s) searched…]` | la alternancia no es sintaxis glob; `pathlib` la toma literal y el patrón nunca se probó contra nada |
+| `path` inexistente | `[No matches for this pattern: 0 file(s) searched…]` | el directorio no existe; A lo corta en `validateInput` (`:201-232`) |
+| `glob: "a.py,b.py"` | `[No matches…]` | **A lo soporta**: `:391-409` parte por espacios y por comas |
+| `.pyc` en el árbol | `bin.pyc:3: \x00LEVEL\x00…` presentado como *«quoted verbatim from the file»* | ni es texto ni es verbatim; ripgrep salta binarios por defecto y A lo hereda gratis |
+
+El tercer caso explica el primero: el modelo quiso decir «estos tres ficheros», la superficie no
+sabía expresarlo, y alcanzó `|`, que falló callando (`D-21`).
+
+### El corte
+
+1. **`path` inexistente → error**, con el texto homologado de A:
+   `Path does not exist: {path}. Note: your current working directory is {cwd}.`
+   (`GrepTool.ts:201-232` + `utils/file.ts:213`).
+2. **Multi-glob** portado de `:391-409`: separación por espacios y por comas, unión de resultados,
+   deduplicada y ordenada.
+3. **Filtro de binarios en la etapa de SELECCIÓN**, no como post-paso — instrucción del usuario:
+   *«en el caso 2 tendriamos que aplicar un filtro para que solo opere sobre archivos no binarios»*.
+   Olfateo de byte nulo en los primeros 8 KiB. Así `searched` y la determinación de «el glob no
+   seleccionó ficheros» se calculan sobre el conjunto buscable.
+4. **El filtro se CUENTA, no se calla**: la línea de alcance declara cuántos se saltaron por binarios
+   y cuántos por ilegibles. Y si el glob seleccionó N ficheros y **todos** se saltaron, se dice eso —
+   no «no seleccionó ficheros», que sería otra mentira.
+5. **Glob que no selecciona nada → mensaje propio**, distinto de «sin coincidencias», que nombra el
+   remedio correcto (ampliar el glob) en vez de invitar a cambiar el patrón.
+
+### Divergencia añadida por mecánica de Python
+
+`pathlib` **tampoco expande llaves**, así que `*.{ts,tsx}` —justo lo que la descripción de A enseña
+en `GrepTool/prompt.ts:12`— habría fallado igual de callado. Se expande a mano (`_expandir_llaves`).
+Es `D-22`: lo que no está SE CREA, porque a A se lo regala ripgrep.
+
+### Omisión declarada, no callada
+
+No se porta el *«Did you mean …?»* de `validateInput`: depende de `suggestPathUnderCwd`
+(`utils/file.ts:228-267`), que es una heurística de «carpeta del repo caída» que no tenemos. Queda
+**declarada y vigilada** (`declarar-no-es-pagar`), no rotulada como paridad.
+
+### Lo que cambió en la `description`
+
+Las líneas que decían *«Results include every readable file under `path`, generated and binary ones
+among them»* pasaban a ser mentira con el corte 3, y se reescriben. Se añaden dos hechos —cómo
+expresar varios globs, y que un glob vacío se reporta como tal— **redactados como propiedades del
+resultado, no como inducción de ruta**, conforme al corolario de `D-31`.
