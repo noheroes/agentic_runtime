@@ -1847,3 +1847,40 @@ catalogado (`pwd`, `true`, `uname -a`).
 dos con sus enunciados de grado 1 (bloques `wg`/`wh`: 20/20, 20/20, 20/20). `GAP-WEBFETCH-2` sigue en
 pie y sin pagar: aunque el enrutado sea correcto, B necesita dos llamadas donde A necesita una, y el
 seam de modelo secundario es decisión de contrato.
+
+### Adenda a `D-35` (2026-08-20) — la cláusula de vecindario en `bash` NO cierra: probada y retirada
+
+**Origen, verbatim del usuario:** *«pero pregunta en bash, no podemos decir para que no debe usarse?
+a modo de experimento para ver si cierra?»*. Es la palanca que yo había propuesto primero y retirado
+sin medir; se mide.
+
+**Lo inyectado.** Una línea en la lista de preferencia de `bash`, en el estilo exacto de las que ya
+están: `Retrieve a web page: Use WebFetch (NOT curl/wget, and NOT an interpreter's HTTP client)`, con
+su razón (los topes que un lector a mano no aplica) y una salvaguarda para no contradecir a la
+`description` de `WebFetch` en lo del `gh`.
+
+**El marcador, bloque `wv`, mismos 4 enunciados y 20 rondas frías:**
+
+| | `bash` | scraper real | `WebFetch` | acierto |
+|---|---|---|---|---|
+| `wz` (nada) | 12/20 | 7/20 | 4/20 | 19/20 |
+| `wr` (trailer) | 13/20 | **1/20** | 12/20 | 20/20 |
+| `wv` (trailer + cláusula) | 7/20 | **2/20** | 11/20 | 20/20 |
+
+**No cierra.** De 1 a 2 en n=20 es ruido. La caída del `bash` total (13→7) viene del `date +%Y` de
+`w4`, ajeno a lo que la cláusula prohíbe, y no se le atribuye.
+
+**Por qué falla, leído en los dos supervivientes.** `wvw2_5` no scrapea una página: va contra
+`pypi.org/pypi/httpx/json` y `raw.githubusercontent.com/.../CHANGELOG.md` — un endpoint de API y un
+fichero de texto plano. **El modelo generalizó la salvaguarda del `gh` que yo mismo escribí**: si un
+CLI puede hablar la API de un servicio, `urllib` también. La excepción abrió la puerta. `wvw3_5` sí es
+un `HTMLParser` completo sobre las URL de Django, y ahí la cláusula simplemente no operó.
+
+**Retirada** por `D-28` (*«si no mueven marcador, salen»*), a mano y verificando que el árbol vuelve
+sin diff contra `fa50106`; nunca con `git checkout` (`D-12 · b`).
+
+**Lo que añade a la serie.** Tercera refutación de la palanca redactada en una `description`
+—`D-31`, `D-34` y ésta— frente a la única que movió el marcador, que fue el trailer en el
+**resultado**. La lectura que queda: prohibir en un sitio no le da al modelo la alternativa en el
+instante de decidir; informar en el punto de decisión, sí. Y una excepción escrita en una prohibición
+es una superficie que el modelo generaliza, no una acotación que respeta.
