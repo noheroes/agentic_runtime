@@ -15,7 +15,7 @@ Dos columnas, ambas exigidas para avanzar:
 | `write_file` | ok | ok |
 | `read_file` | ok | ok |
 | `glob` | ok | ok |
-| `grep` | | |
+| `grep` | ok | |
 | `bash` | | |
 | `WebSearch` | | |
 | `WebFetch` | | |

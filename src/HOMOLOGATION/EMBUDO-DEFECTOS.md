@@ -12,7 +12,9 @@ Al calibrar `grep`, `glob` y `bash` se reutilizan enunciados de los de `read_fil
 | x3 | `grep` | localizar un fichero por nombre (`code of conduct\|contributing`) en vez de `glob` | rival |
 | y2, y4, d2, d3, d5 | `grep` | patrón amplio sobre `**/*` en árbol de 10 ficheros, con `glob` ya corrido en la misma tanda | rival |
 | z2 | `grep` | `glob: "pyproject.toml\|src/**/*.py\|CHANGELOG.md"` — la alternancia no es sintaxis glob: no casa nada y devuelve vacío en silencio, indistinguible de «sin coincidencias» | resultado |
-| z2, d3, d4 | `grep` | busca dentro de `.pyc` y devuelve binario ilegible | resultado |
+| z2, d3, d4 | `grep` | consumido en `D-34`: buscaba dentro de `.pyc` porque no respetaba `.gitignore`, que es de donde A lo hereda gratis vía ripgrep | resultado |
+| gy1..gy4 | `grep` | consumido en `D-34`: el idioma `*.py` —28 de 29 globs en caliente— seleccionaba 0 ficheros con `pathlib` anclado y volvía como «sin coincidencias»; falso negativo indistinguible de ausencia real | resultado |
+| gx1..gx3, gy1..gy3 | `grep` | relectura con `read_file` de un fichero que `grep` ya había citado verbatim. Declarados `-C`/`-A`/`-B` en el esquema, el modelo no los usa **ni una vez en 29 llamadas** y `cierra` no mejora (7/20 → 5/20). Segunda refutación de la palanca redactada tras `D-31` | gpt-5.x |
 | x4 | `glob` | 6 tanteos sucesivos con `README*` y `**/README.md` repetidos | — |
 | c1 | `glob` | 3 tanteos (`README*`, `docs/**/*.md`, `**/README*`) para decidir dónde escribir | — |
 | g2 | `glob` | 3 tanteos en paralelo (`**/*test*`, `**/tests/**/*`, `**/test/**/*`) en la misma tanda; el primero ya resolvía y el tercero devolvió vacío | gpt-5.x |

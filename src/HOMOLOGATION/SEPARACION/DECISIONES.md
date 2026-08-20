@@ -1669,3 +1669,94 @@ El esquema de entrada sólo tiene `command`: sin `timeout` ni `description`, y e
 en 30 s (A: 120 s por defecto, 600 s de máximo, y parámetro). Con `pytest` o builds reales eso corta
 por entorno y no por conducta. Queda **declarada y vigilada** (`declarar-no-es-pagar`), no rotulada
 como paridad.
+
+---
+
+## `D-34` — `grep`: el glob se homologa a ripgrep, y la relectura NO es carencia de superficie (2026-08-20)
+
+**Origen.** Tercer paso de la fase viva tras `D-33`, misma mecánica: `GrepTool.ts` (577 L),
+`GrepTool/prompt.ts` y `utils/ripgrep.ts` leídos 1→EOF; defectos reproducidos en frío antes de tocar
+nada — 20 rondas de cuatro enunciados de grado 1 (`embudo/bloque-grep.sh`, bloque `gx`) y 20 rondas
+del mismo bloque tras el corte (`gy`).
+
+### Lo que la reproducción en frío dejó ver
+
+| | elige | cierra | acierto |
+|---|---|---|---|
+| `gx` (frío) | 20/20 | **7/20** | 20/20 |
+| `gy` (caliente) | 20/20 | **5/20** | 20/20 |
+
+`elige` estaba cerrado desde el principio: `grep` gana sus cuatro casos en las 40 rondas, sin `bash`
+y sin `read_file` previo. El acierto funcional es perfecto en ambos bloques. Lo único abierto es
+`cierra`, y el corte **no lo mueve**.
+
+### El defecto determinista: `pathlib.Path.glob` está anclado, `--glob` de ripgrep no
+
+A no implementa el filtro: se lo pasa a ripgrep (`GrepTool.ts:406-408`), donde un patrón sin `/` casa
+el **nombre de fichero a cualquier profundidad**. B lo hacía con `base.glob(patron)`, que ancla en la
+base. Medido sobre la fixture `logmerge`:
+
+| patrón | `pathlib` | `rg` |
+|---|---|---|
+| `*.py` | **0** | **5** |
+| `test_*.py` | **0** | **1** |
+| `*.log` | **0** | **2** |
+| `*.{py,toml}` | **0** | **6** |
+| `**/*.py` | 5 | 5 |
+| `src/**/*.py` | 4 | 4 |
+
+Es exactamente el modo de fallo que legisló `D-32`: el idioma que enseñan **las dos** descripciones
+—`GrepTool/prompt.ts:12` y la nuestra— devolvía `[No matches for this pattern: 1 file(s) searched…]`,
+un falso negativo indistinguible de una ausencia real. Y dejaba medio muerta la expansión de llaves
+que `D-32` había añadido, porque `*.{py,toml}` expande a `*.py`, que seguía dando 0.
+
+**En frío el defecto no llegó a dispararse**: gpt-5.x escribía `**/*` (15 de 30) y `**/*.py` (7), no
+el idioma corto. Pero en caliente, con la propiedad declarada en la descripción, **cambió de idioma
+en el acto: 28 de 29 globs sin `/`, `*.py` siete veces**. Sin el corte, esas 28 llamadas habrían
+vuelto vacías en silencio. La descripción no indujo una ruta: le devolvió al modelo un idioma que ya
+quería hablar y que la superficie no sabía escuchar (`D-21`).
+
+### El corte
+
+1. **Glob por nombre**: patrón sin `/` se antepone `**/`, replicando `--glob`. Y **negación `!patrón`**,
+   que rg soporta y B ignoraba (`_por_nombre`, conjunto `descartados`).
+2. **`.gitignore` respetado** en la etapa de selección. ripgrep lo hace por defecto y A lo hereda
+   gratis; es `D-22`. Cura el apunte «busca dentro de `.pyc`»: sobre la fixture, `**/*` pasa de 14
+   candidatos con 4 binarios saltados a 10 ficheros limpios, los mismos 9 + `.gitignore` que da
+   `rg --files`.
+3. **`-A` / `-B` / `-C` / `context`** portados de `:58-67`, con las líneas de contexto marcadas
+   `path-line- text` frente a `path:line: text` de las coincidencias, como rg.
+4. **`-i`** portado de `:71-73`.
+5. **`output_mode`** portado de `:52-57`, con `content` como defecto — **divergencia consciente**: en A
+   el defecto es `files_with_matches` (`:316`), que por construcción no cierra nada y obliga a una
+   segunda pasada. Adoptarlo tal cual empeoraría `cierra`. Se declara aquí, no se rotula como paridad.
+
+### La refutación: `-C` existe y el modelo no lo usa
+
+La hipótesis con la que se pidió el corte era que `cierra` caía porque, sin contexto, la única forma
+de ver el entorno de una coincidencia era abrir el fichero — y el sello de B llegaba a prometer algo
+que la tool no sabía dar. Se declaró `-C`/`-A`/`-B` en el esquema y en la descripción.
+
+**Uso en 29 llamadas del bloque caliente: cero.** El modelo sí adoptó `output_mode` —lo pasa
+explícitamente en 29 de 29— y sigue abriendo el fichero: 14 relecturas de `core.py`, 5 de
+`patterns.py`, 5 de `cli.py`. `cierra` va de 7/20 a 5/20.
+
+La conclusión es la de `D-31`, ahora con una segunda medición independiente: **la palanca redactada no
+sostiene**. La relectura de lo que `grep` ya citó verbatim queda atribuida a `gpt-5.x` en
+`EMBUDO-DEFECTOS.md`, no a la superficie, y no se persigue con más texto.
+
+Consecuencia sobre el propio sello: la frase *«open a file only when you need context beyond the
+matched lines»* y su sucesora *«rather than opening the file»* son inducción de ruta, y están medidas
+como inoperantes. Se reescriben como propiedad del resultado —*«the lines around any of them come back
+in this same result with -C, -A or -B»*— conforme al corolario de `D-31`.
+
+### Estado en el marcador
+
+`grep` obtiene **check en `elige`** (4/4 en los cuatro enunciados, en los dos bloques) y **no lo
+obtiene en `cierra`**. No se cierra la fila.
+
+### Lo que el corte sí paga
+
+Un modo de fallo silencioso que el idioma real del modelo dispara en 28 de 29 llamadas, más la
+paridad de `.gitignore`, negación, contexto, `-i` y `output_mode` frente a un esquema que declaraba 5
+campos donde A declara 14. Que no mueva `cierra` no lo hace menos exigible: `cierra` no era suyo.
