@@ -1462,3 +1462,79 @@ acreditados en rojo contra la conducta anterior por inyección revertida desde c
 sin deny > bypass, `--denied-tool` no acota el pool bajo `--dangerously-skip-permissions` y la ronda
 deja de medir la etapa que dice medir (fue así como el defecto se detectó: pool de 21 donde tocaban
 10). `D-08` conserva su alcance: el consumidor DETECTA, el canónico DICTA.
+
+---
+
+## `D-31` — El núcleo NO persigue el determinismo: persigue el resultado funcional (2026-08-19)
+
+**Origen.** Cierre de la fase A del embudo (`D-28`). Tras montar tres brazos —forma homologada,
+forma openclaw y forma PI— y medir 60 rondas sobre la fixture `logmerge`, el usuario cortó la veta
+entera: *«un control determinista implica heuristica, alineamiento a casos especificos, por tanto en
+una solucion agentica que es dinamica por naturaleza no encaja a menos que estemos ante una solucion
+que solo resuelve un numero finito de casos de uso»*, y fijó el criterio: *«cualquiera sea la
+conjugacion de las tools que use el agente, el resultado funcional sea el esperado»*.
+
+### La medición que llevó ahí
+
+Tres brazos, cuatro enunciados, cinco repeticiones. **Acierto: 20/20 en los tres.** Lo único que los
+separó fue la ruta: 9 formas distintas de 20 en PI, 8 en openclaw, 15 y 13 en las dos corridas de la
+homologada; σ intra-enunciado 0.32 / 0.41 / 0.99 y 0.72. Y la homologada fue **la más barata**
+(2.40 llamadas frente a 3.00). Menos dispersión se pagó con más coste, y el acierto no se movió.
+
+Los brazos menos dispersos lo eran por tener **cuatro herramientas en vez de seis** —menos entre qué
+elegir—, no por saber nada del caso. Eso es determinismo por reducción de la superficie, no por
+alineamiento.
+
+### La evidencia que cierra la puerta a la palanca textual
+
+Baseline sobre las 40 rondas de la ruta homologada (`s` y `u`): `read_file` tras `write_file`, **0 de
+40** —el sello de `write_file` no tiene nada que inhibir ahí—; `read_file` releyendo un fichero que
+`grep` ya había devuelto, **8 de 40**, y en el enunciado e2 **6 de 10**.
+
+En `u2_2` el `grep` devolvió `patterns.py:3: LEVEL_NAMES = [...]` —la respuesta completa del
+enunciado, con su número de línea— y cerró con
+`«Every match is listed above, quoted verbatim from the file — open a file only when you need context
+beyond the matched lines.»` El modelo abrió el fichero igualmente. Mismo estímulo y misma frase de
+cierre, `u` releyó en 4 de 5 rondas y `s` en 2 de 5.
+
+**La palanca redactada ya está puesta y no sostiene.** Añadir más cierres en más tools es repetir lo
+que la evidencia acaba de refutar.
+
+### La regla
+
+- **Determinismo por alineamiento** —«en esta situación, haz esto»— es heurística, es finita por
+  construcción, y **no entra en el núcleo**. Cabe en un integrador que resuelve un número finito de
+  casos de uso, porque ése sí los conoce.
+- Lo que el núcleo persigue es que **el resultado funcional sea el esperado sea cual sea la
+  conjugación de tools** que el agente elija. La variación de ruta no es un defecto mientras el
+  resultado se sostenga.
+- Corolario para las descripciones y la superficie: no se redactan para inducir una ruta, sino para
+  que cualquiera de las rutas posibles llegue al mismo resultado.
+
+### Lo que se retiró al tomarla
+
+Todo. Los paquetes `forma_openclaw/` y `forma_pi/` de `agentic_runtime`, los prompts clonados
+`system_prompt_openclaw.py` y `system_prompt_pi.py` de `agentic_code`, las ramas por variable de
+entorno en `tools/factory.py` y `composition.py`, y el punto de extensión `cierre` que llegué a
+construir sobre `write_file` con delta de conducta cero. Revertido a mano desde copia verificada por
+`sha256`, nunca con `git checkout` (`D-12 · b`). Los dos repos quedan byte a byte en `bce0289`.
+
+No se construyó el **registro de entrega** que propuse —anotar qué contenido ya se entregó verbatim
+para que `read_file` no lo repitiese—: era la misma heurística, sólo que estructural, y por
+estructural más difícil de deshacer.
+
+### Lo que esta decisión deja al descubierto
+
+El instrumento no mide lo que ahora manda. `embudo/acierto.py:38` exigía en e2 un número de línea
+tras el nombre del fichero: eso es **convención de cita**, no resultado funcional, y marcó en rojo
+dos rondas cuya respuesta era correcta. Y los cuatro enunciados de la fixture no pueden fallar por
+ruta —toda conjugación llegaba a la respuesta—, así que 460+ rondas dicen mucho de la ruta y casi
+nada del criterio que acabamos de adoptar. La fixture que hace falta es la que contiene casos donde
+**conjugaciones distintas producen resultados funcionales distintos**: truncamiento, lectura obsoleta
+tras editar, filtrado por `.gitignore` que cambia el conjunto de respuestas.
+
+### Lo que NO deroga
+
+`D-28` sigue mandando sobre el método del embudo. `D-08` conserva su alcance. Y la arquitectura por
+capas queda reforzada, no tocada: el núcleo no se adapta al integrador, y ahora además **no decide
+por él cuánto determinismo necesita**.
