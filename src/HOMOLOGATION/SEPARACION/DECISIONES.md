@@ -1760,3 +1760,90 @@ obtiene en `cierra`**. No se cierra la fila.
 Un modo de fallo silencioso que el idioma real del modelo dispara en 28 de 29 llamadas, más la
 paridad de `.gitignore`, negación, contexto, `-i` y `output_mode` frente a un esquema que declaraba 5
 campos donde A declara 14. Que no mueva `cierra` no lo hace menos exigible: `cierra` no era suyo.
+
+---
+
+## `D-35` — `WebSearch`/`WebFetch`: la información se pone donde se decide, no donde se documenta (2026-08-20)
+
+**Origen, verbatim del usuario.** Dos turnos. Primero el diagnóstico: *«la divergencia real es grave,
+si el LLM tiene que construirse su propio escraper porque webseach no le dio informacion extraida no
+debio apoyarse en webfetch en lugar de bash?»*. Y después, contra la palanca que yo proponía: *«y no
+se resuelve con algo mas en el prompt que le brinde al llm la informacion que necesita para decidir
+vs hacerlo mediante otra mas generica donde tiene mas control?»*.
+
+### Lo que la reproducción en frío dejó ver
+
+`WebSearchTool/prompt.ts`, `WebSearchTool.ts`, `WebFetchTool/prompt.ts`, `WebFetchTool.ts`, `utils.ts`
+y `preapproved.ts` leídos 1→EOF. Bloque `wz`, 20 rondas: `elige` 20/20, `acierto` 19/20, y en 12 de 20
+el modelo bajaba a `bash`; **7 de ellas a escribir un lector de HTML a mano** (`urllib` + `HTMLParser`,
+un intento con `bs4`) sobre las URL que la búsqueda acababa de devolver.
+
+### El diagnóstico, y por qué mi primera propuesta era la equivocada
+
+Yo iba a añadir una lista NOT en la `description` de `bash` — la palanca de `D-33`, la única que había
+sostenido. **El fuente la desmintió antes de tocarla:**
+
+1. **La información YA estaba escrita**, y en la tool correcta: `web_fetch.py` dice *«The content is
+   returned as markdown for YOU to extract from; it is not pre-summarized by another model»*. Aun así,
+   12 de 20.
+2. **La asimetría es mecánica, no retórica.** `WebSearch` y `WebFetch` llevan `deferred = True`
+   (`D-19`); `bash` no. En el instante de decidir, la única tool cuya descripción está garantizada en
+   contexto es la genérica. **No era persuasión: era presencia.**
+3. **El canónico tiene el mismo hueco y no lo paga.** El bloque de preferencia de `bash`
+   (`BashTool/prompt.ts:280-291`) enumera búsqueda, lectura, edición, escritura y comunicación, y **no
+   dice nada de red**. A nunca lo sufre porque su resultado de búsqueda ya trae el contenido redactado
+   por su modelo interno (`GAP-WEBFETCH-2`); en B el segundo salto queda sin nombrar.
+4. **La procedencia de la URL es lo que separa los dos regímenes**, y está medido: URL dada por el
+   usuario (bloque `f`) → `WebFetch` 20/20; URL devuelta por la búsqueda (bloque `wz`) → `bash` 12/20.
+   Misma tool, misma descripción, mismo modelo.
+
+### El corte
+
+Un trailer en el **resultado** de `_serper_search` que dice que lo devuelto son títulos, enlaces y
+extractos, que el contenido de una página se obtiene pidiéndola, y que no se escriba un lector propio.
+Va **en el resultado y no en el prompt** porque es el único punto del turno que está en contexto justo
+cuando el hueco se abre, y es además el canal que A ya usa ahí (el REMINDER que sostiene la sección
+`Sources:`). **No nombra ninguna tool**: el runtime no puede suponer qué tiene registrado el
+integrador.
+
+### El marcador — `wz` (antes) contra `wr` (después), 20 rondas frías por lado
+
+| | elige | scraper HTML | `WebFetch` usado | acierto | cierra |
+|---|---|---|---|---|---|
+| `wz` | 20/20 | **7/20** | 4/20 | 19/20 | 8/20 |
+| `wr` | 20/20 | **1/20** | **12/20** | **20/20** | 5/20 |
+
+`cierra` baja **por construcción y no es regresión**: el trailer prescribe una segunda llamada, luego
+«tras `WebSearch` no se invoca otra tool» es inexpresable en los enunciados de grado 2. Donde `cierra`
+significa algo es en los de grado 1, que siguen 20/20.
+
+### Tensión con `D-31`, declarada
+
+El corolario de `D-31` prohíbe redactar para inducir una ruta, porque *«cualquiera de las rutas
+posibles llegue al mismo resultado»*. **Aquí las rutas NO son equivalentes, y ésa es la única razón por
+la que este texto entra.** El scraper improvisado se salta todas las guardas que la tool implementa:
+el tope de 10 MB, la subida http→https, el corte de redirecciones de origen distinto, el truncado a
+100 K y el timeout. No es una ruta distinta al mismo sitio: es la misma respuesta con la superficie de
+seguridad evaporada. Cuando dos rutas difieren en propiedades del resultado, nombrarlo es propiedad
+del resultado, no inducción. Si las rutas fueran equivalentes, `D-31` mandaría y el texto no entraría.
+
+### Lo que el residuo de `bash` destapó, y que es de otra capa
+
+De las 13 rondas de `wr` con `bash`, casi todas son el modelo **preguntando en qué año vive**
+(`date +%Y`, `date -I`, `python -c print(date.today().year)`). La `description` de `WebSearch` le exige
+en mayúsculas usar el año en curso en la consulta —literal de A, `WebSearchTool/prompt.ts`— y **el
+contexto no lo lleva**: verificado en el `session.json` de `wrw4_3`, el único `2026` anterior a la
+primera llamada es el que el propio modelo escribe en la query. Es el mismo patrón que esta decisión
+—información que falta, herramienta genérica— pero **se paga en el bloque de entorno del integrador**,
+no en el runtime, y no antes de leer en el canónico dónde inyecta A la suya (`D-08`).
+
+El resto del residuo es `gh`/`pip index` en el caso de httpx, que **lo prescribe la propia
+`description` de `WebFetch`** (*«For GitHub URLs, prefer the `gh` CLI via the bash tool»*), y ruido ya
+catalogado (`pwd`, `true`, `uname -a`).
+
+### Estado en el marcador
+
+`WebFetch` cerrado en las dos columnas (bloque `wz`: 20/20, 20/20, 20/20). `WebSearch` cerrado en las
+dos con sus enunciados de grado 1 (bloques `wg`/`wh`: 20/20, 20/20, 20/20). `GAP-WEBFETCH-2` sigue en
+pie y sin pagar: aunque el enrutado sea correcto, B necesita dos llamadas donde A necesita una, y el
+seam de modelo secundario es decisión de contrato.

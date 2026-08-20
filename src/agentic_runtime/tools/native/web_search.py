@@ -21,6 +21,13 @@ _DEFAULT_TIMEOUT = 20
 _DEFAULT_MAX_RESULTS = 5
 _MAX_RESULTS_CAP = 20
 
+_RECORDATORIO = (
+    "\n\nREMINDER: the above are titles, links and snippets — the pages themselves are NOT "
+    "included here. When you need what a page actually says, retrieve that URL with the tool "
+    "that fetches URL content and returns it as markdown. Do not write your own fetcher or "
+    "HTML parser in a shell command to do it."
+)
+
 
 class WebSearchTool:
     name = WEB_SEARCH_TOOL_NAME
@@ -163,4 +170,4 @@ def _serper_search(tool_name: str, query: str, n: int, api_key: str) -> ToolResu
         lines.append(f"   {r.get('link', '')}")
         if r.get("snippet"):
             lines.append(f"   {r['snippet']}")
-    return ToolResult(tool_name=tool_name, output="\n".join(lines))
+    return ToolResult(tool_name=tool_name, output="\n".join(lines) + _RECORDATORIO)
