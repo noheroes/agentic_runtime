@@ -1603,3 +1603,69 @@ Las líneas que decían *«Results include every readable file under `path`, gen
 among them»* pasaban a ser mentira con el corte 3, y se reescriben. Se añaden dos hechos —cómo
 expresar varios globs, y que un glob vacío se reporta como tal— **redactados como propiedades del
 resultado, no como inducción de ruta**, conforme al corolario de `D-31`.
+
+---
+
+## `D-33` — `bash`: el resultado afirma el efecto, y la tool deja de censar el terreno de las demás (2026-08-19)
+
+**Origen.** Segundo paso de la fase viva tras `D-32`, misma mecánica: `BashTool` del canónico leído
+1→EOF (`BashTool.tsx`, `prompt.ts`, `commandSemantics.ts`, `utils.ts`), defectos reproducidos en
+frío antes de tocar nada — 20 rondas de cuatro enunciados de grado 1 que son de `bash`
+(`embudo/bloque-bash.sh`, bloque `bx`) más 20 de los enunciados de búsqueda (bloque `bz`).
+
+### Lo que la reproducción en frío dejó ver
+
+En `bz` **`bash` no aparece ni una vez**: los dos apuntes `rival` del censo que nacieron ahí
+—`ls -la <dir>` y `git status --short`— los curó el trabajo previo de `glob` y `grep`, y se
+consumen sin corte propio. Lo vivo estaba en el bloque propio de `bash`: `ls` dentro de `bash` en
+5/5 rondas del enunciado de escritura, `git status --short` sin relación con el encargo en 4/5,
+`git rev-parse --show-toplevel` sin relación en 5/5, y verificación con otra tool de un efecto que
+`bash` ya había producido en 3/5.
+
+### El corte en la `description`
+
+1. **Se retira el bullet del `ls`** (`prompt.ts`: *«If your command will create new directories or
+   files, first use this tool to run `ls` to verify the parent directory exists»*). Es `D-08` en su
+   forma menos cómoda: la instrucción **se contradice con su propia lista** tres líneas antes
+   (*«File search: Use glob (NOT find or ls)»*), y en B su premisa es falsa —`write_file` crea los
+   directorios padre. En A conviven porque Claude resuelve la contradicción a favor de la lista; con
+   gpt-5.x gana el `ls`. Medido: 7 llamadas en 5/5 rondas → **0 en 20 rondas**.
+2. **Cláusula nueva de censo de repositorio**: un `git status` / `git log` / `git rev-parse` responde
+   a un encargo que pregunta por el estado del repositorio y no aporta nada a ningún otro; no es un
+   primer movimiento. No está en A —A lo mitiga para usuarios `ant` delegando el bloque de git en
+   skills, salida que nosotros no tenemos—, así que es `D-22`. Medido: 4/5 → 1/5 y 5/5 → 1/5.
+3. **Los banderines de edición en sitio se nombran** (`-i`, `-pi`, `-0pi`, `sed -i`) en el párrafo
+   del intérprete, que sólo cubría `-c`, heredoc y fichero de script. El defecto observado fue un
+   `perl -0pi -e`.
+
+### El corte en el resultado
+
+4. **`commandSemantics.ts` portado entero**: `grep`/`rg`/`find`/`diff`/`test` tienen semántica propia
+   de código de salida. Antes marcábamos `is_error` con `returncode != 0`, así que un `diff` con
+   diferencias o un `grep` sin coincidencias volvían como error. El comando base se extrae del
+   ÚLTIMO tramo, como A (`heuristicallyExtractBaseCommand`), saltando las asignaciones de entorno
+   que preceden al binario.
+5. **`Exit code N` anexado al fallar**, literal de `BashTool.tsx:699`.
+6. **El mensaje de interpretación llega al MODELO**, no sólo a la UI. En A `returnCodeInterpretation`
+   vive en `Out` y `mapToolResultToToolResultBlockParam` no lo incluye: al modelo le llega cadena
+   vacía tanto si `grep` no encontró nada como si nada se ejecutó. Es exactamente lo que cerró
+   `D-32` en la tool `grep`; dejarlo abierto aquí sería sostener las dos cosas a la vez.
+7. **Sello de cierre para salida vacía con éxito** (`D-22`, hermano del de `write_file`): exit 0 sin
+   salida deja de ser cadena vacía y pasa a afirmar que el comando hizo lo que se le mandó y que un
+   fallo habría vuelto con su código. A lo resuelve sólo en la UI (`noOutputExpected`), que al modelo
+   no le llega.
+
+### Lo que NO cierra, y por qué no es de este corte
+
+Sobrevive en 2/5 rondas del enunciado de escritura la verificación con `read_file` + `glob` de un
+fichero cuya existencia **el propio programa ya había afirmado por stdout** (`wrote 6 lines to …`,
+o un `&& wc -l` que el modelo se encadena solo). No hay afirmación que añadir: ya estaba dicha dos
+veces. Es la misma conducta que se atribuyó a `gpt-5.x` en la relectura tras `write_file`, y ahí
+queda atribuida.
+
+### Carencias declaradas, medidas y no pagadas
+
+El esquema de entrada sólo tiene `command`: sin `timeout` ni `description`, y el tope está clavado
+en 30 s (A: 120 s por defecto, 600 s de máximo, y parámetro). Con `pytest` o builds reales eso corta
+por entorno y no por conducta. Queda **declarada y vigilada** (`declarar-no-es-pagar`), no rotulada
+como paridad.

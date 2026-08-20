@@ -11,6 +11,85 @@ from ..protocol import ToolCategory, ToolResult
 if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
 
+_COMMAND_SEMANTICS: dict[str, tuple[int, str]] = {
+    "grep": (2, "No matches found"),
+    "rg": (2, "No matches found"),
+    "find": (2, "Some directories were inaccessible"),
+    "diff": (2, "Files differ"),
+    "test": (2, "Condition is false"),
+    "[": (2, "Condition is false"),
+}
+
+_CIERRE = (
+    "Command completed with exit code 0 and produced no output. "
+    "(a failing command would have come back with its non-zero exit code; what the command "
+    "was asked to do happened — no need to confirm it with another call)"
+)
+
+
+def _last_segment(command: str) -> str:
+    segments: list[str] = []
+    actual: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if quote is not None:
+            actual.append(char)
+            if char == quote:
+                quote = None
+            i += 1
+            continue
+        if char in "'\"":
+            quote = char
+            actual.append(char)
+            i += 1
+            continue
+        if command.startswith("&&", i) or command.startswith("||", i):
+            segments.append("".join(actual))
+            actual = []
+            i += 2
+            continue
+        if char in ";|":
+            segments.append("".join(actual))
+            actual = []
+            i += 1
+            continue
+        actual.append(char)
+        i += 1
+    segments.append("".join(actual))
+    poblados = [s.strip() for s in segments if s.strip()]
+    return poblados[-1] if poblados else ""
+
+
+def _base_command(command: str) -> str:
+    for token in _last_segment(command).split():
+        if "=" in token and not token.startswith(("'", '"', "/", "-")):
+            continue
+        return os.path.basename(token.strip("'\""))
+    return ""
+
+
+def _interpret(command: str, returncode: int) -> tuple[bool, str | None]:
+    regla = _COMMAND_SEMANTICS.get(_base_command(command))
+    if regla is None:
+        return returncode != 0, None
+    umbral, mensaje = regla
+    return returncode >= umbral, mensaje if returncode == 1 else None
+
+
+def _compose(output: str, command: str, returncode: int) -> tuple[str, bool]:
+    is_error, interpretacion = _interpret(command, returncode)
+    cuerpo = output.rstrip()
+    lineas = [cuerpo] if cuerpo else []
+    if is_error and returncode != 0:
+        lineas.append(f"Exit code {returncode}")
+    elif interpretacion is not None:
+        lineas.append(interpretacion)
+    elif not cuerpo:
+        lineas.append(_CIERRE)
+    return "\n".join(lineas), is_error
+
 
 class BashTool:
     name = "bash"
@@ -31,8 +110,9 @@ tool cannot accomplish your task. Instead, use the appropriate dedicated tool:
 - Communication: Output text directly (NOT echo/printf)
 
 Do NOT use this tool for file work by way of an interpreter. A `python`, `python3`, `node`,
-`perl` or `ruby` invocation — with `-c`, with a heredoc, or with a script file — that reads,
-rewrites, renames or deletes files is the same prohibited shortcut as `sed`, and it is worse:
+`perl` or `ruby` invocation — with `-c`, with an in-place edit flag (`-i`, `-pi`, `-0pi`),
+with a heredoc, or with a script file — that reads, rewrites, renames or deletes files is the
+same prohibited shortcut as `sed -i`, and it is worse:
 it silently changes line endings, encoding and permissions that the dedicated tools preserve.
 This holds however many files are involved: to change N files, call the dedicated tool N
 times. Reach for an interpreter only when the task is computation with no file work, or when
@@ -42,8 +122,9 @@ While this tool can do similar things, the dedicated tools are better: they are 
 the workspace, return structured results, and are easier to review.
 
 # Instructions
-- If your command will create new directories or files, first use this tool to run `ls` to
-  verify the parent directory exists and is the correct location.
+- Finding out whether a path exists, or what a directory holds, is not this tool's job: the
+  dedicated tools resolve their own paths and create the parent directories they need. Do not
+  run `ls` to prepare a write, and do not run it afterwards to confirm one.
 - Always quote file paths that contain spaces with double quotes.
 - Try to maintain your current working directory throughout the session by using absolute
   paths and avoiding usage of `cd`. You may use `cd` if the user explicitly requests it.
@@ -54,6 +135,9 @@ the workspace, return structured results, and are easier to review.
   - Use ';' only when order matters but earlier failures do not.
   - Do NOT use newlines to separate commands (newlines are fine inside quoted strings).
 - For git commands:
+  - Do not run git commands to orient yourself. A census of the repository — `git status`,
+    `git log`, `git rev-parse`, `git diff` — answers an assignment that asks about the state
+    of the repository, and adds nothing to any other. It is not a first move.
   - Prefer creating a new commit over amending an existing one.
   - Before destructive operations (`git reset --hard`, `git push --force`, `git checkout --`),
     consider whether a safer alternative achieves the same goal.
@@ -232,10 +316,11 @@ Important:
                     ctx.cwd = tracked
                 except (AttributeError, ValueError):
                     pass
+            salida, is_error = _compose(result.output, command, result.returncode)
             return ToolResult(
                 tool_name=self.name,
-                output=result.output,
-                is_error=result.returncode != 0,
+                output=salida,
+                is_error=is_error,
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult.error(self.name, str(exc))

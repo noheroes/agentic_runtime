@@ -6,10 +6,9 @@ Al calibrar `grep`, `glob` y `bash` se reutilizan enunciados de los de `read_fil
 
 | rondas | destinataria | observado | atribución |
 |---|---|---|---|
-| x1, x2, c1 | `bash` | `ls -la <dir>` con `glob` en el pool | rival |
-| x3, c3, d5 | `bash` | `git status --short` sin relación con el encargo | rival |
-| b3 | `bash` | heredoc de Python con `read_text` + `replace` + `write_text` sobre dos ficheros: escribe fuente saltándose la tool de escritura | rival |
-| b4 | `bash` | `ls -l` para confirmar el fichero que acababa de crear con una redirección | resultado |
+| bx1..bx4 | `bash` | consumidos en `D-33`: `ls` dentro de `bash` (7 llamadas, 5/5) y censo de repo sin relación (`git status` 4/5, `git rev-parse` 5/5) — tras el corte, 0/20, 1/5 y 1/5 | descripción |
+| b3, bx2_5, by2_3, by2_5 | `bash` | intérprete para escribir fuente: heredoc de Python, y `perl -0pi -e`. La descripción ya lo nombra de tres formas y sigue apareciendo (1/5 → 2/5, ruido de la misma clase) | gpt-5.x |
+| b4, by1_2, by1_4 | `bash` | verificación con `read_file` + `glob` de un fichero cuya existencia el propio programa ya afirmó por stdout (`wrote N lines to …`, o un `&& wc -l` encadenado por el modelo). No hay afirmación que añadir | gpt-5.x |
 | x3 | `grep` | localizar un fichero por nombre (`code of conduct\|contributing`) en vez de `glob` | rival |
 | y2, y4, d2, d3, d5 | `grep` | patrón amplio sobre `**/*` en árbol de 10 ficheros, con `glob` ya corrido en la misma tanda | rival |
 | z2 | `grep` | `glob: "pyproject.toml\|src/**/*.py\|CHANGELOG.md"` — la alternancia no es sintaxis glob: no casa nada y devuelve vacío en silencio, indistinguible de «sin coincidencias» | resultado |
