@@ -17,8 +17,8 @@ Dos columnas, ambas exigidas para avanzar:
 | `glob` | ok | ok |
 | `grep` | ok | |
 | `bash` | | |
-| `WebSearch` | | |
-| `WebFetch` | | |
+| `WebSearch` | ok | |
+| `WebFetch` | ok | ok |
 
 ## Bloque 2 — compuestas
 

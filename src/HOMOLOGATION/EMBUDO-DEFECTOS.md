@@ -28,3 +28,8 @@ Al calibrar `grep`, `glob` y `bash` se reutilizan enunciados de los de `read_fil
 | d2, d3, d4, d5 | `write_file` | relectura del fichero recién escrito, con el sello reforzado en el acuse — en g4, mismo sello y escritura tras censo con `glob`, no reapareció | gpt-5.x |
 | c2, d2, d3, d5 | `bash` | `python` y `pytest` no están en el PATH del ws: la verificación funcional del encargo se corta por entorno, no por conducta | prueba |
 | y1 | `read_file` | `git log --all` tras leer el `CHANGELOG`, sin uso en la respuesta final | resultado |
+| wxw4_1..wxw4_5 | `WebSearch` | enunciado con URL canónica adivinable (documentación oficial de PostgreSQL): las 5 rondas van directas a `WebFetch` sin buscar. El caso no era suyo; sustituido por uno sin URL canónica | prueba |
+| wzw2, wzw3, wzw4 | `WebSearch` | el resultado —título, URL y snippet— no cierra: en 12 de 20 rondas el modelo baja a `bash` y escribe scrapers ad-hoc (`urllib` + `HTMLParser` a mano) sobre las URL devueltas, en vez de pedirlas por `WebFetch`. A no lo sufre porque su resultado ya trae el contenido redactado por el modelo interno del propio tool | resultado |
+| wzw3, wzw4 | `WebSearch` | `read_file` sobre una ruta inexistente (`ws/does-not-exist`, `offset: 1, limit: 1`) como sonda tras la búsqueda, en 7 de 20 rondas y sin uso posterior | gpt-5.x |
+| wzw2_1, wzw4_1 | `WebSearch` | `python` no está en el PATH del ws y el scraper improvisado muere con `127` antes de reintentar con `python3` — mismo corte por entorno ya anotado en `bash` | prueba |
+| wxf1_2, wxf1_5 | `WebFetch` | acierto marcado en rojo por el instrumento, no por la tool: la respuesta traducía el Zen al español y el criterio exigía la palabra «zen». Criterio reescrito sobre el primer y el último principio | prueba |
