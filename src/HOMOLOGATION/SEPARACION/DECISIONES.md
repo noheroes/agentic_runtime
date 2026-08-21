@@ -690,6 +690,13 @@ exactamente poner la señal antes que el mecanismo que la usa.
 
 ## D-19 · `GAP-TOOL4` pagado: las 15 «meta» se difieren, y el marcador dice qué cambió
 
+> ⚠ **DEROGADA EN PARTE por `D-37` (2026-08-21).** El reparto «igual al del canónico y sólo al del
+> canónico» deja de gobernar las nativas: por convención, **todas las nativas van `deferred = False`**.
+> El motivo es de medición, no de gusto — en gpt-5.x la `description` ES el contrato de conducta y
+> diferirla produce sondeo (`D-36`). Lo que de `D-19` sobrevive intacto es el método: el censo se
+> resolvió leyendo el fuente de A fichero a fichero (`D-08`), y su guardián sigue siendo un test de
+> producción, no de pool fabricado — sólo que ahora afirma el reparto nuevo.
+
 **Decisión.** Las 15 nativas que A retira del turno 1 por `shouldDefer: true` se marcan
 `deferred = True` en `tools/native/`, con la cita a `fichero:línea` de A en cada clase. El
 reparto queda **igual al del canónico y sólo al del canónico**: 15 diferidas, 10 no.
@@ -1999,3 +2006,109 @@ el reparto de `D-19` intacto, se revierte.
 `wn`/`wg`) y **renombran las tools** (`web_lookup.WebSearch`), lo que rompería las referencias por
 nombre del integrador — la familia de `FIND-MCP1`. El experimento vivió entero en un `sitecustomize.py`
 externo; ningún fuente del proyecto lo lleva.
+
+---
+
+## `D-37` — El mecanismo es nuestro y la convención decide su uso: nativas residentes, MCP diferidos (2026-08-21)
+
+**Origen, verbatim del usuario.** *«en gpt-5.x no hay ahorro alguno, y el comportamiento de 3 pasos de
+claude se pueden emular por software»* → *«el poder usar el flag defer con false para todas las tools
+nativas esto sera por convención, solo los MCP los manejaremos con defer true … el mecanismo se
+implementa pero ahora con las convenciones definimos su uso»* → *«nosotros al momento de registrar un
+MCP, podriamos agregarle defer=True, sino lo trae»* → *«podemos de nuestro lado trabajar variables en
+el registro fuera de especificacion para marcar comportamientos internos nuestros»* → *«ya las nativas
+esta cerrado, si es por convencion la variable en metadata puede existir, pero en las nativas no se
+usa y eso lo podemos documentar»*.
+
+Cierra la pieza que `D-36` dejó **planteada y no ejecutada** (`D-06 · 3`), y la cierra por encima de lo
+que allí se preguntaba: no «retirar o no `deferred` del par web», sino **separar mecanismo de política**.
+
+### Lo que el comparativo con el canónico dejó establecido
+
+`ToolSearchTool.ts` (471 L) y `ToolSearchTool/prompt.ts` (121 L) leídos 1→EOF. El `defer_loading` de A
+es un **lazo cerrado de tres piezas, todas código de A**:
+
+1. **Ocultar** — `isDeferredTool` marca la tool y la API la excluye del prefijo del system prompt.
+2. **Anunciar** — un `system-reminder` lista los nombres **con su contrato de fallo**: *«schemas are NOT
+   loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query
+   `select:<name>`»*.
+3. **Recuperar** — `ToolSearchTool.call` corre **en cliente**, puntúa, y devuelve bloques
+   `tool_reference`.
+
+**Nosotros portamos sólo el flag.** Sin anuncio y sin recuperación. Y el `tool_search` de servidor que
+emitimos no dispara jamás (`D-36`: cero eventos en 30 rondas trazadas). Un flag sin sus otras dos piezas
+no difiere: **demota**.
+
+Dos hallazgos laterales que quedan fijados aquí. El `searchHint` de A **sí puntúa** (+4,
+`ToolSearchTool.ts:283-285`), de modo que la premisa de `D-18` era correcta para el ranking; lo que es
+falso es que el modelo llegue a **leerlo** — `formatDeferredToolLine` devuelve sólo `tool.name`, y el
+experimento `exp_xenhnnmn0smrx4` se paró el 21 de marzo por no mostrar beneficio. Y `isDeferredTool`
+**ya trae escrita la convención 2 del canónico**: `alwaysLoad` se comprueba primero, y `isMcp === true`
+difiere **siempre**.
+
+### Lo que la especificación MCP 2026-07-28 hace y lo que no
+
+Verificada en fuente primaria. Mata el **coste vivo** —núcleo sin estado: sin handshake `initialize`,
+sin `Mcp-Session-Id`, cada petición autodescriptiva por `_meta`, `server/discover` opcional,
+`tools/list` con `ttlMs`/`cacheScope`—. **No mata el coste de prefijo, y lo empeora:** `Tool` sigue
+siendo `name`, `title`, `description`, `icons`, `inputSchema`, `outputSchema`, `annotations`; las
+definiciones **crecieron**. La paginación es sólo por cursor. La cita que lo decide: *«Deterministic
+ordering enables clients to reliably cache the tool list and improves LLM prompt cache hit rates **when
+tools are included in model context**»* — la especificación **asume** que las tools van en contexto y
+optimiza cacheando, no escondiendo. Y al quitar la sesión **empuja contrato hacia las descripciones**:
+la política de retención de las Stateful Tools *«should be stated in the creation tool's description …
+so the model can see it when deciding to create state»*.
+
+**Corrección de lo que yo mismo había concluido:** dije que el serverless podía hacer que el disparador
+del lazo de tres pasos no llegara a activarse nunca. Es al revés.
+
+### La decisión, en siete puntos
+
+1. **Nativas → `deferred = False` por convención.** Deroga en parte `D-19`, con motivo declarado: en
+   gpt-5.x la `description` es el contrato de conducta y perderla produce sondeo (`D-36`). El árbol ya
+   está así (`web_search.py`, `web_fetch.py`); bajo esta convención **eso deja de ser una derogación a
+   revertir y pasa a ser la norma**.
+2. **MCP → `deferred = True` estampado en el registro**, y **reaplicado en cada recarga de
+   `tools/list`**. La excepción se declara en nuestro registro o en la configuración del usuario, nunca
+   se toma del server.
+3. **El registro admite metadatos internos fuera de especificación** —`defer_loading`, `when_to_use`,
+   los que hagan falta—. La conversación con el server se ciñe a la especificación; el registro es
+   nuestro. **Única guarda de implementación: ningún campo entrante se mapea a un campo interno.** Un
+   `annotations` o un `_meta` del server no puede escribir política nuestra, y la propia especificación
+   lo respalda: *«clients MUST consider tool annotations to be untrusted unless they come from trusted
+   servers»*.
+4. **Forma uniforme, uso diferenciado.** Los metadatos internos existen en **toda** entrada del registro
+   por contrato. En las nativas `when_to_use` **no se usa**, y no por acuerdo sino por mecánica: sus
+   únicos lectores son el anuncio y la recuperación, por donde una tool residente no pasa. En las
+   nativas la conducta va en la `description`, que es nuestra.
+5. **`when_to_use` se renderiza** en anuncio y recuperación — al contrario que el `searchHint` de A, que
+   puntúa y nunca se muestra.
+6. **El atributo `deferred` NO viaja al wire.** Su único consumidor será el lazo de tres pasos, cuya
+   recuperación devuelve `description` + `inputSchema` **completos**, no una lista de nombres.
+7. **Acción inmediata:** dejar de emitir `defer_loading` y el bloque
+   `{"type": "tool_search", "execution": "server"}` en `convert_responses_tools`
+   (`agentic_models/.../openai_responses_shared.py`). Es la mitad que hoy sólo cobra la penalización.
+
+### Alcance de la refactorización autorizada
+
+**Ahora:** esta entrada y la anotación en `D-19`; el corte 7; la reescritura del test que queda
+incompatible; el censo de las nativas 1→EOF para aplicar el punto 1.
+
+**Aplazado por acuerdo** (*«ahí no hay refactorización»*): los puntos 2, 3 y 4 —registro con metadatos
+internos, `when_to_use`, y el lazo de tres pasos— son **construcción**, no refactor. Bloqueados además
+por dos cosas: los tokens de gpt-5.x agotados hasta fin de mes, que impiden validar en consumidor real
+(`D-15`), y una dependencia sin verificar — **qué versión de MCP habla hoy nuestro runtime** (las trazas
+muestran `obsidian` conectando por SSE con sesiones).
+
+### Convención de trabajo que el usuario fijó al autorizar
+
+*«cuando decimos vamos a refactorizar, incluye que vamos a descartar tests que queden incompatibles y
+haremos nuevos que se adhieran a lo que estamos ahora implementando»*. No colisiona con
+`no-debilitar-la-prueba`: un test se descarta porque **el criterio cambió**, y el nuevo se escribe
+contra el criterio nuevo — nunca se ablanda uno para ponerlo verde.
+
+### Lo que NO deroga
+
+`D-36` intacto: es la medición sobre la que esto se apoya. `D-08` conserva su alcance — el canónico
+dictó qué es el lazo de tres pasos; lo que decide no adoptar su reparto es la medición en nuestro
+modelo. `D-22` sigue mandando: el lazo que falta **se crea**, no se cierra la fila con «no existe en B».
