@@ -28,7 +28,6 @@ _TODO_SCHEMA = {
 
 class TodoWriteTool:
     name = TODO_WRITE_TOOL_NAME
-    deferred = True
     search_hint = "manage the session task checklist"
     description = """Use this tool to create and manage a structured task list for your current \
 coding session. This helps you track progress, organize complex tasks, and demonstrate \

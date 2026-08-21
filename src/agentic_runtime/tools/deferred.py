@@ -9,22 +9,19 @@ if TYPE_CHECKING:
     from ..context.tool_use import ToolUseContext
     from .protocol import ToolProtocol
 
-# Estado de descubrimiento scopeado por agente: vive en ctx.app_state.capabilities.
-# Alineado al canónico, donde el descubrimiento se deriva del historial (tool_reference
-# blocks); aquí lo materializamos como estado de capability por contexto (agent_id).
 _DISCOVERED_KEY = "discovered_tools"
 
 
-def is_deferred_tool(tool: ToolProtocol) -> bool:
-    """Una tool diferida no se anuncia hasta que ToolSearch la descubre.
+def is_mcp_tool(tool: ToolProtocol) -> bool:
+    info = getattr(tool, "mcp_info", None)
+    return isinstance(info, dict) and bool(info.get("server_name"))
 
-    Espejo de `isDeferredTool`: las tools MCP son diferidas siempre (workflow-specific);
-    ToolSearch nunca lo es (el modelo lo necesita para descubrir el resto). Las nativas
-    no son diferidas salvo que se marquen explícitamente (`deferred = True`).
-    Deferred es VISIBILIDAD, no disponibilidad: la tool sigue ejecutable desde el pool.
-    """
+
+def is_deferred_tool(tool: ToolProtocol) -> bool:
     if tool.name == TOOL_SEARCH_TOOL_NAME:
         return False
+    if is_mcp_tool(tool):
+        return True
     return bool(getattr(tool, "deferred", False))
 
 
@@ -41,5 +38,6 @@ def mark_tools_discovered(ctx: ToolUseContext, names: Iterable[str]) -> None:
 __all__ = [
     "discovered_tool_names",
     "is_deferred_tool",
+    "is_mcp_tool",
     "mark_tools_discovered",
 ]

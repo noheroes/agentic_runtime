@@ -81,7 +81,6 @@ def _plural(n: int, singular: str, plural: str) -> str:
 
 class EnterWorktreeTool:
     name = ENTER_WORKTREE_TOOL_NAME
-    deferred = True
     search_hint = "create an isolated git worktree and switch into it"
     description = """Use this tool ONLY when the user explicitly asks to work in a worktree. \
 This tool creates an isolated git worktree and switches the current session into it.
@@ -211,7 +210,6 @@ user asking to "exit and delete the worktree" is asking for ExitWorktree with \
 
 class ExitWorktreeTool:
     name = EXIT_WORKTREE_TOOL_NAME
-    deferred = True
     search_hint = "exit a worktree session and return to the original directory"
     description = """Exit a worktree session created by EnterWorktree and return the session to \
 the original working directory.

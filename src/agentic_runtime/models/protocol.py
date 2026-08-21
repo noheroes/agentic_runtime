@@ -163,11 +163,6 @@ class ModelCallerProtocol(Protocol):
         metadata: Mapping[str, str] | None = None,
     ) -> AsyncGenerator[Event, None]: ...
 
-    def supports_native_tool_search(self, model_id: str = "") -> bool:
-        """¿El provider resuelve tools diferidas server-side? El loop elige con
-        esto entre la estrategia diferida nativa y la simulada."""
-        ...
-
 
 __all__ = [
     "Effort",

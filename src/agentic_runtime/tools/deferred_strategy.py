@@ -1,18 +1,3 @@
-"""Estrategia de carga diferida de tools — primitiva seleccionada por capability del provider.
-
-Reemplaza el par de seams del loop (anuncio de nombres + filtrado de schemas) por una única
-interfaz con dos ramas:
-
-- **Simulada (fallback):** filtra las diferidas no descubiertas y las anuncia por un
-  `<system-reminder>` con sus NOMBRES; ToolSearch se resuelve client-side (dispatcher).
-  Es el comportamiento vigente, movido tras la interfaz sin cambios de conducta.
-- **Nativa (gpt-5 / Responses):** incluye TODAS las tools y marca las diferidas con
-  `defer_loading=True`; `agentic_models` emite ese flag y añade el `tool_search` server-side,
-  y la API descubre/expande las tools por su cuenta. Sin anuncio de nombres ni ToolSearch
-  client-side.
-
-Contrato durable: `new_core/PLAN_DEFERRED_LOADING_PRIMITIVA.md` §2-3.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -33,27 +18,18 @@ def _base_schema(tool: ToolProtocol) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class TurnToolPlan:
-    """Plan de tools del turno: schemas a anunciar (cada uno puede llevar `defer_loading`)
-    y mensajes `<system-reminder>` a insertar (el loop los envuelve y añade a `ctx.messages`)."""
     tool_schemas: list[dict[str, Any]]
     announcements: list[str] = field(default_factory=list)
-    # Nombres de las tools que este turno trata como DIFERIDAS. Lo sabe la estrategia
-    # —es quien lo decide— y el loop lo transporta al `TurnStartEvent` (`#10`). Sin este
-    # campo el consumidor tendría que re-parsear el texto del anuncio para saberlo, que
-    # es exactamente la enfermedad de `FIND-DEFER-1`, no su remedio.
     deferred_names: tuple[str, ...] = ()
 
 
 @runtime_checkable
 class DeferredToolStrategy(Protocol):
     def prepare_turn(self, ctx: ToolUseContext, pool: list[ToolProtocol]) -> TurnToolPlan:
-        """Decide schemas (con/sin `defer_loading`) y anuncios a partir del pool ensamblado."""
         ...
 
 
-class SimulatedDeferredStrategy:
-    """Fallback client-side — comportamiento vigente encapsulado (ver módulo)."""
-
+class SoftwareDeferredStrategy:
     def prepare_turn(self, ctx: ToolUseContext, pool: list[ToolProtocol]) -> TurnToolPlan:
         deferred_names = {t.name for t in pool if is_deferred_tool(t)}
         tool_search_active = bool(deferred_names)
@@ -63,9 +39,9 @@ class SimulatedDeferredStrategy:
         for tool in pool:
             if tool.name == TOOL_SEARCH_TOOL_NAME:
                 if not tool_search_active:
-                    continue  # sin diferidas, no hay nada que buscar
+                    continue
             elif tool.name in deferred_names and tool.name not in discovered:
-                continue  # diferida no descubierta → oculta hasta ToolSearch
+                continue
             schemas.append(_base_schema(tool))
 
         announcements: list[str] = []
@@ -80,28 +56,8 @@ class SimulatedDeferredStrategy:
         )
 
 
-class NativeDeferredStrategy:
-    """Rama nativa Responses — el provider resuelve el tool-search server-side."""
-
-    def prepare_turn(self, ctx: ToolUseContext, pool: list[ToolProtocol]) -> TurnToolPlan:
-        schemas: list[dict[str, Any]] = []
-        for tool in pool:
-            if tool.name == TOOL_SEARCH_TOOL_NAME:
-                continue  # el provider añade su propio tool_search server-side
-            schema = _base_schema(tool)
-            if is_deferred_tool(tool):
-                schema["defer_loading"] = True
-            schemas.append(schema)
-        return TurnToolPlan(
-            tool_schemas=schemas,
-            announcements=[],
-            deferred_names=tuple(t.name for t in pool if is_deferred_tool(t)),
-        )
-
-
 __all__ = [
     "DeferredToolStrategy",
-    "NativeDeferredStrategy",
-    "SimulatedDeferredStrategy",
+    "SoftwareDeferredStrategy",
     "TurnToolPlan",
 ]

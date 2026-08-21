@@ -159,7 +159,6 @@ settings, or when adjusting a setting would benefit them.
 
 class ConfigTool:
     name = CONFIG_TOOL_NAME
-    deferred = True
     search_hint = "get or set runtime settings"
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",

@@ -2112,3 +2112,53 @@ contra el criterio nuevo — nunca se ablanda uno para ponerlo verde.
 `D-36` intacto: es la medición sobre la que esto se apoya. `D-08` conserva su alcance — el canónico
 dictó qué es el lazo de tres pasos; lo que decide no adoptar su reparto es la medición en nuestro
 modelo. `D-22` sigue mandando: el lazo que falta **se crea**, no se cierra la fila con «no existe en B».
+
+---
+
+## `D-38` — El lazo de tres pasos, por software: ejecutado (2026-08-21)
+
+**Encargo, verbatim del usuario.** *«El cambio ademas de dejar de emitir defer_loading, era homologar
+las 3 etapas que usa canonico para el proposito no basado en mecanismo defer, sino en software»* y
+*«si, integremos la parte que le toca a MCP»*. Ejecuta el punto 7 de `D-37` y, con él, el punto 1 y la
+parte MCP del punto 2 que ya era expresable sin tocar el registro.
+
+### Lo que se movió
+
+1. **`convert_responses_tools`** (`agentic_models/.../openai_responses_shared.py`) deja de emitir
+   `defer_loading` y el bloque `{"type": "tool_search", "execution": "server"}`. El mecanismo del
+   provider ya no viaja en el cable. El metadato `Tool.defer_loading` y la capability
+   `native_tool_search` del catálogo **se conservan**: son hechos ciertos sobre la Responses API y el
+   conocimiento de proveedor vive en el proveedor (`D-21`); lo que cambia es que nadie los consume.
+2. **`is_deferred_tool`** (`tools/deferred.py`) adopta la convención 2 del canónico: `isMcp ⇒ diferida
+   SIEMPRE`, por regla estructural (`is_mcp_tool`, duck-typing sobre `mcp_info`), no por que el
+   adaptador recuerde estampar el atributo. `ToolSearch` nunca se difiere a sí misma.
+3. **`SimulatedDeferredStrategy` → `SoftwareDeferredStrategy`**, y `NativeDeferredStrategy`
+   **eliminada**. Ya no hay dos ramas: el lazo es de software, siempre. Con ello caen
+   `supports_native_tool_search` (de `models/protocol.py` y `models/caller.py`) y el mapeo
+   `defer_loading=` de `_dict_messages_to_context`, que era su único productor.
+4. **Etapa 2 (anunciar) homologada al literal de A**, incluido el contrato de fallo que faltaba:
+   *«Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use
+   ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them»*. Las
+   centinelas `_ADDED_HEADER`/`_REMOVED_HEADER` no cambian, así que el escaneo que reconstruye lo ya
+   anunciado sigue casando con lo rendido (`FIND-DEFER-1`).
+5. **Etapa 3 (recuperar)**: ya era cliente y se queda; su `description` adopta el `<system-reminder>` y
+   el `InputValidationError` de A. **Divergencia que se conserva** (antes en comentario, aquí): A
+   devuelve sólo NOMBRES y el schema viaja en bloques `tool_reference` (`ToolSearchTool.ts:462-469`);
+   B no tiene ese bloque de protocolo y devuelve el schema completo en el resultado. Mismo efecto.
+6. **Las 13 nativas con `deferred = True`** pasan a residentes por convención (`D-37 · 1`): `Config`,
+   `EnterPlanMode`, `ExitPlanMode`, `EnterWorktree`, `ExitWorktree`, `TodoWrite`, `AskUserQuestion` y
+   las seis `Task*`. `search_hint` se conserva: es el ranking, no el reparto.
+
+### Consecuencia medida, no supuesta
+
+En un workspace sin servers MCP **ya no hay ninguna tool diferida**, luego no hay anuncio: el turno
+pierde un `MessageEvent`. Se mide en el `.jsonl` real del integrador (`D-15`), no en mocks —
+`agentic_code/tests/test_runtime_integration.py`. Suites del consumidor real: `agentic_code` 218/218,
+`agentic_models` 52/52.
+
+### Deuda declarada, no rotulada (`declarar-no-es-pagar`)
+
+Las suites sintéticas de `agentic_runtime/src/agentic_runtime/tests/` referencian los símbolos
+retirados (`NativeDeferredStrategy`, `SimulatedDeferredStrategy`, `supports_native_tool_search`) y
+**quedan rojas a sabiendas**: están apartadas por acuerdo de fase y no se tocan ni «como anexo». Se
+pagan cuando la fase las readmita.

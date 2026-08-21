@@ -1,59 +1,35 @@
-"""Anuncio de tools diferidas al modelo — homólogo del `deferred_tools_delta` canónico
-(`utils/messages.ts` / `utils/toolSearch.ts::getDeferredToolsDelta`).
-
-Las tools diferidas (MCP) NO se anuncian en el schema hasta que ToolSearch las descubre
-(ver `SimulatedDeferredStrategy`). Sin decirle al modelo QUÉ diferidas existen, éste no sabe que
-hay capacidades detrás de ToolSearch y nunca busca — las tools MCP quedan invisibles. El
-canónico resuelve esto inyectando un `<system-reminder>` que lista los NOMBRES de las
-diferidas al quedar disponibles (y las removidas cuando su server MCP se desconecta).
-
-El delta es STATELESS: lo ya anunciado se reconstruye escaneando los reminders previos de
-la propia conversación (`ctx.messages`), igual que el canónico escanea los attachments
-`deferred_tools_delta`. Así no se re-anuncia lo mismo dentro de un run, pero sí se anuncia
-lo nuevo (un server MCP registrado a mitad de sesión) y se retira lo desconectado.
-"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from .deferred import is_deferred_tool
+from .native.tool_search import TOOL_SEARCH_TOOL_NAME
 
 if TYPE_CHECKING:
     from .protocol import ToolProtocol
 
-#: Frase-centinela del bloque de altas. Debe empezar EXACTO igual que el texto rendido
-#: para que el escaneo reconstruya lo anunciado (contrato de parseo con `render_*`).
 _ADDED_HEADER = "The following deferred tools are now available via ToolSearch"
-#: Frase-centinela del bloque de bajas (server MCP desconectado).
 _REMOVED_HEADER = "The following deferred tools are no longer available"
 
 
 def render_deferred_tools_delta(added_names: list[str], removed_names: list[str]) -> str:
-    """Texto del reminder (sin el envoltorio `<system-reminder>`, que lo pone el loop).
-
-    Formato de parseo estable: cada sección termina su frase-cabecera en `:` y lista un
-    nombre por línea; las secciones se separan por línea en blanco."""
     parts: list[str] = []
     if added_names:
         parts.append(
-            f"{_ADDED_HEADER}. Their schemas are NOT loaded — before you can invoke one, "
-            'call ToolSearch with "select:<tool_name>" (or a keyword query) to load its '
-            "schema. Search whenever a task may need a capability you don't already see:\n"
+            f"{_ADDED_HEADER}. Their schemas are NOT loaded — calling them directly will fail "
+            f'with InputValidationError. Use {TOOL_SEARCH_TOOL_NAME} with query '
+            '"select:<name>[,<name>...]" to load tool schemas before calling them:\n'
             + "\n".join(added_names)
         )
     if removed_names:
         parts.append(
             f"{_REMOVED_HEADER} (their MCP server disconnected). Do not search for them — "
-            "ToolSearch will return no match:\n" + "\n".join(removed_names)
+            f"{TOOL_SEARCH_TOOL_NAME} will return no match:\n" + "\n".join(removed_names)
         )
     return "\n\n".join(parts)
 
 
 def _parse_section_names(content: str, header: str) -> list[str]:
-    """Nombres listados bajo `header` en un reminder ya rendido.
-
-    Toma las líneas tras la primera que contiene la cabecera (que termina en `:`), hasta
-    una línea en blanco, la otra cabecera o el cierre `</system-reminder>`."""
     lines = content.splitlines()
     names: list[str] = []
     collecting = False
@@ -73,8 +49,6 @@ def _parse_section_names(content: str, header: str) -> list[str]:
 
 
 def _announced_deferred_names(messages: list[dict[str, Any]]) -> set[str]:
-    """Reconstruye el conjunto de diferidas YA anunciadas escaneando reminders previos
-    (espejo del escaneo de attachments `deferred_tools_delta` del canónico)."""
     announced: set[str] = set()
     for msg in messages:
         content = msg.get("content")
@@ -91,12 +65,6 @@ def _announced_deferred_names(messages: list[dict[str, Any]]) -> set[str]:
 def compute_deferred_tools_delta(
     pool_tools: list[ToolProtocol], messages: list[dict[str, Any]]
 ) -> tuple[list[str], list[str]] | None:
-    """Diff del pool diferido actual contra lo ya anunciado en la conversación.
-
-    Devuelve `(added, removed)` ordenados, o `None` si no cambió nada. Un nombre anunciado
-    que dejó de ser diferido pero SIGUE en el pool NO se reporta como removido (ahora se
-    carga directo; decir "no disponible" sería falso) — espejo de `getDeferredToolsDelta`.
-    """
     announced = _announced_deferred_names(messages)
     deferred_names = {t.name for t in pool_tools if is_deferred_tool(t)}
     pool_names = {t.name for t in pool_tools}

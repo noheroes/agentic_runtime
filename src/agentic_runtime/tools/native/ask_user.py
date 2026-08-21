@@ -177,7 +177,6 @@ ASK_USER_QUESTION_TOOL_PROMPT = (
 
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL_NAME
-    deferred = True
     search_hint = "prompt the user with a multiple-choice question"
     description = ASK_USER_QUESTION_TOOL_PROMPT
     input_schema: dict[str, Any] = {  # noqa: RUF012

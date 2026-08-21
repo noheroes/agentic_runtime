@@ -336,26 +336,12 @@ class AgentLoop:
             )
 
     def _resolve_deferred_strategy(self) -> DeferredToolStrategy:
-        """Estrategia diferida del loop. Inyectada → se usa tal cual; si no, se resuelve
-        UNA vez por la capability del modelo activo: nativa si el caller declara
-        `supports_native_tool_search(model_id)`, simulada en caso contrario (default seguro
-        para callers de terceros que no exponen la capability). Espejo de §4 del contrato:
-        el runtime lee la capability del provider y elige el mecanismo."""
         if self._deferred_strategy_override is not None:
             return self._deferred_strategy_override
         if self._deferred_strategy_cached is None:
-            from ..tools.deferred_strategy import (
-                NativeDeferredStrategy,
-                SimulatedDeferredStrategy,
-            )
+            from ..tools.deferred_strategy import SoftwareDeferredStrategy
 
-            native = False
-            probe = getattr(self._model_caller, "supports_native_tool_search", None)
-            if callable(probe):
-                native = bool(probe(self._model_id))
-            self._deferred_strategy_cached = (
-                NativeDeferredStrategy() if native else SimulatedDeferredStrategy()
-            )
+            self._deferred_strategy_cached = SoftwareDeferredStrategy()
         return self._deferred_strategy_cached
 
     async def _emit(self, event: Event, ctx: ToolUseContext) -> None:

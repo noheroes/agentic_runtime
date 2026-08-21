@@ -55,18 +55,13 @@ def _search_hint(tool: Any) -> str:
 
 class ToolSearchTool:
     name = TOOL_SEARCH_TOOL_NAME
-    # Homologada contra `getPrompt()` (`ToolSearchTool/prompt.ts:27-51`) — `GAP-PROMPT-1`.
-    # Se conserva la explicación del MECANISMO (por qué una tool sin schema no es invocable,
-    # y qué devuelve la búsqueda), que es lo que hace accionable a esta tool.
-    # DIVERGENCIA QUE SE CONSERVA: A devuelve sólo NOMBRES y el schema viaja en bloques
-    # `tool_reference` (`ToolSearchTool.ts:462-469`); B no tiene ese bloque de protocolo y
-    # devuelve el schema completo en el propio resultado. Mismo efecto para el modelo.
     description = """Fetches full schema definitions for deferred tools so they can be called.
 
-Deferred tools appear by name in the tool announcements. Until fetched, only the name is
-known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query,
-matches it against the deferred tool list, and returns the matched tools' complete schemas.
-Once a tool's schema appears in that result, it is callable like any other tool.
+Deferred tools appear by name in <system-reminder> messages. Until fetched, only the name is
+known — there is no parameter schema, so calling one directly fails with InputValidationError.
+This tool takes a query, matches it against the deferred tool list, and returns the matched
+tools' complete schemas. Once a tool's schema appears in that result, it is callable exactly
+like any tool defined at the top of the prompt.
 
 Query forms:
 - "select:Read,Edit,Grep" — fetch these exact tools by name

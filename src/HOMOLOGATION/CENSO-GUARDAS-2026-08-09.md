@@ -606,6 +606,29 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-21 — `D-38`: el lazo de tres pasos, por software (ejecutado)
+
+Ventana de un paso, dentro de la fase viva (embudo `D-28`, etapa A). Ejecuta `D-37` y lo
+registrado queda íntegro en `SEPARACION/DECISIONES.md § D-38`; aquí sólo el marcador.
+
+- **Mecanismo fuera del cable:** `convert_responses_tools` deja de emitir `defer_loading` y el
+  `{"type": "tool_search", "execution": "server"}`. Caen con él `supports_native_tool_search`
+  (contrato y puente) y `NativeDeferredStrategy`; `SimulatedDeferredStrategy` pasa a
+  `SoftwareDeferredStrategy`, rama única.
+- **Convención aplicada:** las **13** nativas que llevaban `deferred = True` pasan a residentes
+  (`Config`, `Enter/ExitPlanMode`, `Enter/ExitWorktree`, `TodoWrite`, `AskUserQuestion`, las seis
+  `Task*`). `is_deferred_tool` adopta la regla estructural del canónico: `isMcp ⇒ diferida
+  siempre`, por `mcp_info`, no por que el adaptador recuerde el atributo.
+- **Etapas 2 y 3 homologadas al literal de A**, con el contrato de fallo que faltaba
+  (`InputValidationError` + `select:<name>[,<name>...]`). Centinelas de parseo intactas.
+- **Consecuencia medida:** sin servers MCP no hay diferidas ⇒ **no hay anuncio**, y el turno
+  pierde un `MessageEvent`. Medido en el `.jsonl` real (`D-15`). `agentic_code` **218 passed**,
+  `agentic_models` **52 passed**.
+- **Deuda declarada:** las suites sintéticas de `agentic_runtime/.../tests/` referencian los
+  símbolos retirados y **quedan rojas a sabiendas** (§ 4, no se tocan).
+- **Pendiente inmediato, ya acordado:** revisar el **capability MCP** con el mismo método de censo
+  que se viene usando con las nativas.
+
 ### 2026-08-16 — etapa 0 del embudo cerrada salvo dos declaraciones; abierta la etapa 1
 
 La fase viva **no es este censo**: es el embudo `D-28`, y su marcador vive en

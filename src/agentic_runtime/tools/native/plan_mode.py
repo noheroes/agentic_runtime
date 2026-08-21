@@ -35,7 +35,6 @@ PLAN_REJECTION_PREFIX = (
 
 class EnterPlanModeTool:
     name = ENTER_PLAN_MODE_TOOL_NAME
-    deferred = True
     search_hint = "switch to plan mode to design an approach before coding"
     description = """Use this tool proactively when you're about to start a non-trivial \
 implementation task. Getting user sign-off on your approach before writing code prevents wasted \
@@ -165,7 +164,6 @@ than to redo work
 
 class ExitPlanModeTool:
     name = EXIT_PLAN_MODE_TOOL_NAME
-    deferred = True
     search_hint = "present plan for approval and start coding (plan mode only)"
     description = """Use this tool when you are in plan mode and have finished writing your plan \
 to the plan file and are ready for user approval.
