@@ -32,7 +32,7 @@ _RECORDATORIO = (
 class WebSearchTool:
     name = WEB_SEARCH_TOOL_NAME
     # `shouldDefer: true` del canónico (`WebSearchTool/WebSearchTool.ts:156`) — `GAP-TOOL4`.
-    deferred = True
+    deferred = False
     # `searchHint` del canónico, grafía literal. Fuera del contrato T1
     # (`contracts/tools.py:5`); lo lee ToolSearch para rankear (+4 vs +2 de la descripción).
     search_hint = "search the web for current information"
@@ -170,4 +170,4 @@ def _serper_search(tool_name: str, query: str, n: int, api_key: str) -> ToolResu
         lines.append(f"   {r.get('link', '')}")
         if r.get("snippet"):
             lines.append(f"   {r['snippet']}")
-    return ToolResult(tool_name=tool_name, output="\n".join(lines) + _RECORDATORIO)
+    return ToolResult(tool_name=tool_name, output="\n".join(lines))

@@ -1884,3 +1884,118 @@ sin diff contra `fa50106`; nunca con `git checkout` (`D-12 · b`).
 **resultado**. La lectura que queda: prohibir en un sitio no le da al modelo la alternativa en el
 instante de decidir; informar en el punto de decisión, sí. Y una excepción escrita en una prohibición
 es una superficie que el modelo generaliza, no una acotación que respeta.
+
+---
+
+## `D-36` — `defer_loading` es una PENALIZACIÓN DE SELECCIÓN, y dentro de un namespace se lleva por delante el contrato de conducta (2026-08-21)
+
+> ⚠ **Honestidad de origen.** Lo que aquí se registra es **medición**. La pieza que decide el usuario
+> —retirar o no `deferred` del par web, que deroga parte de `D-19`— queda **planteada, no ejecutada**:
+> es `D-06 · 3`, admite más de un resultado defendible porque el reparto de `D-19` se homologó del
+> canónico y esto lo rompe.
+
+**Origen, verbatim del usuario.** *«esto va contra lo que dice la documentacion de openai»* → *«esto
+también podría caer en la situación de que no lo estamos usando bien»* → *«tenemos evidencia factica
+del mal uso corrijamos y volvemos a probar»* → *«si solo cambian la visibilidad de los parametros
+realmente no explica porque no uso bash»* → *«aplica el namespace y volvemos a probar los 2 casos …
+creo que ya voy entendiendo porque open_claw no usa defered_loading»*.
+
+### Los dos fabricantes llaman `defer_loading` a dos mecanismos distintos
+
+- **Anthropic:** *«the API excludes deferred tools from the system-prompt prefix»* — la tool es
+  invisible. Publica números: Opus 4 de 49 % a 74 %, Opus 4.5 de 79,5 % a 88,1 % con Tool Search.
+- **OpenAI:** *«the model still sees the function name and description, so in practice tool search is
+  mostly deferring the parameter schema»*. No publica ningún número.
+
+Y la guía de namespaces de OpenAI: *«we recommend using namespaces or MCP servers when possible.
+**Our models have primarily been trained to search those surfaces**»*.
+
+### Lo que lleva el cable, verificado (no inferido)
+
+Traza externa sobre el provider real —**Azure**, no OpenAI directo (`azure-openai-responses`,
+`gpt-5.4`, `api_version v1`)—, enganchada a `convert_responses_tools` y a `process_responses_stream`.
+La petición **sí** lleva `defer_loading: true` en las diferidas y **sí** emite
+`{"type": "tool_search", "execution": "server"}`. El stream **no trae un solo evento `tool_search`**:
+cero en las 30 rondas de los cuatro bloques de namespace, cero en las trazadas sin namespace. El
+descuento que `defer_loading` promete **nunca se cobra**.
+
+Corrección de dos cosas que llegué a afirmar y la traza refutó: que diferir sacaba la tool de lo
+invocable (el modelo llamó `WebSearch` diferida como primera acción, sin buscar) y que el
+descubrimiento moría en el límite del turno (no hay descubrimiento que muera).
+
+### El mecanismo, medido: penalización, no puerta — y sólo en lista plana
+
+En **lista plana** `defer_loading` no oculta nada: **demota**. Con una alternativa residente
+plausible, la tool diferida pierde entera; sin alternativa, se usa igual pero peor.
+
+| bloque | config | ¿alternativa residente? | resultado |
+|---|---|---|---|
+| `wz` | `bash` res · par web dif | sí, `bash` | el par web pierde → `bash` 9/10, scraper 4/10 |
+| `wn`/`wg` | todo residente | — | `WebFetch` 10/10, `bash` 0/10 |
+| `wb`/`wd` | `bash` dif · par web res | sí, el par web | `bash` pierde → **0/10** |
+| `wsd` | `bash` dif · tarea sólo-`bash` | **no** | `bash` **5/5**, pero 2 llamadas en 3/5 y una ronda sin responder |
+
+Esto responde la objeción del usuario: no es visibilidad de parámetros. Mover el flag del **par web**
+mata a `bash` sin tocar el flag de `bash` porque cambia **quién compite contra él**.
+
+### Dentro de un namespace el mecanismo es otro, y ahí está el coste real
+
+Namespaces aplicados (`web_lookup`, `shell_exec`, `session_config` — **`web` es nombre reservado**, la
+API responde 400: *«Function 'web.WebSearch' is not allowed in reserved namespace 'web'»*). Cuatro
+bloques, capa de hints apagada:
+
+| bloque | ns | par web | `bash` | `Sources:` | acierto | `bash` | scraper |
+|---|---|---|---|---|---|---|---|
+| `na` | sí | **dif** | res | **0/10** | **0/10** | 0/10 | 0/10 |
+| `nb` | sí | res | res | **10/10** | **10/10** | 0/10 | 0/10 |
+| `nd` | sí | res | res | — | kernel 5/5, 1 llamada | 5/5 | — |
+| `nc` | sí | res | **dif** | — | kernel 5/5, **2 llamadas en 2/5** | 5/5 | — |
+
+**El delator es `Sources:`.** El mandato vive en la `description` de `WebSearch` («CRITICAL
+REQUIREMENT … MANDATORY - never skip»). Diferido **en plano** se cumple (`wz`/`wf` lo exigen para su
+acierto 9/10). Diferido **dentro del namespace** se cumple **0/10**, sin cambiar una letra del texto.
+Residente dentro del mismo namespace, **10/10**.
+
+**La regla que sale de ahí: la `description` de una tool ES su contrato de conducta, y en un namespace
+`defer_loading` lo retira.** Y el modelo sin contrato **sondea**: `read_file` de rutas deliberadamente
+inexistentes (`ws/does-not-exist`), `clone_repository` a ciegas — `naw3_3` clonó `django/django`
+entero, **105 s**, para leer unas release notes que estaban a un `WebFetch`. El mismo sondeo apareció
+en `wsd_5` (clone a `https://example.invalid/does-not-matter`).
+
+### Los tres malos usos, nombrados
+
+1. **Sin namespace.** Enviamos lista plana; los modelos de OpenAI están entrenados sobre namespaces y
+   MCP. **Ya no es la explicación de por qué `tool_search` no dispara**: con namespace tampoco dispara.
+2. **11 tools.** Por debajo del umbral que publican los dos fabricantes para usar tool search siquiera
+   (Anthropic: *«standard tool calling … is a better fit when you have fewer than 10 tools»*).
+3. **El round-trip no está implementado.** `process_responses_stream` sólo trata `reasoning`, `message`
+   y `function_call`; `convert_responses_messages` re-emite sólo esos tres. Un `tool_search_call` /
+   `tool_search_output` se **descartaría** y no se podría re-emitir. Defecto latente real, hoy
+   **inactivo** porque el modelo no busca nunca.
+
+### Por qué openclaw no usa `deferred_loading` — la lectura que queda
+
+`defer_loading` cambia contexto por conducta a un precio pésimo para un agente de código, donde casi
+toda la conducta vive en las descripciones. En plano paga una penalización de selección invisible
+—salvo cuando hay rival, y entonces es total— sin recuperar nada, porque `tool_search` no dispara. En
+namespace, que es la forma que el fabricante recomienda, retira el contrato de conducta y el modelo
+degenera en sondeo. Con 11 tools no hay nada que comprar. Es coherente con la serie `D-31`/`D-34`/`D-35`
+por el otro extremo: allí la palanca redactada no sostenía; aquí **retirar el texto sí mueve el
+marcador**, y en la dirección mala.
+
+### Lo que queda planteado al usuario (`D-06 · 3`), no ejecutado
+
+**Retirar `deferred` de `WebSearch` y `WebFetch`.** Deroga parcialmente `D-19`, cuyo criterio era
+*«el reparto queda igual al del canónico y sólo al del canónico»*. A favor: `wn`/`wg`/`nb` dan
+**10/10 en acierto y 0/10 en scraper**, contra 9/10 y 4/10 con el par diferido; y **A tiene su propia
+escotilla** — `isDeferredTool` (`ToolSearchTool/prompt.ts`) exceptúa tools que *«must be available
+turn 1, not behind ToolSearch»*, de modo que aplicar ese criterio al par web es usar la regla de A, no
+divergir de ella. En contra: `D-19` se homologó leyendo `shouldDefer` fichero a fichero, y esto abre
+la puerta a revisar las 15. **El árbol queda hoy con el par web residente** (`deferred = False` en
+`web_search.py` y `web_fetch.py`), que es la configuración medida como buena; si el usuario prefiere
+el reparto de `D-19` intacto, se revierte.
+
+**Namespaces: no se adoptan.** No disparan `tool_search`, no aportan nada con todo residente (`nb` =
+`wn`/`wg`) y **renombran las tools** (`web_lookup.WebSearch`), lo que rompería las referencias por
+nombre del integrador — la familia de `FIND-MCP1`. El experimento vivió entero en un `sitecustomize.py`
+externo; ningún fuente del proyecto lo lleva.

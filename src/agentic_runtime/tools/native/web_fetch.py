@@ -246,7 +246,7 @@ def html_a_markdown(html: str) -> str:
 class WebFetchTool:
     name = WEB_FETCH_TOOL_NAME
     # `shouldDefer: true` del canónico (`WebFetchTool/WebFetchTool.ts:71`) — `GAP-TOOL4`.
-    deferred = True
+    deferred = False
     # `Tool.searchHint` del canónico (`WebFetchTool.ts:68`), literal. Fuera del contrato T1
     # (`contracts/tools.py:5`) pero leído opcionalmente por ToolSearch para rankear.
     search_hint = "fetch and extract content from a URL"
@@ -273,8 +273,7 @@ Usage notes:
 - Long pages are truncated; the output says so when that happens
 - This tool is read-only and does not modify any files
 - When a URL redirects to a different host, the tool does NOT follow it: it reports the
-  redirect URL and you should make a new WebFetch request with that URL
-- For GitHub URLs, prefer the `gh` CLI via the bash tool (e.g. gh pr view, gh issue view)"""
+  redirect URL and you should make a new WebFetch request with that URL"""
     input_schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {
