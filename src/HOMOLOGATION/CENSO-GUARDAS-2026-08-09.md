@@ -606,6 +606,87 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-25 — `K6` motor de compactación · **TRAMO 1 de 6 cerrado** (`D-42`)
+
+Ventana de un paso. Lo decidido queda íntegro en `SEPARACION/DECISIONES.md § D-42`; aquí el
+marcador y **el punto de retoma**.
+
+- **Retractado el «lo que NO entra».** Palabra del usuario: si la misión es implementar el
+  canónico para los modelos con que se va a trabajar, **no hay lista de exclusiones**; lo que
+  varía es el **escalado de política** para el modelo local (mecanismo `D-41`). El prompt
+  estático tampoco se replica por fe: el texto que parchea una patología de Claude se sustituye
+  por lo que parchee la patología **medida** de nuestros modelos.
+- **Hallazgo empírico extraído de `~/python/prueba_modelo_local`** (leído entero, nada tocado) —
+  no se reinventa, se homologa. Cuatro capas, con cita:
+
+  | capa | mecanismo | cita |
+  |---|---|---|
+  | transporte | `extra_body.chat_template_kwargs = {"enable_thinking": False}` (flag de plantilla jinja de llama.cpp, **no** el parámetro `reasoning` de la API) | `llm.py:70-79` |
+  | prompt | contra-instrucción explícita a la frase que inyecta el servidor | `compact.py:33-35` |
+  | detección | `MIN_RESUMEN_CHARS=600` ⇒ resumen migaja ⇒ **se descarta la compactación y se conserva el historial entero** | `compact.py:41`, `loop.py:348-356` |
+  | encadenado | no se recompacta hasta que el historial crece un 50 % | `loop.py:330` |
+
+  **Causa raíz**, y es artefacto de servidor, no «el modelo vuelve a pensar»: el arranque de
+  Qwen3.6 lleva `--reasoning-budget 2048 --reasoning-budget-message "Cierra el razonamiento y
+  responde."` (`README.md`), así que al agotarse el presupuesto **el servidor inyecta una orden
+  dentro del razonamiento del propio modelo** y descarrila la petición de resumen.
+- **Convergencia con A, corrección de lo que dije antes:** desactivar el razonamiento en la
+  llamada de compactación **no es remedio de modelo local**. A lo hace igual —
+  `thinkingConfig: { type: 'disabled' }` (`compact.ts:1305`). Lo que **no** se porta es el
+  `except: reintentar sin ello` silencioso de la prueba: viola `D-21`. B pide
+  `ThinkingConfig(enabled=False)`, y ante `UnsupportedModelOptionError` reintenta una vez sin
+  ello **declarándolo** en el evento/traza.
+- **Divergencia declarada con cita:** A manda `[FileReadTool]` en el camino de streaming
+  (`compact.ts:1281-1290`) y el toolset entero del padre en el camino bifurcado (para que case
+  la clave de caché). B manda **ninguna**: no tiene fork ni caché de prompt compartida, y
+  `createCompactCanUseTool` (`:1125-1134`) deniega toda ejecución de todos modos.
+- **Vocabulario que evita la trampa:** *vuelta* = una iteración del lazo (una llamada al modelo
+  + sus despachos); *turno* = un intercambio con el usuario (`AgentLoop.run`). La compactación
+  dispara en el límite de **vuelta**, a mitad de tarea, antes de `callModel`. La trampa está en
+  el propio código de B: `_turn`/`ctx.turn_count` son vueltas, `ConversationState.turn_count`
+  son mensajes de usuario.
+
+**Inyectado en el tramo 1 (4 ficheros):**
+- `context/estimation.py` (**nuevo**) — homólogo de `services/tokenEstimation.ts:203-435` más el
+  ancla de `utils/tokens.ts`: `rough_token_count` (4 B/token, `Math.round` reproducido con
+  `math.floor(x+0.5)` porque el `round` de Python es bancario), densidad 2 B/token para
+  `json/jsonl/jsonc`, **2000 fijos** por bloque `image`/`document` (el catch-all cobraría ~325k
+  por un PDF de 1 MB en base64), `tool_use` = nombre + input serializado, recursión en
+  `tool_result`, y sólo cuentan `user`/`assistant`. `truncate_to_tokens` con marcador.
+- `context/window.py` — las cinco constantes `POST_COMPACT_*` (`compact.ts:122-130`) y los dos
+  guardas empíricos; `ContextBudget` gana siete campos y `_assemble` pasa de ocho posicionales a
+  recibir el invocable `scaled`.
+- `context/__init__.py` — reexportes.
+- `tests/test_context_window.py` (**nuevo**) — 20 casos, criterio y citas en la docstring.
+
+**Lo que escala y lo que NO (`D-41` + medida):** los cinco `POST_COMPACT_*` **escalan** —5
+ficheros × 5k serían el 80 % de una ventana de 32 768—, con suelo de 1 para que la restauración
+no quede muerta. `min_summary_chars` y `recompaction_growth_ratio` **no escalan**: 600 × 0,16 =
+96 caracteres es exactamente la longitud de migaja que el guarda existe para rechazar. La
+política `canonical` los declara desactivados (0 / 1.0) porque A sólo comprueba `if (!summary)`
+(`compact.ts:493`) — desactivar no es inventarle a A una conducta que no tiene.
+
+**Prueba:** `agentic_runtime/.../tests/test_context_window.py` **20 passed**; consumidor
+(`agentic_code` `tests/test_context_window.py` + `test_presentation.py`) **11 passed**.
+
+**PUNTO DE RETOMA — tramos 2→6, uno por ventana, cada uno con su prueba y su cierre aquí:**
+2. `compact/prompt.py` (base + los dos parciales) y `compact/engine.py` con guardas, cortacircuitos
+   (`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`) y frontera.
+3. Punto de llamada **al principio del cuerpo de la vuelta** en `AgentLoop.run`, antes de
+   `_build_tool_pool`, + cable `RuntimeConfig.context_budget` → `LocalAgentRuntime` → lazo;
+   `agent_loop.py:573` pasa a mandar `messages_after_compact_boundary(ctx.messages)`; la
+   compactación **no consume vuelta** (si no, roba en silencio de `--max-turns`). En
+   `agentic_code/cli.py:256-265` el presupuesto sube por encima de `build_runtime` y se pasa a los dos.
+4. Restauración post-compactación sobre `compact_context()` + estado de ficheros leídos.
+5. PTL: clasificador, truncado de cabecera, reintento (`MAX_PTL_RETRIES = 3`, `PTL_RETRY_MARKER`).
+6. Parcial + `/compact` en `agentic_code`; hooks (**`POST_COMPACT` no existe en
+   `hooks/protocol.py`** ⇒ se construye, `D-22`); ampliar `D-42`.
+
+**Deuda vigilada, no bloqueante:** nadie puebla `session.usage`
+(`execution/local/runtime.py:562-567`), así que hoy el ancla de medida real no tiene quien la
+alimente y todo se estima. Y sigue sin decidir la propuesta de `D-40` de diferir en el perfil
+local las cinco tools de esquema más grande.
+
 ### 2026-08-21 — `D-38`: el lazo de tres pasos, por software (ejecutado)
 
 Ventana de un paso, dentro de la fase viva (embudo `D-28`, etapa A). Ejecuta `D-37` y lo

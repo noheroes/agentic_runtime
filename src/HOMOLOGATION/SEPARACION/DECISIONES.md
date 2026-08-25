@@ -2336,3 +2336,119 @@ aporte. Lo fijado aquí es el **umbral y su medida**, que es lo que el enunciado
 dispara la compactación al cruzarlo es el paso siguiente, y por `D-22` se construye, no se declara
 ausente. `session.usage` sin poblar (`execution/local/runtime.py:562-567`) sigue medido y vigilado
 desde `D-39`: no bloquea, porque el integrador tiene el dato por el `DoneEvent`.
+
+---
+
+## D-42 · 2026-08-25 · El motor de compactación (`K6`): lo decidido en el tramo 1
+
+`D-41` fijó el umbral y su medida y dejó el motor declarado y no pagado. Esta entrada abre el arco de
+seis tramos que lo paga, y registra lo decidido **al tomarlo**, no al cerrarlo: quedan cinco tramos por
+delante y esta entrada se extiende, no se reescribe.
+
+### Encargo, verbatim del usuario
+
+*«el punto 5. lo que NO entra es un infeliz comentario, si tu mision es implementar canonico para los
+modelos con que vamos a trabajar entonces no hay un no entra, lo hay pero para el modelo local»*. La
+primera versión del anuncio traía una sección «lo que NO entra» con cinco exclusiones. Se retiró
+entera: no hay catálogo de exclusiones, hay **escalado por política** sobre el mecanismo de `D-41`.
+
+### El hallazgo empírico que reorienta el tramo (`D-15`: el consumidor detecta)
+
+*«lo que si me pasaba con el modelo local … era que cuando terminaba el llm volvia a entrar en modo
+thinking, suprimimos ese comportamiento … ese comportamiento se suprimio en el otro proyecto
+~/python/prueba_modelo_local»*. Leído entero ese proyecto (`agent/compact.py`, `agent/loop.py`,
+`agent/llm.py`, `agent/context.py`, `tests/test_compact.py`, `README.md`), la patología **no es** «el
+modelo vuelve a pensar» en abstracto:
+
+El servidor arranca con `--reasoning-budget 2048 --reasoning-budget-message "Cierra el razonamiento y
+responde."` (README). Cuando el modelo agota ese techo, **el propio servidor le inyecta esa frase
+dentro de su stream de razonamiento**, y esa orden inyectada descarrila la petición de resumen. El
+remedio que funcionó tiene tres capas, no una:
+
+| capa | mecanismo | cita |
+|---|---|---|
+| transporte | `extra_body.chat_template_kwargs = {"enable_thinking": False}` | `llm.py:74-79` |
+| prompt | contra-instrucción explícita contra el mensaje inyectado por el servidor | `compact.py:33-35` |
+| detección | `MIN_RESUMEN_CHARS=600`: resumen-migaja ⇒ se DESCARTA la compactación y se conserva el historial entero | `compact.py:41`, `loop.py:348-356` |
+
+Más un freno de encadenamiento que no es de thinking: tras compactar no se recompacta hasta que el
+historial crece un 50 % (`loop.py:330`).
+
+### Convergencia, no invención
+
+A **también** apaga el pensamiento en la llamada de compactación: `thinkingConfig: {type:'disabled'}`
+(`compact.ts:1305`). El arreglo del modelo local y el canónico dicen lo mismo por vías distintas. En B
+la vía es `ThinkingConfig(enabled=False)`; el `except: reintenta sin ello` de la prueba es descarte
+silencioso y **no se porta** (`D-21`): si el puente levanta `UnsupportedModelOptionError`, el motor de
+compactación lo captura, reintenta una vez sin la opción y **lo declara** en el evento y en la traza.
+
+Además, el descarte estructural se conserva como garantía independiente del motor: la llamada de
+compactación **no añade mensaje de asistente al historial**, luego sus bloques de razonamiento no
+entran nunca. Es la única capa que vale en cualquier proveedor — pero no basta, porque no impide que
+el razonamiento se coma `max_output_tokens` y devuelva la migaja. De ahí que el suelo de resumen sea
+mecanismo y no adorno.
+
+### Divergencia declarada: la compactación va sin tools
+
+A manda tools en las dos vías: la de streaming manda `[FileReadTool]` (`compact.ts:1290`) y la del
+fork manda **el toolset entero del padre** para que case la clave de caché (`prompt.ts`,
+`NO_TOOLS_PREAMBLE`). B no tiene fork ni caché compartida de prompt, y `createCompactCanUseTool`
+(`compact.ts:1125-1134`) deniega toda ejecución de todos modos. B manda **sin tools y sin preámbulo**:
+el preámbulo de A existe para explicarle al modelo por qué ve tools que no puede usar, y sin tools no
+hay nada que explicar. Es resolución estructural, no recorte de prompt.
+
+### Lo decidido en el tramo 1
+
+1. **El estimador se construye** (`D-22`): `context/estimation.py` homologa `tokenEstimation.ts:203-435`
+   bloque a bloque, incluido el plano de 2000 para `image`/`document` que evita cobrar ~325 000 tokens
+   por un PDF, y `truncate_to_tokens` para el recorte por cabeza de los tramos 4 y 5.
+2. **El ancla sustituye al paseo por `message.id`.** `tokenCountWithEstimation` de A retrocede hasta el
+   último registro con `usage`, saltando hermanos que comparten `message.id`. B no lleva `usage` dentro
+   del mensaje: lo trae el `DoneEvent`. Se registra un `UsageAnchor(context_tokens, message_count)` en
+   el momento exacto en que la medida es cierta, y se estima sólo la cola posterior. El problema de
+   hermanos no existe por construcción. Un ancla **rancia** (historial más corto que el ancla) se
+   descarta y se estima entero, en vez de sumar una medida que ya no corresponde.
+3. **Las cinco `POST_COMPACT_*` de A** (`compact.ts:122-130`) entran como campos de `ContextBudget` y
+   **escalan** por la política local. 5 ficheros × 5 000 en una ventana de 32 768 serían el 80 % del
+   contexto; escalados dan 0,81 ficheros y el suelo de 1 evita que la restauración quede muerta.
+4. **Los dos guardas empíricos NO escalan.** `min_summary_chars` (600) y `recompaction_growth_ratio`
+   (1,5) son medida de `prueba_modelo_local`, y escalar 600 por 0,16 da 96 caracteres — exactamente la
+   longitud de migaja que el guarda existe para rechazar. Son constante por política: canónica los
+   declara desactivados (`0` / `1.0`) porque A no los tiene — sólo comprueba que el resumen no sea nulo
+   (`compact.ts:493`) —, y declararlos desactivados no es inventarle a A una conducta que no tiene.
+
+### Vocabulario que se fija aquí
+
+**Vuelta** = una iteración del lazo (una llamada al modelo y sus despachos de tools). **Turno** = un
+intercambio con el usuario (`AgentLoop.run`). La compactación dispara en la frontera de **vuelta**, a
+mitad de tarea, antes de `callModel`. La trampa está en el propio código de B: `_turn` y
+`ctx.turn_count` cuentan vueltas, mientras `ConversationState.turn_count` de `agentic_code` cuenta
+mensajes de usuario.
+
+### Corrección de diseño, registrada porque casi entra en código
+
+El primer diseño **sustituía** `ctx.messages` por el historial post-compactación. Es incorrecto y A no
+lo hace: A conserva el array y filtra con `getMessagesAfterCompactBoundary` **sólo para la vista del
+modelo**. En B es además cuestión de corrección: `execution/local/runtime.py` vuelca
+`session.messages = list(ctx.messages)` al transcript durable que `conversation.py` recarga, y el
+propio resumen apunta al modelo hacia ese transcript. Frontera y resumen se **añaden**; lo que cambia
+es qué se manda al motor.
+
+### Evidencia del tramo
+
+`agentic_runtime/src/agentic_runtime/tests/test_context_window.py` — 20 casos, verdes. Consumidor real
+(`D-15`): `agentic_code/tests/test_context_window.py` + `test_presentation.py`, 11 verdes con la forma
+nueva de `ContextBudget`.
+
+### Lo que queda abierto
+
+Los tramos 2 a 6: prompt y motor con sus guardas, el punto de disparo en `AgentLoop.run` y el cableado
+del presupuesto, la restauración post-compactación, el reintento PTL, y el parcial más `/compact` en
+`agentic_code` con sus hooks. `POST_COMPACT` no existe en `hooks/protocol.py` (el enum acaba en
+`PRE_COMPACT`, sin call site) y **se añade** (`D-22`).
+
+### Lo que NO deroga
+
+`D-41` intacto: el umbral y su medida no se reabren, se consumen. `D-40` intacto: lo medido en el
+modelo local es código y aritmética, no conducta — el suelo de 600 caracteres es un hecho sobre el
+presupuesto de salida de ese motor, y por eso vive en la política `local` y no en la canónica.

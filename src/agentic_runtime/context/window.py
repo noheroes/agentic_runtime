@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -11,6 +12,15 @@ WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 MANUAL_COMPACT_BUFFER_TOKENS = 3_000
 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
+
+POST_COMPACT_MAX_FILES_TO_RESTORE = 5
+POST_COMPACT_TOKEN_BUDGET = 50_000
+POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000
+POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000
+
+MIN_SUMMARY_CHARS_LOCAL = 600
+RECOMPACTION_GROWTH_RATIO_LOCAL = 1.5
 
 
 @dataclass(frozen=True)
@@ -24,6 +34,13 @@ class ContextBudget:
     warning_threshold: int
     error_threshold: int
     blocking_limit: int
+    post_compact_max_files_to_restore: int
+    post_compact_token_budget: int
+    post_compact_max_tokens_per_file: int
+    post_compact_max_tokens_per_skill: int
+    post_compact_skills_token_budget: int
+    min_summary_chars: int
+    recompaction_growth_ratio: float
 
 
 @dataclass(frozen=True)
@@ -42,19 +59,21 @@ class ContextWindowPolicy(Protocol):
     def budget(self, context_window: int, max_output_tokens: int) -> ContextBudget: ...
 
 
+def _unscaled(constant: int) -> int:
+    return constant
+
+
 def _assemble(
     policy: str,
     context_window: int,
     max_output_tokens: int,
-    summary_cap: int,
-    autocompact_buffer: int,
-    warning_buffer: int,
-    error_buffer: int,
-    manual_buffer: int,
+    scaled: Callable[[int], int],
+    min_summary_chars: int,
+    recompaction_growth_ratio: float,
 ) -> ContextBudget:
-    reserved = min(max_output_tokens, summary_cap)
+    reserved = min(max_output_tokens, scaled(MAX_OUTPUT_TOKENS_FOR_SUMMARY))
     effective = context_window - reserved
-    autocompact = effective - autocompact_buffer
+    autocompact = effective - scaled(AUTOCOMPACT_BUFFER_TOKENS)
     return ContextBudget(
         policy=policy,
         context_window=context_window,
@@ -62,9 +81,16 @@ def _assemble(
         reserved_for_summary=reserved,
         effective_window=effective,
         autocompact_threshold=autocompact,
-        warning_threshold=autocompact - warning_buffer,
-        error_threshold=autocompact - error_buffer,
-        blocking_limit=effective - manual_buffer,
+        warning_threshold=autocompact - scaled(WARNING_THRESHOLD_BUFFER_TOKENS),
+        error_threshold=autocompact - scaled(ERROR_THRESHOLD_BUFFER_TOKENS),
+        blocking_limit=effective - scaled(MANUAL_COMPACT_BUFFER_TOKENS),
+        post_compact_max_files_to_restore=scaled(POST_COMPACT_MAX_FILES_TO_RESTORE),
+        post_compact_token_budget=scaled(POST_COMPACT_TOKEN_BUDGET),
+        post_compact_max_tokens_per_file=scaled(POST_COMPACT_MAX_TOKENS_PER_FILE),
+        post_compact_max_tokens_per_skill=scaled(POST_COMPACT_MAX_TOKENS_PER_SKILL),
+        post_compact_skills_token_budget=scaled(POST_COMPACT_SKILLS_TOKEN_BUDGET),
+        min_summary_chars=min_summary_chars,
+        recompaction_growth_ratio=recompaction_growth_ratio,
     )
 
 
@@ -76,11 +102,9 @@ class CanonicalContextWindowPolicy:
             self.name,
             context_window,
             max_output_tokens,
-            MAX_OUTPUT_TOKENS_FOR_SUMMARY,
-            AUTOCOMPACT_BUFFER_TOKENS,
-            WARNING_THRESHOLD_BUFFER_TOKENS,
-            ERROR_THRESHOLD_BUFFER_TOKENS,
-            MANUAL_COMPACT_BUFFER_TOKENS,
+            _unscaled,
+            0,
+            1.0,
         )
 
 
@@ -105,11 +129,9 @@ class LocalContextWindowPolicy:
             self.name,
             context_window,
             max_output_tokens,
-            scaled(MAX_OUTPUT_TOKENS_FOR_SUMMARY),
-            scaled(AUTOCOMPACT_BUFFER_TOKENS),
-            scaled(WARNING_THRESHOLD_BUFFER_TOKENS),
-            scaled(ERROR_THRESHOLD_BUFFER_TOKENS),
-            scaled(MANUAL_COMPACT_BUFFER_TOKENS),
+            scaled,
+            MIN_SUMMARY_CHARS_LOCAL,
+            RECOMPACTION_GROWTH_RATIO_LOCAL,
         )
 
 
@@ -157,6 +179,13 @@ __all__ = [
     "MANUAL_COMPACT_BUFFER_TOKENS",
     "MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES",
     "MAX_OUTPUT_TOKENS_FOR_SUMMARY",
+    "MIN_SUMMARY_CHARS_LOCAL",
+    "POST_COMPACT_MAX_FILES_TO_RESTORE",
+    "POST_COMPACT_MAX_TOKENS_PER_FILE",
+    "POST_COMPACT_MAX_TOKENS_PER_SKILL",
+    "POST_COMPACT_SKILLS_TOKEN_BUDGET",
+    "POST_COMPACT_TOKEN_BUDGET",
+    "RECOMPACTION_GROWTH_RATIO_LOCAL",
     "WARNING_THRESHOLD_BUFFER_TOKENS",
     "CanonicalContextWindowPolicy",
     "ContextBudget",
