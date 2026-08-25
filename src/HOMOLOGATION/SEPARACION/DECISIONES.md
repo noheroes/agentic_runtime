@@ -2220,3 +2220,59 @@ su salida palabra por palabra: el turno 1, que no depende de la generación, coi
    registry, y **nadie puebla nunca `session.usage`**: el runtime reporta 0 y el 21 054 lo acumula el
    integrador por su cuenta. Medido y vigilado; no bloquea el umbral del compactador porque el
    integrador tiene el dato.
+
+---
+
+## `D-40` — El modelo local es un STOPGAP con fecha: la ventana se cierra el 2026-09-01 (2026-08-25)
+
+**Origen, verbatim del usuario.** *«el uso del modelo local tiene como ventana temporal hasta la
+reposicion del credito de azure desde donde consumimos la familia de modelos gpt.5.4 que es el 1ro de
+setiembre»*.
+
+**Qué la originó.** `D-37` ya anotaba de pasada *«los tokens de gpt-5.x agotados hasta fin de mes»*
+como uno de los dos bloqueos de los puntos 2–4. Desde entonces el modelo local
+(`unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS`, provider `local`) es el sujeto de toda medición en
+consumidor real — el probe de `D-39` incluido. Eso no estaba escrito en ningún sitio como **régimen
+temporal**, y sin fecha un stopgap se convierte en la configuración por defecto sin que nadie lo
+decida.
+
+### La decisión
+
+1. **El modelo local es un sustituto de disponibilidad, no un cambio de sujeto.** La familia que este
+   desarrollo ejecuta sigue siendo **gpt-5.x sobre Azure** (`azure-openai-responses`), y es contra
+   ella contra la que se homologa la conducta.
+2. **La ventana va del agotamiento del crédito al 2026-09-01**, fecha de reposición. A partir de ahí
+   el sujeto de medida vuelve a ser gpt-5.4 y el local queda como lo que es: un motor de conveniencia
+   para ejercitar cableado sin gastar crédito.
+
+### Qué vale y qué no vale medido en el local
+
+La línea es la de `D-25 · 2`, y no hace falta inventar otra:
+
+- **Vale — es CÓDIGO y admite garantía.** La **semántica** (lo que una tool hace con sus argumentos,
+  sus errores, lo que deja en disco) y la **traza**. `D-39` es de esta clase: que `cache_read` viaje
+  y que `context_tokens` sea nivel y no suma es aritmética del puente, y el proveedor sólo aporta los
+  números. Por eso el medidor **cierra** aunque se haya verificado contra el local.
+- **No vale — es CONDUCTA del modelo.** Todo marcador del embudo (`D-28`): `elige`, `cierra`, ruta,
+  sondeo, adopción de un idioma de glob. Una tool **no se cierra** con 4/4 rondas del modelo local.
+  Sería la forma exacta de `no-debilitar-la-prueba`: medir en el sujeto barato y rotular el resultado
+  como si fuera el del sujeto real.
+
+### Consecuencia operativa
+
+- Toda medición de conducta hecha en esta ventana se anota **con el modelo dicho**, y entra como
+  observación, nunca como cierre de fila del marcador de las 19 tools.
+- Los puntos **2, 3 y 4 de `D-37`** —registro con metadatos internos, `when_to_use`, y el lazo de tres
+  pasos en su parte MCP— siguen aplazados por `D-15` (sin consumidor real no hay cierre) y **su
+  desbloqueo tiene fecha**: el 2026-09-01, no «cuando se pueda».
+- **Queda abierta y no decidida** la propuesta de diferir las cinco tools de mayor esquema en el
+  perfil local para que el censo quepa en su ventana. Es política del **perfil local**, luego vive y
+  muere con este stopgap; y por `D-37 · 1` las nativas van residentes por convención, así que una
+  excepción por perfil necesita decisión explícita del usuario (`D-06 · 3`) y no se ejecuta por
+  conveniencia de la ventana. Si el 1 de septiembre llega antes que la necesidad, **decae sin pagar**.
+
+### Lo que NO deroga
+
+`D-37 · 1` intacto: nativas residentes por convención. `D-24` y `D-28` intactos: el veredicto de
+conducta lo emite la pasada orgánica del usuario sobre el sujeto real. `D-39` no se reabre: lo que
+acredita es del puente, no del proveedor.
