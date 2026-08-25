@@ -2162,3 +2162,61 @@ Las suites sintéticas de `agentic_runtime/src/agentic_runtime/tests/` referenci
 retirados (`NativeDeferredStrategy`, `SimulatedDeferredStrategy`, `supports_native_tool_search`) y
 **quedan rojas a sabiendas**: están apartadas por acuerdo de fase y no se tocan ni «como anexo». Se
 pagan cuando la fase las readmita.
+
+---
+
+## `D-39` — El medidor de contexto: facturación es suma, contexto es nivel (2026-08-25)
+
+**Encargo, verbatim del usuario.** *«cerrar el medidor: añadir cache_read/cache_write al Usage … y
+verificar contra este mismo probe»*. Precede a fijar el umbral del compactador: un umbral sobre un
+medidor deshonesto no es evidencia, es una coincidencia.
+
+### El defecto
+
+`AgenticModelsCaller` construía el `Usage` del runtime con `input`/`output` y nada más
+(`models/caller.py`), descartando el `cache_read`/`cache_write` que `agentic_models.Usage` ya trae. En
+un turno con prefijo cacheado, `input` es **sólo lo no cacheado**: el probe leía 14 484 → 5 622 → 970
+cuando el contexto real crecía 14 484 → 20 106 → 21 076.
+
+El total del `result` **acertaba por accidente**: la suma de los inputs no cacheados de los tres turnos
+coincide con el nivel del último, porque cada incremento entra una vez. Coincidencia aritmética, no
+medición — y deja de coincidir en cuanto hay un fallo de caché, una reescritura de historia o una
+compactación.
+
+### La decisión
+
+Son dos magnitudes distintas y dejan de compartir campo:
+
+- **Facturación = SUMA.** `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read`/`cache_write`
+  se acumulan sobre el turno completo. Es lo que se paga.
+- **Contexto = NIVEL.** `Usage.context_tokens = input_tokens + cache_read` es lo que el motor tuvo
+  delante en ESE turno. `StreamUsage.context_tokens` guarda el del último turno y **no se suma**.
+
+`cache_read`/`cache_write` conservan la grafía de `agentic_models.Usage`: es el mismo hecho del mismo
+proveedor y renombrarlo por gusto de sufijo obligaría a traducir en el puente.
+
+### Evidencia (`D-15`: el consumidor detecta)
+
+Probe de `agentic_code` sobre seis módulos leídos uno a uno, provider `local`
+(`unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS`), `state3` nuevo sobre el mismo `work` y el mismo path:
+
+| turno | input | cache_read | contexto |
+|---|---|---|---|
+| 1 | 14 484 | 0 | 14 484 |
+| 2 | 5 608 | 14 480 | 20 088 |
+| 3 | 962 | 20 084 | 21 046 |
+
+`result`: `input_tokens` 21 054 (suma) frente a `context_tokens` 21 046 (nivel) — antes eran el mismo
+número. La diferencia de ~20 tokens con la corrida previa (20 106 / 21 076) es que el modelo no repite
+su salida palabra por palabra: el turno 1, que no depende de la generación, coincide exacto.
+
+### Deuda declarada, no rotulada (`declarar-no-es-pagar`)
+
+1. **`tui.py:809-810`** sigue leyendo `input_tokens + output_tokens` como ocupación de contexto: con el
+   input no cacheado eso mostraba 1 335 en el turno 3 donde había 21 046. La corrección es una línea
+   (`usage.context_tokens + usage.output_tokens`) y **no se aplica aquí**: la TUI la trabaja Codex en
+   paralelo y no se sobrescribe.
+2. **`execution/local/runtime.py:562-567`** pasa `session.usage.input_tokens`/`output_tokens` al
+   registry, y **nadie puebla nunca `session.usage`**: el runtime reporta 0 y el 21 054 lo acumula el
+   integrador por su cuenta. Medido y vigilado; no bloquea el umbral del compactador porque el
+   integrador tiene el dato.

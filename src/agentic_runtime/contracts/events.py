@@ -33,6 +33,12 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+
+    @property
+    def context_tokens(self) -> int:
+        return self.input_tokens + self.cache_read
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -421,6 +421,8 @@ class AgenticModelsCaller:
                         input_tokens=u.input,
                         output_tokens=u.output,
                         thinking_tokens=0,
+                        cache_read=u.cache_read,
+                        cache_write=u.cache_write,
                     ),
                 )
                 return
