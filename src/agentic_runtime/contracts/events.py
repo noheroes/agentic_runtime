@@ -38,7 +38,7 @@ class Usage:
 
     @property
     def context_tokens(self) -> int:
-        return self.input_tokens + self.cache_read
+        return self.input_tokens + self.cache_write + self.cache_read + self.output_tokens
 
 
 @dataclass(frozen=True, kw_only=True)

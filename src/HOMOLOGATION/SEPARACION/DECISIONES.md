@@ -2276,3 +2276,63 @@ La línea es la de `D-25 · 2`, y no hace falta inventar otra:
 `D-37 · 1` intacto: nativas residentes por convención. `D-24` y `D-28` intactos: el veredicto de
 conducta lo emite la pasada orgánica del usuario sobre el sujeto real. `D-39` no se reabre: lo que
 acredita es del puente, no del proveedor.
+
+---
+
+## D-41 · 2026-08-25 · El umbral del compactador: dos mecanismos, uno por config
+
+### El hecho
+
+Las cuatro constantes de A (`services/compact/autoCompact.ts`, leído 1→EOF) son **absolutas**, no
+porcentuales: `MAX_OUTPUT_TOKENS_FOR_SUMMARY=20_000`, `AUTOCOMPACT_BUFFER_TOKENS=13_000`,
+`WARNING/ERROR_THRESHOLD_BUFFER_TOKENS=20_000`, `MANUAL_COMPACT_BUFFER_TOKENS=3_000`. Están
+calibradas sobre la ventana de 200 000 en la que corre A, donde cuestan el 16,5 % y dejan el umbral
+en 167 000 (83,5 % de la ventana). Sobre gpt-5.4 en Azure (272 000 / 128 000) siguen sanas: efectiva
+252 000, umbral 239 000, aviso 219 000, bloqueo 249 000.
+
+Sobre la ventana de 32 768 del perfil local **se degeneran**: reserva 4 096 + buffer 13 000 = 52 % de
+la ventana, umbral 15 672 —que la sonda de `D-39` (14 484 → 20 088 → 21 046) ya rebasa **en el turno
+2**, con seis módulos leídos y ningún trabajo hecho— y banda de aviso **negativa** (−4 328), o sea un
+tramo del cálculo de A que no tiene dominio por debajo de ~33 000.
+
+### La decisión
+
+**Los dos mecanismos se implementan, y cuál se consume es config.** No es «elegir uno»: el canónico
+es el que gobierna al sujeto real (gpt-5.4) y el local es lo que la limitación de ventana permite
+mientras dure el stopgap de `D-40`. Hoy se consume el **local**; se conmuta sin tocar código.
+
+- `canonical` — la aritmética de A, literal, constantes incluidas.
+- `local` — las **mismas** constantes escaladas por `ventana/200_000` con tope `1.0`. Conserva la
+  PROPORCIÓN de A en vez de inventar números: sobre 32 768 da efectiva 29 492, umbral 27 363 (83,5 %
+  de la ventana, la misma cuota que A sobre 200 000), aviso 24 087, bloqueo 29 001. Por encima de
+  200 000 el tope hace que los dos mecanismos sean **el mismo**, luego el sujeto real no ve
+  divergencia alguna.
+
+### El medidor, homologado de paso
+
+`getTokenCountFromUsage` (`utils/tokens.ts`) cuenta
+`input + cache_creation + cache_read + output`. `D-39` dejó `Usage.context_tokens` en
+`input + cache_read` y declaró el `+ output` como deuda del integrador. El umbral se compara contra
+exactamente ese número, así que se homologa **antes** de fijar nada: `context_tokens` pasa a sumar
+los cuatro. Con ello la deuda de `tui.py:809-810` queda **pagada sin tocar la TUI** — esa línea sólo
+tiene que leer `usage.context_tokens`, y quien la toque es Codex.
+
+### Dónde vive
+
+- `agentic_runtime/context/window.py` (nuevo) — constantes, `ContextBudget`, `ContextPressure`, las
+  dos políticas y `resolve_context_window_policy`. Genérico: el núcleo no conoce al integrador.
+- `agentic_runtime/contracts/events.py` — el medidor.
+- `agentic_code`: `Settings.context_window_policy` (default `local`), `--context-policy`,
+  `AGENTIC_CODE_CONTEXT_POLICY`; `UsageLedger` recibe el presupuesto y mide sobre la ventana
+  **efectiva**, no sobre la bruta, y expone `pressure`.
+- `agentic_code/tests/test_context_window.py` — 9 casos, verdes; la suite entera de `agentic_code`,
+  227 verdes. Las entradas ya vivían en el proveedor (`Model.context_window`, `Model.max_tokens`),
+  luego `D-21` se cumple sin conocimiento de proveedor en el núcleo.
+
+### Lo que queda declarado y NO pagado
+
+El **motor** de compactación sigue sin existir (`K6`): `contracts/compaction.py` es sólo el seam de
+aporte. Lo fijado aquí es el **umbral y su medida**, que es lo que el enunciado pedía; el lector que
+dispara la compactación al cruzarlo es el paso siguiente, y por `D-22` se construye, no se declara
+ausente. `session.usage` sin poblar (`execution/local/runtime.py:562-567`) sigue medido y vigilado
+desde `D-39`: no bloquea, porque el integrador tiene el dato por el `DoneEvent`.
