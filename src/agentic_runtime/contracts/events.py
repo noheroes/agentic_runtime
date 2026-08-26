@@ -170,15 +170,43 @@ class TurnStartEvent(Event):
     deferred_names: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class CompactionEvent(Event):
+    """Frontera de compactación y **declaración de lo que no se pudo expresar**.
+
+    `A` no tiene evento: rinde la compactación por `logEvent('tengu_compact', …)`
+    a telemetría propia (`compact.ts:650-695`) y por `onCompactProgress` a su TUI.
+    Ninguno de los dos es una costura pública, así que el mecanismo se construye
+    (`D-22`): sin él, un consumidor no ve NI que se compactó NI por qué se dejó de
+    compactar, que es justo el patrón de fallo que el bus existe para eliminar.
+
+    `reasoning_fallback` es el vehículo de `D-21`: si el puente no sabe expresar el
+    apagado de razonamiento (`ThinkingConfig(enabled=False)`, par de
+    `compact.ts:1305`), la compactación se reintenta una vez sin él y el hecho SALE
+    por aquí. Descartar la opción en silencio produciría la misma captura que
+    obedecerla: un resumen generado bajo condiciones distintas de las pedidas, y
+    nadie enterado.
+    """
+
+    trigger: str = ""
+    outcome: str = ""
+    reason: str = ""
+    pre_tokens: int = 0
+    post_tokens: int = 0
+    summary_chars: int = 0
+    thinking_disabled: bool = True
+    reasoning_fallback: bool = False
+    consecutive_failures: int = 0
+
+
 class EventBusProtocol(Protocol):
-    # Genérico en el subtipo: un handler puede declarar el evento concreto que
-    # consume (p.ej. `Callable[[TokenEvent], ...]`) sin romper el tipado.
     def subscribe(self, event_type: type[T], handler: Callable[[T], Awaitable[None]]) -> None: ...
     def subscribe_all(self, handler: EventHandler) -> None: ...
     async def emit(self, event: Event) -> None: ...
 
 
 __all__ = [
+    "CompactionEvent",
     "DoneEvent",
     "ErrorEvent",
     "Event",

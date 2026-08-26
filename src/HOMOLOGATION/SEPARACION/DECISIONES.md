@@ -2452,3 +2452,23 @@ del presupuesto, la restauración post-compactación, el reintento PTL, y el par
 `D-41` intacto: el umbral y su medida no se reabren, se consumen. `D-40` intacto: lo medido en el
 modelo local es código y aritmética, no conducta — el suelo de 600 caracteres es un hecho sobre el
 presupuesto de salida de ese motor, y por eso vive en la política `local` y no en la canónica.
+
+## D-43 · K6·tramo-2 cerrado: prompts, guardas, cortacircuitos y frontera (2026-08-25)
+
+`context/compact/prompt.py` y `context/compact/engine.py`, más `CompactionEvent` en
+`contracts/events.py` y la reexportación en `context/__init__.py`. Prueba:
+`tests/test_compact_engine.py` (27 casos, verde junto a `test_context_window.py`,
+`test_contracts_invariant.py` y `test_events.py` — 62 en total).
+
+Divergencias respecto de A, declaradas (`D-21`):
+1. `NO_TOOLS_PREAMBLE`/`NO_TOOLS_TRAILER` (`prompt.ts:19-26`, `269-272`) no se portan: B no manda
+   tools en la llamada de compactación y ese texto enumera tools de A.
+2. `ERROR_MESSAGE_PROMPT_TOO_LONG` sin el `Press esc twice…` de A (`compact.ts:293-294`): es
+   interacción de la TUI de A y el núcleo no la dicta.
+3. El espacio en blanco final de dos líneas del canónico (`prompt.ts:113`, `131`) no se reproduce.
+4. La contrainstrucción antirrazonamiento de `prueba_modelo_local/agent/compact.py:33-35` viaja
+   como bandera atada a la política `local` (`budget.min_summary_chars > 0`), en inglés.
+5. `ThinkingConfig(enabled=False)` (par de `compact.ts:1305`); si el puente levanta
+   `UnsupportedModelOptionError` se reintenta UNA vez sin ella y el repliegue sale por
+   `CompactionEvent.reasoning_fallback` — nunca en silencio.
+6. La frontera y el resumen se RINDEN; el núcleo no reemplaza la historia (el integrador decide).

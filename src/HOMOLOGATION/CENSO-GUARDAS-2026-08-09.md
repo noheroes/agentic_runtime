@@ -1309,3 +1309,16 @@ Ficheros del paso 2 (3):
 `agentic_code/tests/test_runtime_integration.py` · este censo.
 `test_tramo1_gate.py` **no** es de este paso: lo que se le hizo está revertido y su diff
 vigente es íntegramente de ventanas anteriores (verificado con `git diff -U0`).
+
+## § 5 · addendum 2026-08-25 — tramo 2 cerrado
+
+Hecho: `context/compact/prompt.py` (port de `prompt.ts` 375), `context/compact/engine.py`
+(guardas de historia vacía / resumen vacío / prefijo de error de API / suelo local, cortacircuitos
+`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`, freno de rebrote, frontera y `strip_images`),
+`CompactionEvent`, reexportación y `tests/test_compact_engine.py` (27 verdes). Detalle y
+divergencias en `SEPARACION/DECISIONES.md § D-43`.
+
+Retoma por el tramo 3: punto de llamada al inicio del cuerpo de vuelta de `AgentLoop.run`
+(`loop/agent_loop.py:496-512`), cableado del presupuesto (`RuntimeConfig.context_budget` →
+`LocalAgentRuntime` → bucle), `agent_loop.py:573` mandando `messages_after_compact_boundary`, y
+`AgentLoop._emit` como `emit` del motor. La compactación NO consume vuelta.
