@@ -606,6 +606,62 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-26 — `K6` motor de compactación · **TRAMO 5 de 6 cerrado** (`D-46`)
+
+Ventana de un paso. Lo decidido queda en `SEPARACION/DECISIONES.md § D-46`; aquí el marcador y
+**el punto de retoma**.
+
+**Inyectado (6 ficheros, un repo — `agentic_runtime`):**
+- `context/compact/engine.py` — el reintento por `prompt too long`. `MAX_PTL_RETRIES = 3`
+  (`compact.ts:227-228`), `group_messages_by_api_round` (par de `grouping.ts:24-50`),
+  `truncate_head_for_ptl_retry` (par de `compact.ts:243-291`), el clasificador
+  (`is_prompt_too_long_text`), el parseo del par `N tokens > M` y el marcador sintético
+  `PTL_RETRY_MARKER`. `_summarize_once` se extrae para que el lazo reutilice el repliegue de
+  razonamiento de `D-43 · 5`.
+- `context/estimation.py` — **se paga el hueco del estimador**: `TRANSPORTED_ROLES`
+  = `{user, assistant, tool}`. Ver abajo.
+- `contracts/events.py` — `CompactionEvent` gana `ptl_attempt`, `dropped_messages` y
+  `remaining_messages` (`D-22`; en A eso es `logEvent('tengu_compact_ptl_retry')`, telemetría).
+- `context/compact/__init__.py` — reexportes.
+- `tests/test_compact_engine.py` (sección C bis, 11 casos) y `tests/test_context_window.py`
+  (`test_only_the_roles_that_travel_to_the_model_count`, reescrito contra el criterio).
+
+**El hueco del estimador, y por qué era bloqueante.** `rough_token_count_for_message` devolvía 0
+para `role:"tool"`, así que la masa entera de salidas de tools valía cero: el acumulador del gap
+no alcanzaba nunca su objetivo, el recorte se clampaba a `len(groups) - 1` y el primer reintento
+se llevaba **todo menos la última ronda**. A no tiene el hueco porque sus resultados de tool son
+bloques `tool_result` dentro de mensajes de usuario; en B viven en mensajes propios
+(`agent_loop.py:533-537`). El marcador de frontera (`system`) sigue sin contar.
+
+**Divergencias declaradas:** agrupación por estructura y no por `message.id` (B no lo lleva); el
+PTL se clasifica **también** desde el `ErrorEvent` porque el puente puede rendirlo por los dos
+canales; y `compact_conversation` **no** emite el evento `failed` —lo emite
+`auto_compact_if_needed` desde su `except`, y hacerlo en los dos sitios reportaría dos fallos por
+una compactación—; los intentos quemados viajan en `PromptTooLongError.ptl_attempts`.
+
+**Prueba:** los dos ficheros del tramo **58 passed**; núcleo de compactación + eventos + lazo,
+**152 passed, 9 xfailed**; `agentic_code` **231 passed**, sin tocar. Verdes a la primera ⇒
+acreditados por **inyección revertida desde copia verificada por `sha256`** (`D-12 · b`, nunca
+`git checkout`): **9 mutaciones, las 9 muertas**. Una de ellas destapó un test que no medía —
+`…three_retries_is_the_ceiling…` comparaba `MAX_PTL_RETRIES` contra sí misma, así que subirla a 5
+dejaba la suite verde—; se reescribió fijando el número canónico y los literales.
+
+**Las sintéticas de `agentic_runtime` siguen apartadas** (§ 4) y no se tocaron.
+
+**Desfase de este § 5, anotado y no tapado:** el **tramo 4** cerró sin entrada aquí — su registro
+íntegro está en `SEPARACION/DECISIONES.md § D-45` y su commit es `98386c7`. Esta entrada salta,
+por tanto, del tramo 3 al 5; no se reconstruye el marcador ausente a posteriori.
+
+**PUNTO DE RETOMA — tramo 6, el último:**
+6. Parcial + `/compact` en `agentic_code`; hooks (**`POST_COMPACT` no existe en
+   `hooks/protocol.py`** ⇒ se construye, `D-22`); ampliar `D-42`.
+
+**Y después del tramo 6:** la sonda de ejecución desde `agentic_code` con enunciado expreso
+(resultado funcional, uso de tools, t/s, tiempo, declaraciones de compactación), examinando el
+riesgo del KV `q4_0`. Siguen **pendientes de la palabra del usuario** los dos aplazados: la rama
+de `CompactionEvent` en `capture.py::_canonical_message` y el render de compactación en
+`rendering.py`.
+
 ### 2026-08-26 — `K6` motor de compactación · **TRAMO 3 de 6 cerrado** (`D-44`)
 
 Ventana de un paso: el motor del tramo 2 pasa de existir a **estar cableado**. Lo decidido queda

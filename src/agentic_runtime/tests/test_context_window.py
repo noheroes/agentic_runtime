@@ -93,9 +93,20 @@ def test_unknown_block_falls_back_to_its_serialized_form():
     assert rough_token_count_for_content([block]) > 0
 
 
-def test_only_user_and_assistant_messages_count():
+def test_only_the_roles_that_travel_to_the_model_count():
+    """Divergencia DECLARADA de forma, no de criterio. A cuenta `assistant`, `user` y
+    `attachment` (tokenEstimation.ts:341-369) y con eso cubre el 100% de lo que viaja:
+    en A los resultados de tool son bloques `tool_result` DENTRO de mensajes de
+    usuario. En B viven en mensajes propios de rol `tool` (`agent_loop.py:533-537`),
+    así que la lista literal de A dejaría la masa entera de salidas de tools valorada
+    en cero — y con ella el umbral de autocompactación y el salto por gap del
+    truncado de cabecera, que suma grupo a grupo. El marcador de frontera (`system`)
+    sigue sin contar: es discriminante local, no viaja."""
     assert rough_token_count_for_message({"role": "system", "content": "x" * 400}) == 0
     assert rough_token_count_for_message({"role": "user", "content": "x" * 400}) == 100
+    assert rough_token_count_for_message(
+        {"role": "tool", "tool_call_id": "t1", "content": "x" * 400}
+    ) == 100
     assert rough_token_count_for_messages(
         [{"role": "user", "content": "x" * 400}, {"role": "assistant", "content": "x" * 400}]
     ) == 200

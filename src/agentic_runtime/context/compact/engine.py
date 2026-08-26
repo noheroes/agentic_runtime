@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -42,6 +43,15 @@ COMPACT_SUMMARY_KEY = "is_compact_summary"
 API_ERROR_PREFIX = "API Error"
 PROMPT_TOO_LONG_ERROR_MESSAGE = "Prompt is too long"
 
+MAX_PTL_RETRIES = 3
+PTL_RETRY_MARKER = "[earlier conversation truncated for compaction retry]"
+PTL_RETRY_MARKER_KEY = "is_meta"
+PTL_FALLBACK_DROP_RATIO = 0.2
+
+PROMPT_TOO_LONG_PATTERN = re.compile(
+    r"prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)", re.IGNORECASE
+)
+
 ERROR_MESSAGE_NOT_ENOUGH_MESSAGES = "Not enough messages to compact."
 ERROR_MESSAGE_PROMPT_TOO_LONG = "Conversation too long."
 ERROR_MESSAGE_USER_ABORT = "API Error: Request was aborted."
@@ -70,8 +80,16 @@ class NotEnoughMessagesError(CompactionError):
 class PromptTooLongError(CompactionError):
     reason = "prompt_too_long"
 
-    def __init__(self, message: str = ERROR_MESSAGE_PROMPT_TOO_LONG) -> None:
+    def __init__(
+        self,
+        message: str = ERROR_MESSAGE_PROMPT_TOO_LONG,
+        *,
+        details: str = "",
+        ptl_attempts: int = 0,
+    ) -> None:
         super().__init__(message)
+        self.details = details
+        self.ptl_attempts = ptl_attempts
 
 
 class IncompleteResponseError(CompactionError):
@@ -98,6 +116,90 @@ class CompactionBlockedError(CompactionError):
 
 def starts_with_api_error_prefix(text: str) -> bool:
     return text.startswith(API_ERROR_PREFIX)
+
+
+def is_prompt_too_long_text(text: str | None) -> bool:
+    return PROMPT_TOO_LONG_ERROR_MESSAGE.lower() in (text or "").lower()
+
+
+def parse_prompt_too_long_token_counts(text: str | None) -> tuple[int, int] | None:
+    match = PROMPT_TOO_LONG_PATTERN.search(text or "")
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def prompt_too_long_token_gap(text: str | None) -> int | None:
+    counts = parse_prompt_too_long_token_counts(text)
+    if counts is None:
+        return None
+    gap = counts[0] - counts[1]
+    return gap if gap > 0 else None
+
+
+def create_ptl_retry_marker_message() -> dict[str, Any]:
+    return {
+        "role": "user",
+        "content": PTL_RETRY_MARKER,
+        PTL_RETRY_MARKER_KEY: True,
+    }
+
+
+def is_ptl_retry_marker_message(message: Any) -> bool:
+    return (
+        isinstance(message, dict)
+        and message.get("role") == "user"
+        and bool(message.get(PTL_RETRY_MARKER_KEY))
+        and message.get("content") == PTL_RETRY_MARKER
+    )
+
+
+def group_messages_by_api_round(
+    messages: Sequence[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "assistant" and current:
+            groups.append(current)
+            current = []
+        current.append(message)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def truncate_head_for_ptl_retry(
+    messages: Sequence[dict[str, Any]],
+    error_text: str | None,
+) -> list[dict[str, Any]] | None:
+    head = messages[0] if messages else None
+    body = list(messages[1:]) if is_ptl_retry_marker_message(head) else list(messages)
+
+    groups = group_messages_by_api_round(body)
+    if len(groups) < 2:
+        return None
+
+    gap = prompt_too_long_token_gap(error_text)
+    if gap is not None:
+        accumulated = 0
+        drop_count = 0
+        for group in groups:
+            accumulated += rough_token_count_for_messages(group)
+            drop_count += 1
+            if accumulated >= gap:
+                break
+    else:
+        drop_count = max(1, int(len(groups) * PTL_FALLBACK_DROP_RATIO))
+
+    drop_count = min(drop_count, len(groups) - 1)
+    if drop_count < 1:
+        return None
+
+    sliced = [message for group in groups[drop_count:] for message in group]
+    if sliced and sliced[0].get("role") == "assistant":
+        return [create_ptl_retry_marker_message(), *sliced]
+    return sliced
 
 
 def create_compact_boundary_message(
@@ -328,9 +430,41 @@ async def _collect_summary_text(
         if isinstance(event, TokenEvent):
             chunks.append(event.content)
         elif isinstance(event, ErrorEvent):
+            if is_prompt_too_long_text(event.message):
+                raise PromptTooLongError(details=event.message)
             raise CompactionError(event.message or ERROR_MESSAGE_INCOMPLETE_RESPONSE)
 
     return "".join(chunks).strip()
+
+
+async def _summarize_once(
+    caller: ModelCallerProtocol,
+    request_messages: list[dict[str, Any]],
+    *,
+    model_id: str,
+    max_tokens: int,
+    stop: AbortSignal | None,
+) -> tuple[str, bool, bool]:
+    try:
+        summary = await _collect_summary_text(
+            caller,
+            request_messages,
+            model_id=model_id,
+            max_tokens=max_tokens,
+            stop=stop,
+            thinking=ThinkingConfig(enabled=False),
+        )
+    except UnsupportedModelOptionError:
+        summary = await _collect_summary_text(
+            caller,
+            request_messages,
+            model_id=model_id,
+            max_tokens=max_tokens,
+            stop=stop,
+            thinking=None,
+        )
+        return summary, False, True
+    return summary, True, False
 
 
 async def compact_conversation(
@@ -371,36 +505,51 @@ async def compact_conversation(
             custom_instructions, direction, local_reasoning_guard=local_guard
         )
 
-    request_messages = [
-        *strip_images_from_messages(messages_after_compact_boundary(messages)),
-        {"role": "user", "content": prompt},
-    ]
+    to_summarize = strip_images_from_messages(messages_after_compact_boundary(messages))
 
     thinking_disabled = True
     reasoning_fallback = False
-    try:
-        summary = await _collect_summary_text(
-            caller,
-            request_messages,
-            model_id=model_id,
-            max_tokens=budget.reserved_for_summary,
-            stop=stop,
-            thinking=ThinkingConfig(enabled=False),
-        )
-    except UnsupportedModelOptionError:
-        thinking_disabled = False
-        reasoning_fallback = True
-        summary = await _collect_summary_text(
-            caller,
-            request_messages,
-            model_id=model_id,
-            max_tokens=budget.reserved_for_summary,
-            stop=stop,
-            thinking=None,
-        )
+    ptl_attempts = 0
+    while True:
+        try:
+            summary, thinking_disabled, reasoning_fallback = await _summarize_once(
+                caller,
+                [*to_summarize, {"role": "user", "content": prompt}],
+                model_id=model_id,
+                max_tokens=budget.reserved_for_summary,
+                stop=stop,
+            )
+            error_text = summary if summary.startswith(PROMPT_TOO_LONG_ERROR_MESSAGE) else ""
+        except PromptTooLongError as error:
+            summary = ""
+            error_text = error.details or str(error)
 
-    if summary.startswith(PROMPT_TOO_LONG_ERROR_MESSAGE):
-        raise PromptTooLongError
+        if not error_text:
+            break
+
+        ptl_attempts += 1
+        truncated = (
+            truncate_head_for_ptl_retry(to_summarize, error_text)
+            if ptl_attempts <= MAX_PTL_RETRIES
+            else None
+        )
+        if truncated is None:
+            raise PromptTooLongError(details=error_text, ptl_attempts=ptl_attempts)
+
+        if emit is not None:
+            await emit(
+                CompactionEvent(
+                    trigger=trigger,
+                    outcome="ptl_retry",
+                    reason="prompt_too_long",
+                    pre_tokens=pre_compact_token_count,
+                    ptl_attempt=ptl_attempts,
+                    dropped_messages=len(to_summarize) - len(truncated),
+                    remaining_messages=len(truncated),
+                )
+            )
+        to_summarize = truncated
+
     if not summary:
         raise IncompleteResponseError
     if starts_with_api_error_prefix(summary):
@@ -471,6 +620,7 @@ async def compact_conversation(
                 summary_chars=len(formatted),
                 thinking_disabled=thinking_disabled,
                 reasoning_fallback=reasoning_fallback,
+                ptl_attempt=ptl_attempts,
             )
         )
 
@@ -545,6 +695,7 @@ async def auto_compact_if_needed(
                     outcome="failed",
                     reason=getattr(error, "reason", "error"),
                     consecutive_failures=failures,
+                    ptl_attempt=getattr(error, "ptl_attempts", 0),
                 )
             )
         return None
@@ -569,7 +720,12 @@ __all__ = [
     "ERROR_MESSAGE_PROMPT_TOO_LONG",
     "ERROR_MESSAGE_SUMMARY_TOO_SHORT",
     "ERROR_MESSAGE_USER_ABORT",
+    "MAX_PTL_RETRIES",
     "PROMPT_TOO_LONG_ERROR_MESSAGE",
+    "PROMPT_TOO_LONG_PATTERN",
+    "PTL_FALLBACK_DROP_RATIO",
+    "PTL_RETRY_MARKER",
+    "PTL_RETRY_MARKER_KEY",
     "ApiErrorSummaryError",
     "AutoCompactTracking",
     "CompactionBlockedError",
@@ -583,11 +739,18 @@ __all__ = [
     "build_post_compact_messages",
     "compact_conversation",
     "create_compact_boundary_message",
+    "create_ptl_retry_marker_message",
     "find_last_compact_boundary_index",
+    "group_messages_by_api_round",
     "is_compact_boundary_message",
+    "is_prompt_too_long_text",
+    "is_ptl_retry_marker_message",
     "merge_hook_instructions",
     "messages_after_compact_boundary",
+    "parse_prompt_too_long_token_counts",
+    "prompt_too_long_token_gap",
     "should_auto_compact",
     "starts_with_api_error_prefix",
     "strip_images_from_messages",
+    "truncate_head_for_ptl_retry",
 ]

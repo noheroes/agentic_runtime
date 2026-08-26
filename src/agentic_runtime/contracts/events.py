@@ -186,6 +186,12 @@ class CompactionEvent(Event):
     por aquí. Descartar la opción en silencio produciría la misma captura que
     obedecerla: un resumen generado bajo condiciones distintas de las pedidas, y
     nadie enterado.
+
+    `ptl_attempt`/`dropped_messages`/`remaining_messages` rinden el reintento por
+    `prompt too long`, que en A viaja por `logEvent('tengu_compact_ptl_retry', …)`
+    (`compact.ts:479-483`) — telemetría propia, no costura. Sin ellos la
+    compactación que sobrevive a un PTL es indistinguible de la que no truncó
+    nada, y lo que se perdió por cabecera queda sin declarar (`D-22`).
     """
 
     trigger: str = ""
@@ -197,6 +203,9 @@ class CompactionEvent(Event):
     thinking_disabled: bool = True
     reasoning_fallback: bool = False
     consecutive_failures: int = 0
+    ptl_attempt: int = 0
+    dropped_messages: int = 0
+    remaining_messages: int = 0
 
 
 class EventBusProtocol(Protocol):

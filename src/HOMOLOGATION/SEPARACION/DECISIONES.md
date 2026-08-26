@@ -2626,3 +2626,92 @@ sintéticas de `agentic_runtime` siguen apartadas y no se tocaron.
 `D-42` intacto: la historia no se reemplaza, y los adjuntos se AÑADEN detrás del resumen.
 `D-44` intacto: la compactación sigue sin consumir vuelta. `D-40` intacto: esto es cableado,
 no conducta de modelo.
+
+---
+
+## D-46 · K6·tramo-5 cerrado: el reintento por `prompt too long` (2026-08-26)
+
+Canónico: `truncateHeadForPTLRetry` (`compact.ts:243-291`), `MAX_PTL_RETRIES`
+(`:227-228`), el lazo de reintento (`:445-491`), `logEvent('tengu_compact_ptl_retry')`
+(`:479-483`), la clasificación del error (`:854-899`), `groupMessagesByApiRound`
+(`grouping.ts:24-50`) y `errors.ts` (`:62`, `:64-77`, `:85-96`, `:104-118`, `:562-574`).
+Extiende `D-42`, que es el arco de seis tramos, y no reabre `D-41`, `D-43`, `D-44` ni `D-45`.
+
+### El mecanismo
+
+Cuando la petición de resumen vuelve con `prompt too long`, no se abandona: se **corta por la
+cabeza** y se reintenta, hasta `MAX_PTL_RETRIES = 3`. El corte se hace en **grupos de ronda de
+API** (`group_messages_by_api_round`: se abre grupo en cada `assistant`), que es el único punto
+de partición que no separa a un asistente de sus resultados de tool. Del texto crudo del error se
+parsea el par `N tokens > M`, y el **gap** decide cuántos grupos saltan en un solo reintento
+—acumulando estimación grupo a grupo hasta cubrirlo—; si el error no es legible, cae al 20 %.
+El recorte se clampa a `len(groups) - 1`: la última ronda nunca se come. Y si el resto empieza en
+`assistant`, se antepone el marcador sintético de usuario (`PTL_RETRY_MARKER`), que se **retira
+antes de reagrupar** en el reintento siguiente para que el segundo corte avance de verdad en vez
+de volver a contar el marcador como grupo.
+
+### El hueco del estimador se PAGA aquí, no se declara
+
+`rough_token_count_for_message` ignoraba `role:"tool"`, así que **la masa entera de salidas de
+tools valía cero**. A no tiene el hueco porque en A los resultados de tool son bloques
+`tool_result` dentro de mensajes de usuario; en B viven en mensajes propios
+(`agent_loop.py:533-537`). Consecuencia, si se dejaba: el acumulador nunca alcanzaba el gap, el
+recorte se clampaba a `len(groups) - 1` y el primer reintento se llevaba todo menos la última
+ronda. Era además ceguera del umbral de autocompactación. Se paga: `TRANSPORTED_ROLES =
+{user, assistant, tool}` en `context/estimation.py`. El marcador de frontera (`system`) sigue sin
+contar — es discriminante local y no viaja. Es divergencia **de forma**, no de criterio: A cuenta
+`assistant`/`user`/`attachment` y con eso cubre el 100 % de lo que viaja.
+
+### Divergencias declaradas (`D-21`)
+
+1. **Sin `message.id` en la agrupación.** `groupMessagesByApiRound` (`grouping.ts:24-50`) agrupa
+   por `message.id` compartido entre hermanos; B no lleva ese campo (el `usage` y la identidad
+   vienen por el `DoneEvent`, `D-42 · 2`). Se agrupa por estructura —corte en cada `assistant`—,
+   que produce las mismas rondas para el historial que B construye.
+2. **El PTL también se clasifica desde el `ErrorEvent`.** En A el error llega por la excepción de
+   la llamada; en B el puente puede rendirlo como texto de resumen **o** como evento. Se clasifica
+   en los dos sitios (`is_prompt_too_long_text`), porque si no, el mismo fallo abortaría o
+   reintentaría según por dónde entrase.
+3. **`compact_conversation` NO emite el evento `failed`** que A registra como
+   `tengu_compact_failed`. En B lo emite `auto_compact_if_needed` desde su `except`, y emitirlo en
+   los dos sitios reportaría dos fallos por una sola compactación. Los intentos quemados viajan en
+   la excepción (`PromptTooLongError.ptl_attempts`) y salen por ese único emisor.
+4. **`CompactionEvent` gana `ptl_attempt`, `dropped_messages` y `remaining_messages`** (`D-22`).
+   En A el reintento viaja por `logEvent('tengu_compact_ptl_retry', …)` —telemetría, no costura—.
+   Sin esos campos, una compactación que sobrevivió a un PTL es indistinguible de una que no truncó
+   nada, y lo perdido por cabecera queda sin declarar.
+
+### La prueba, y su acreditación (`D-12 · b`)
+
+`test_compact_engine.py` gana una sección C bis (11 casos nuevos) y `test_context_window.py`
+reescribe `test_only_user_and_assistant_messages_count` **contra el criterio nuevo**, no ablandada:
+ahora asevera que `system` sigue valiendo 0 y que `tool` vale lo que ocupa. Los dos ficheros:
+**58 passed**; el núcleo entero de compactación y eventos, **152 passed, 9 xfailed**;
+`agentic_code` **231 passed**, sin tocar.
+
+Verdes a la primera, así que se acreditan por **inyección revertida desde copia verificada por
+`sha256`** (`mktemp -d`, nunca `git checkout`). Nueve mutaciones, todas muertas:
+
+| mutación | qué cae |
+|---|---|
+| el marcador anterior no se retira antes de reagrupar | el reintento que debía avanzar |
+| el 20 % degradado a 1 grupo | el caso del error ilegible |
+| el gap parseado se ignora | 3 casos |
+| se quita el clamp `len(groups) - 1` | «la cabeza nunca se come la última ronda» |
+| no se antepone el marcador sintético | 2 casos |
+| `MAX_PTL_RETRIES = 5` | el techo de tres |
+| el PTL por `ErrorEvent` sin clasificar | 3 casos |
+| corte de ronda en cada mensaje | 4 casos |
+| `role:"tool"` sin contar | 2 casos |
+
+**Un test se reescribió porque no medía.** `…three_retries_is_the_ceiling…` aseveraba
+`len(caller.calls) == MAX_PTL_RETRIES + 1`: la constante contra sí misma, de modo que subirla a 5
+dejaba la suite verde. Se fija el número canónico (`MAX_PTL_RETRIES == 3`) y los literales (`4`
+llamadas, `4` intentos). Es `no-debilitar-la-prueba` por el otro lado: no se ablandó, es que no
+medía.
+
+### Lo que NO deroga
+
+`D-42` intacto: la historia no se reemplaza — el truncado vive en la **vista que se manda al
+resumidor**, nunca en `ctx.messages`. `D-44` intacto: la compactación sigue sin consumir vuelta.
+`D-45` intacto. `D-40` intacto: esto es algoritmo y aritmética, no conducta de modelo.

@@ -9,6 +9,7 @@ DEFAULT_BYTES_PER_TOKEN = 4
 DENSE_BYTES_PER_TOKEN = 2
 MEDIA_BLOCK_TOKENS = 2000
 DENSE_FILE_EXTENSIONS = frozenset({"json", "jsonl", "jsonc"})
+TRANSPORTED_ROLES = frozenset({"user", "assistant", "tool"})
 
 
 def _stringify(value: Any) -> str:
@@ -68,7 +69,7 @@ def rough_token_count_for_content(content: Any) -> int:
 def rough_token_count_for_message(message: Any) -> int:
     if not isinstance(message, dict):
         return 0
-    if message.get("role") not in ("user", "assistant"):
+    if message.get("role") not in TRANSPORTED_ROLES:
         return 0
     return rough_token_count_for_content(message.get("content"))
 
@@ -109,6 +110,7 @@ __all__ = [
     "DEFAULT_BYTES_PER_TOKEN",
     "DENSE_BYTES_PER_TOKEN",
     "MEDIA_BLOCK_TOKENS",
+    "TRANSPORTED_ROLES",
     "UsageAnchor",
     "bytes_per_token_for_file_type",
     "rough_token_count",
