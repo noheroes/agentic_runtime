@@ -2472,3 +2472,80 @@ Divergencias respecto de A, declaradas (`D-21`):
    `UnsupportedModelOptionError` se reintenta UNA vez sin ella y el repliegue sale por
    `CompactionEvent.reasoning_fallback` — nunca en silencio.
 6. La frontera y el resumen se RINDEN; el núcleo no reemplaza la historia (el integrador decide).
+
+---
+
+## D-44 · K6·tramo-3 cerrado: el motor, cableado al lazo (2026-08-26)
+
+`D-43` dejó el motor construido y sin consumidor. Esta entrada lo enchufa. Extiende `D-42`, que es
+el arco de seis tramos, y no reabre nada de `D-41` ni de `D-43`.
+
+### Dónde entra la llamada, y por qué ahí
+
+Al **principio del cuerpo de la vuelta** de `AgentLoop.run` —tras `ctx.turn_count += 1`, antes de
+`_build_tool_pool`—, que es el par de `query.ts:454-467` (autocompactación antes de `callModel`).
+La llamada al modelo pasa a mandar `messages_after_compact_boundary(ctx.messages)`
+(`query.ts:365`), y la frontera con su resumen se **añaden** al historial por
+`_append(..., origin="compact")`, nunca lo reemplazan: es la corrección de diseño registrada en
+`D-42` y la condición para que el transcript durable de `execution/local/runtime.py` siga siendo
+verdad. `AgentLoop._emit` es el `emit` del motor, así que la compactación se ve en la traza del
+turno como un evento más.
+
+### La compactación no consume vuelta
+
+`AutoCompactTracking` vive en `run()` y su `turn_counter` avanza **sólo** en la recursión posterior
+a tools (`query.ts:1523`, `:1679`), nunca en la vuelta que compacta. Consumirla sería robar en
+silencio de `--max-turns`: el usuario pidió n vueltas de trabajo, no n menos las que costó hacer
+sitio.
+
+### El cable del presupuesto
+
+`RuntimeConfig.context_budget` → `LocalAgentRuntime` → `AgentLoop`, y en el integrador el
+presupuesto **sube por encima de `build_runtime`**: se resuelve una vez desde el
+`model_definition` y lo consumen los dos, el runtime y el `UsageLedger`. Antes lo calculaba sólo el
+medidor, de modo que umbral mostrado y umbral aplicado podían divergir sin que nada lo delatara.
+Con `context_budget=None` el punto de llamada no existe y el lazo sale idéntico al de antes: el
+cableado es aditivo.
+
+### Añadido sobre el enunciado del tramo, declarado (`D-21`)
+
+**El ancla de uso se sella en el `DoneEvent`**: `UsageAnchor(usage.context_tokens,
+len(<mensajes enviados>))`, y se pasa al motor. Es lo que hace que el disparo sea con números
+reales y no con un `len/4` — y es lo que paga la deuda que el tramo 1 anotó («hoy el ancla no tiene
+quien la alimente y todo se estima»). No estaba en el enunciado literal del tramo; se anuncia aquí
+porque es mecanismo, no cosmética. `session.usage` sigue sin poblarse
+(`execution/local/runtime.py`), medido y vigilado desde `D-39`: no bloquea, el dato viaja por el
+`DoneEvent`.
+
+### Divergencia declarada: el ámbito del `tracking`
+
+El `AgentLoop` se construye **por task**, o sea por prompt de usuario. Luego
+`consecutive_failures` (cortacircuitos, `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`) y
+`last_compacted_tokens` (freno de recompactación) **se reinician cada turno de usuario**, mientras
+en A viven en el estado de la query. Se declara como divergencia medida y **no se persiste**: el
+asiento sería estado de sesión, que es el punto 7 del § 3 del censo y no se abre por esta puerta.
+Consecuencia acotada: tres fallos consecutivos de compactación dentro de un mismo prompt siguen
+abriendo el cortacircuitos, que es donde el guarda importa.
+
+### La prueba
+
+`agentic_code/tests/test_compaction_wire.py` (`D-15`: el consumidor detecta). Dos casos: que el
+contexto se compacta **dentro** del turno sin gastar una vuelta, y que el ancla dispara el umbral
+que la estimación sola no alcanzaría. Los dos pasaron a la primera, así que se **falsificaron**
+con `context_budget=None` —peticiones de resumen 0, el corpus viajando en la 2ª llamada— para
+acreditar que miden el cable. Suites: `agentic_code` **229 passed**;
+`agentic_runtime/.../tests/test_compact_engine.py` **27 passed**. Las sintéticas de
+`agentic_runtime` siguen apartadas por acuerdo de fase y no se tocaron.
+
+### Barrido de comentarios (§ 4 del censo)
+
+Los cinco ficheros tocados quedan sin comentarios ni docstrings explicativos: `agent_loop.py`
+806→559, `execution/local/runtime.py` 623→448, `factory.py` 348→232, `composition.py` 312→240,
+`cli.py` 362→324. Las directivas `# noqa` se conservaron una a una y `ruff` está limpio en los
+cinco. La única docstring nueva del tramo es la del test, que es la excepción declarada.
+
+### Lo que NO deroga
+
+`D-42` intacto y **ampliado**: la historia no se reemplaza, y ahora hay quien lo demuestra.
+`D-43` intacto: sus seis divergencias de prompt y motor no se reabren. `D-40` intacto: nada de lo
+acreditado aquí es conducta de modelo — es cableado y aritmética.

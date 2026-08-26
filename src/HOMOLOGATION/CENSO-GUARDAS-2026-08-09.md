@@ -606,6 +606,62 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-26 — `K6` motor de compactación · **TRAMO 3 de 6 cerrado** (`D-44`)
+
+Ventana de un paso: el motor del tramo 2 pasa de existir a **estar cableado**. Lo decidido queda
+en `SEPARACION/DECISIONES.md § D-44`; aquí el marcador y **el punto de retoma**.
+
+**Inyectado (5 ficheros, 2 repos):**
+- `loop/agent_loop.py` — punto de llamada **al principio del cuerpo de la vuelta** (tras
+  `ctx.turn_count += 1`, antes de `_build_tool_pool`), con `AutoCompactTracking` vivo en `run()` y
+  `AgentLoop._emit` como `emit` del motor. La llamada al modelo manda
+  `messages_after_compact_boundary(ctx.messages)`; la frontera y el resumen se **añaden** por
+  `_append(..., origin="compact")` — la historia no se reemplaza (`D-42`). El `ContextBudget` entra
+  por kwarg; sin él el punto de llamada no existe y el lazo sale idéntico a antes.
+- `execution/local/runtime.py` y `factory.py` — el cable `RuntimeConfig.context_budget` →
+  `LocalAgentRuntime` → `AgentLoop`.
+- `agentic_code/composition.py` y `cli.py` — el presupuesto **sube por encima de `build_runtime`**:
+  se resuelve una vez desde `model_definition` y lo consumen los dos, `RuntimeConfig` y
+  `UsageLedger`. Antes lo calculaba sólo el medidor.
+
+**La compactación NO consume vuelta.** `tracking.turn_counter` avanza sólo en la recursión tras
+tools (par de `query.ts:1523`/`:1679`), nunca en la vuelta que compacta: si consumiera, robaría en
+silencio de `--max-turns`.
+
+**Ancla de uso — añadido sobre el enunciado literal del tramo, declarado.** El `DoneEvent` sella
+`UsageAnchor(usage.context_tokens, len(<enviados>))` y el motor lo recibe, así que el umbral se
+dispara con números reales en vez de con `len/4`. Es lo que paga la deuda que el tramo 1 anotó
+(«todo se estima»); lo que sigue sin poblarse es `session.usage`
+(`execution/local/runtime.py`), que no bloquea porque el dato viaja por el `DoneEvent`.
+
+**Divergencia declarada: ámbito del `tracking`.** El `AgentLoop` se construye **por task**, o sea
+por prompt de usuario: `consecutive_failures` (cortacircuitos) y `last_compacted_tokens` (freno de
+recompactación) se reinician cada turno. Medida y **no persistida**: el asiento de estado de sesión
+sigue siendo el punto 7 del § 3.
+
+**Barrido de comentarios (§ 4)** en los cinco ficheros: `agent_loop.py` 806→559,
+`execution/local/runtime.py` 623→448, `factory.py` 348→232, `composition.py` 312→240,
+`cli.py` 362→324. Directivas `# noqa` conservadas una a una; `ruff` limpio en los cinco.
+
+**Prueba:** `agentic_code/tests/test_compaction_wire.py` (**nuevo**, criterio y citas en la
+docstring) — la compactación ocurre **dentro** del turno sin gastar vuelta, y el ancla dispara el
+umbral que la estimación sola no alcanzaría. Los dos casos pasaron a la primera, así que se
+**falsificaron** con `context_budget=None`: peticiones de resumen 0 y el corpus viajando en la 2ª
+llamada — miden el cable, no el decorado. Suites: `agentic_code` **229 passed**;
+`agentic_runtime/.../tests/test_compact_engine.py` **27 passed**.
+
+**Commiteado** (palabra del usuario, 2026-08-26): `agentic_code` `0c59cac` en
+`fase-b/find-pool-1`; en `agentic_runtime`, el commit de cabeza de `fase-b/tramo-1` es el que trae
+esta misma entrada.
+
+**PUNTO DE RETOMA — tramos 4→6:**
+4. Restauración post-compactación sobre `compact_context()` + estado de ficheros leídos. La
+   docstring de `contracts/compaction.py` está **rancia**: sigue afirmando que el motor `K6` no
+   existe.
+5. PTL: clasificador, truncado de cabecera, reintento (`MAX_PTL_RETRIES = 3`, `PTL_RETRY_MARKER`).
+6. Parcial + `/compact` en `agentic_code`; hooks (**`POST_COMPACT` no existe en
+   `hooks/protocol.py`** ⇒ se construye, `D-22`); ampliar `D-42`.
+
 ### 2026-08-25 — `K6` motor de compactación · **TRAMO 1 de 6 cerrado** (`D-42`)
 
 Ventana de un paso. Lo decidido queda íntegro en `SEPARACION/DECISIONES.md § D-42`; aquí el
