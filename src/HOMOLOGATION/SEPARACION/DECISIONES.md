@@ -2549,3 +2549,80 @@ cinco. La única docstring nueva del tramo es la del test, que es la excepción 
 `D-42` intacto y **ampliado**: la historia no se reemplaza, y ahora hay quien lo demuestra.
 `D-43` intacto: sus seis divergencias de prompt y motor no se reabren. `D-40` intacto: nada de lo
 acreditado aquí es conducta de modelo — es cableado y aritmética.
+
+## D-45 · K6·tramo-4 cerrado: la restauración post-compactación (2026-08-26)
+
+Canónico: `createPostCompactFileAttachments` (`compact.ts:1415-1464`),
+`collectReadToolFilePaths` (`:1610-1655`), `truncateToTokens` (`:1666-1672`),
+`shouldExcludeFromPostCompactRestore` (`:1674-1705`), y el vaciado del depósito antes de
+releer (`:517-521`).
+
+Hecho: `context/file_state.py` (depósito path→timestamp), el asiento en
+`tools/native/read_file.py`, `context/compact/restore.py`, el enganche en
+`compact_conversation`/`auto_compact_if_needed` (`ctx=` y `provider_messages=`), el hook
+`PostCompact`, y en el lazo `_compaction_provider_messages`, que por fin le da consumidor a
+`collect_compaction_context`. La docstring rancia de `contracts/compaction.py` —la que aún
+afirmaba que el motor K6 no existía— se **borra**, no se reescribe (§ 4 del censo).
+
+### `D-22` aplicado: el depósito SE CREA
+
+B no tenía dónde anotar qué ficheros vio el modelo. Se construye, y guarda **sólo**
+`path → timestamp`: la rama `FILE_UNCHANGED_STUB` de A no se porta porque B no tiene
+deduplicación de lecturas, y portar el stub sin ella sería mecanismo sin consumidor.
+
+### Divergencia declarada: el depósito vive un turno
+
+Se asienta en `app_state.native`, o sea que **muere con el turno de usuario**, mientras en A
+vive en el estado de sesión. Mismo ámbito que el `tracking` de `D-44` y por la misma razón: el
+asiento persistente es estado de sesión, punto 7 del § 3 del censo, y no se abre por esta
+puerta. Consecuencia acotada: se restaura lo leído en el prompt en curso, que es donde la
+restauración importa.
+
+### El catálogo de producto de A no entra
+
+La lista de exclusión de A (fichero de plan, `claude.md`) es catálogo de producto. En el
+núcleo queda el MECANISMO —`POST_COMPACT_RESTORE_EXCLUSION_KEY` en `app_state.native`,
+predicado o lista de predicados, con el precedente de `EDIT_CONFIG_VALIDATORS_KEY`— y un
+predicado roto se traga (`except Exception: continue`): no puede ni excluir por accidente ni
+tumbar la compactación.
+
+### Y en `agentic_code` NO se siembra, por medición
+
+Se anunció que el integrador pondría el predicado del plan-file. **Se implementó y se
+falsificó: el test pasaba igual sin él.** Motivo verificado: el depósito anota la ruta ya
+RESUELTA (`plans_dir/<sesión>/plan.md`), la exención del candado de `ConfinedFilesystem` vale
+para la **grafía del token** y no para esa ruta, y releerla da `PathOutsideWorkspace`. El
+plan-file, por tanto, no puede restaurarse — con predicado o sin él. Se retira el predicado en
+vez de dejar código sin efecto observable, y la consecuencia queda **vigilada** por
+`test_the_session_plan_file_does_not_come_back_after_compacting`: si el plan-file se vuelve
+releíble algún día, ese test se pone rojo y entonces —y sólo entonces— hará falta el predicado.
+`agentic_code` no tiene hoy ningún otro fichero que excluir: su AGENT.md sigue diferido
+(`FIND-CODE-MEM-1`) y el prompt no inyecta ficheros por turno.
+
+### Otras divergencias, menores
+
+El presupuesto acumulado se mide con `rough_token_count_for_message` en vez del
+`jsonStringify` de A, y al no caber un fichero se hace `continue`, no `break`: filtra, no
+corta. `runPostCompactCleanup` (`postCompactCleanup.ts`) no tiene homólogo — no hay qué
+limpiar.
+
+### El cap real bajo política `local`
+
+`post_compact_max_files_to_restore` escala con la ventana: a 64K el factor es `0.32768` y el
+tope queda en **1 fichero**. No es un defecto, es la política; se anota porque salió en la
+prueba y porque gobierna qué se espera ver en la sonda de ejecución.
+
+### La prueba
+
+`test_compact_restore.py` (14) + `test_compact_engine.py` (27) = **41 verdes** en el núcleo.
+En el consumidor (`D-15`), dos casos nuevos en `test_compaction_wire.py`: el fichero leído
+antes de compactar vuelve detrás del resumen con su contenido de disco, y el plan-file no
+vuelve. El primero se **falsificó** anulando el paso de `ctx` al motor —0 adjuntos, rojo—; el
+segundo es el que destapó lo del predicado. Suite de `agentic_code`: **231 passed**. Las
+sintéticas de `agentic_runtime` siguen apartadas y no se tocaron.
+
+### Lo que NO deroga
+
+`D-42` intacto: la historia no se reemplaza, y los adjuntos se AÑADEN detrás del resumen.
+`D-44` intacto: la compactación sigue sin consumir vuelta. `D-40` intacto: esto es cableado,
+no conducta de modelo.

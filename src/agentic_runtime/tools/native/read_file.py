@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ...context.file_state import record_read_file
 from ..fs_env import PathOutsideWorkspace
 from ..protocol import ToolCategory, ToolResult
 
@@ -82,6 +83,7 @@ Usage:
             offset = input.get("offset", 1)
             inicio = 0 if offset == 0 else offset - 1
             selected = lines[inicio:] if limit is None else lines[inicio : inicio + limit]
+            record_read_file(ctx.app_state, str(path))
             return ToolResult(tool_name=self.name, output=_numerar(selected, inicio + 1))
         except Exception as exc:  # noqa: BLE001
             return ToolResult.error(self.name, str(exc))

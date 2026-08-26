@@ -1378,3 +1378,22 @@ Retoma por el tramo 3: punto de llamada al inicio del cuerpo de vuelta de `Agent
 (`loop/agent_loop.py:496-512`), cableado del presupuesto (`RuntimeConfig.context_budget` →
 `LocalAgentRuntime` → bucle), `agent_loop.py:573` mandando `messages_after_compact_boundary`, y
 `AgentLoop._emit` como `emit` del motor. La compactación NO consume vuelta.
+
+## § 5 · addendum 2026-08-26 — tramo 4 cerrado
+
+Hecho: `context/file_state.py` (nuevo, depósito de ficheros leídos), asiento en
+`tools/native/read_file.py`, `context/compact/restore.py` (nuevo), enganche en
+`context/compact/engine.py` (`ctx=`, `provider_messages=`, hook `PostCompact`),
+`loop/agent_loop.py::_compaction_provider_messages` —el consumidor que le faltaba a
+`collect_compaction_context`—, `hooks/protocol.py` (`POST_COMPACT`), y la docstring rancia
+de `contracts/compaction.py` **borrada**. Pruebas: `test_compact_restore.py` 14 +
+`test_compact_engine.py` 27 = 41 verdes; `agentic_code` 231 verdes con los dos casos nuevos
+de `tests/test_compaction_wire.py`. Detalle y divergencias en `SEPARACION/DECISIONES.md § D-45`.
+
+Hallazgo del tramo, anotado: `agentic_code` **no** siembra
+`POST_COMPACT_RESTORE_EXCLUSION_KEY`. El plan-file no puede restaurarse de todos modos —el
+depósito guarda la ruta resuelta, fuera del workspace, y la exención del candado vale para la
+grafía del token—; el predicado se implementó, se falsificó y se retiró. La consecuencia queda
+vigilada por un test.
+
+Retoma por el tramo 5: reintento por PTL (`truncateHeadForPTLRetry`, `compact.ts:243-291`).

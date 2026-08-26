@@ -27,6 +27,7 @@ class HookEvent(str, Enum):
     STOP_FAILURE = "StopFailure"
     SUBAGENT_STOP = "SubagentStop"
     PRE_COMPACT = "PreCompact"
+    POST_COMPACT = "PostCompact"
 
 
 @dataclass(frozen=True)

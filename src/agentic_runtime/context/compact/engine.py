@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...contracts.abort import AbortSignal
 from ...contracts.events import CompactionEvent, ErrorEvent, Event, TokenEvent
@@ -29,6 +29,10 @@ from .prompt import (
     get_compact_user_summary_message,
     get_partial_compact_prompt,
 )
+from .restore import create_post_compact_file_attachments
+
+if TYPE_CHECKING:
+    from ..tool_use import ToolUseContext
 
 COMPACT_SYSTEM_PROMPT = "You are a helpful AI assistant tasked with summarizing conversations."
 COMPACT_BOUNDARY_KEY = "compact_boundary"
@@ -268,6 +272,38 @@ async def _run_pre_compact_hook(
     )
 
 
+def _as_reminder(content: str) -> str:
+    return f"<system-reminder>\n{content.strip()}\n</system-reminder>"
+
+
+def _combine_display_messages(*messages: str | None) -> str | None:
+    present = [message for message in messages if message]
+    return "\n".join(present) or None
+
+
+async def _run_post_compact_hook(
+    hooks: HookFn | None,
+    trigger: str,
+    summary: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    if hooks is None:
+        return [], None
+
+    decision = await hooks(
+        HookEvent.POST_COMPACT,
+        {"trigger": trigger, "compact_summary": summary},
+    )
+    if decision is None:
+        return [], None
+
+    messages: list[dict[str, Any]] = []
+    if decision.additional_context:
+        messages.append(
+            {"role": "user", "content": _as_reminder(decision.additional_context)}
+        )
+    return messages, decision.message
+
+
 async def _collect_summary_text(
     caller: ModelCallerProtocol,
     request_messages: list[dict[str, Any]],
@@ -314,6 +350,8 @@ async def compact_conversation(
     stop: AbortSignal | None = None,
     hooks: HookFn | None = None,
     emit: EmitFn | None = None,
+    ctx: ToolUseContext | None = None,
+    provider_messages: Sequence[dict[str, Any]] | None = None,
 ) -> CompactionResult:
     if not messages:
         raise NotEnoughMessagesError
@@ -391,13 +429,29 @@ async def compact_conversation(
             COMPACT_SUMMARY_KEY: True,
         }
     ]
+    attachments: list[dict[str, Any]] = []
+    if ctx is not None:
+        attachments.extend(
+            await create_post_compact_file_attachments(ctx, budget, messages_to_keep=kept)
+        )
+    attachments.extend(provider_messages or [])
+
+    hook_results, post_display_message = await _run_post_compact_hook(
+        hooks, trigger, summary
+    )
+    user_display_message = _combine_display_messages(
+        user_display_message, post_display_message
+    )
+
     true_post_compact_token_count = rough_token_count_for_messages(
-        [boundary_marker, *summary_messages, *kept]
+        [boundary_marker, *summary_messages, *kept, *attachments, *hook_results]
     )
 
     result = CompactionResult(
         boundary_marker=boundary_marker,
         summary_messages=summary_messages,
+        attachments=attachments,
+        hook_results=hook_results,
         messages_to_keep=kept or None,
         user_display_message=user_display_message,
         summary=summary,
@@ -437,6 +491,8 @@ async def auto_compact_if_needed(
     stop: AbortSignal | None = None,
     hooks: HookFn | None = None,
     emit: EmitFn | None = None,
+    ctx: ToolUseContext | None = None,
+    provider_messages: Sequence[dict[str, Any]] | None = None,
 ) -> CompactionResult | None:
     if not enabled:
         return None
@@ -475,6 +531,8 @@ async def auto_compact_if_needed(
             stop=stop,
             hooks=hooks,
             emit=emit,
+            ctx=ctx,
+            provider_messages=provider_messages,
         )
     except CompactionError as error:
         if tracking is not None:

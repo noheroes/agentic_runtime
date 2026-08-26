@@ -24,6 +24,7 @@ from ..context.estimation import UsageAnchor
 from ..context.tool_use import ToolUseContext
 from ..context.window import ContextBudget
 from ..contracts.agents import enumerate_agent_definitions
+from ..contracts.compaction import collect_compaction_context
 from ..contracts.notifications import NotificationSink, apply_notification
 from ..contracts.user_input import NoopUserInputProcessor, UserInputProcessor
 from ..events.bus import EventBus
@@ -197,6 +198,18 @@ class AgentLoop:
             origin="skill_listing_delta",
         )
 
+    def _compaction_provider_messages(self, ctx: ToolUseContext) -> list[dict[str, Any]]:
+        if self._capability_manager is None:
+            return []
+        messages = collect_compaction_context(self._capability_manager.providers, ctx)
+        return [
+            {"role": "user", "content": _as_reminder(content)}
+            for content in (
+                str(message.get("content") or "").strip() for message in messages
+            )
+            if content
+        ]
+
     def _restrict_to_agent_tools(self, pool: ToolPool) -> ToolPool:
         allowed = self._agent_allowed_tools
         if not allowed or "*" in allowed:
@@ -346,6 +359,8 @@ class AgentLoop:
                         self._hook_runner.run if self._hook_runner is not None else None
                     ),
                     emit=_compaction_emit,
+                    ctx=ctx,
+                    provider_messages=self._compaction_provider_messages(ctx),
                 )
                 if compaction is not None:
                     self._usage_anchor = None
