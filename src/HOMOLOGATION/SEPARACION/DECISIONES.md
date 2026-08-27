@@ -2715,3 +2715,170 @@ medía.
 `D-42` intacto: la historia no se reemplaza — el truncado vive en la **vista que se manda al
 resumidor**, nunca en `ctx.messages`. `D-44` intacto: la compactación sigue sin consumir vuelta.
 `D-45` intacto. `D-40` intacto: esto es algoritmo y aritmética, no conducta de modelo.
+
+---
+
+## D-47 · K6·tramo-6 cerrado: la compactación PARCIAL y el `/compact` del integrador (2026-08-26)
+
+Canónico: `partialCompactConversation` (`compact.ts:772-1106`) y
+`annotateBoundaryWithPreservedSegment` (`:349-367`); en el integrador,
+`commands/compact/compact.ts` (288). Último tramo del arco. Extiende `D-42` y no reabre
+`D-41`, `D-43`, `D-44`, `D-45` ni `D-46`.
+
+### El mecanismo
+
+Un pivote parte la conversación en dos y la **dirección** dice cuál de las dos mitades va al
+resumidor: `from` resume desde el pivote y conserva lo anterior literal; `up_to` resume hasta
+él y conserva lo posterior. Lo conservado se filtra de mensajes de progreso, y en `up_to`
+también de fronteras y resúmenes rancios: allí el resumen nuevo va DELANTE de lo conservado,
+así que una frontera superviviente ganaría el rastreo hacia atrás y se llevaría por delante el
+resumen recién hecho (`:824-833`). Si la mitad a resumir sale vacía, el error nombra el lado
+(`Nothing to summarize before/after the selected message.`).
+
+### El orden del bloque deja de ser uno solo
+
+`build_post_compact_messages` se vuelve **sensible a dirección**, y por eso
+`CompactionResult` gana `direction`. En `from` lo conservado es **anterior** al resumen de la
+cola: ponerlo detrás le mentiría al modelo sobre el orden de los hechos. La frontera abre el
+bloque en las dos direcciones — es lo que hace que `messages_after_compact_boundary` se lleve
+el bloque entero y no un trozo. Y la historia sigue sin reemplazarse (`D-42`): el bloque se
+AÑADE.
+
+### `apiMessages` no es siempre el conjunto a resumir
+
+En `up_to` se manda sólo el prefijo (`:869-872`): es exactamente lo que ya está cacheado, y
+mandarlo entero aprovecha el prefix cache. En `from` se manda la conversación completa, porque
+el resumidor necesita ver lo anterior para entender de qué habla la cola.
+
+### Divergencias declaradas (`D-21`)
+
+1. **`preservedSegment` se porta por FUNCIÓN, no por uuid.** A escribe
+   `{headUuid, anchorUuid, tailUuid}` para recoser su cadena `parentUuid`. B no tiene cadena
+   que recoser —los mensajes son dicts planos en una lista persistida—, así que se anota
+   `{anchor, count}`: qué ancla el segmento y cuánto mide. El ancla sigue la del canónico:
+   el resumen en `up_to`, la frontera en `from`.
+2. **Un solo cuerpo para el lazo de PTL y la validación del resumen.** En A los dos lazos
+   son gemelos copiados (`:445-491` y `:854-899`). Se homologa la CONDUCTA, no la
+   duplicación; el test que acredita que la parcial no se quedó sin reintento es lo que paga
+   la diferencia.
+3. **`/compact` corre con `ctx=None`**: sin restauración de ficheros post-compactación en la
+   ruta manual. El depósito de A (`context.readFileState`) vive toda la sesión; el de B vive
+   en el `ToolUseContext` de la tarea (`D-45`), y `/compact` no abre tarea. No se finge: se
+   declara.
+4. **`CompactionEvent` gana `direction`, `messages_kept` y `messages_summarized`** (`D-22`).
+   En A la parcial viaja por `logEvent('tengu_partial_compact', …)` (`:990-1005`) —telemetría
+   propia, no costura—. Sin esos campos una parcial es indistinguible de una completa desde
+   fuera.
+5. **De `commands/compact/compact.ts` entra el mecanismo, no el catálogo.**
+   `getMessagesAfterCompactBoundary` como conjunto, el rechazo con historia vacía
+   (`No messages to compact`), `args.trim()` como instrucciones y la traducción de errores a
+   las tres cadenas canónicas, sí. La memoria de sesión, el `reactiveCompact`, el
+   `microcompact` y el `runPostCompactCleanup` no tienen homólogo y no se inventan.
+
+### El enunciado del tramo venía rancio
+
+Decía que `POST_COMPACT` **no existe** en `hooks/protocol.py` y había que construirlo
+(`D-22`). Es falso: lo construyó el tramo 4 y está en `hooks/protocol.py:30`, con
+`_run_post_compact_hook` usándolo. Se verifica, se anota, y no se reconstruye nada.
+
+### El integrador: quién es dueño de qué
+
+`agentic_code` ya era dueño del transcript (`ConversationState`) y del presupuesto
+(`cli.py`); le faltaba el puente. `build_model_caller` se **extrae** de `build_runtime` para
+que `/compact` use el MISMO caller que el turno y no estrene una construcción paralela; el
+bloque se asienta con `ConversationState.append`, sobre el fichero, porque `dispatch_prompt`
+recarga desde ahí al terminar cada turno y guardarlo sólo en memoria lo perdería al salir.
+
+### La prueba, y su acreditación (`D-12 · b`)
+
+`test_compact_engine.py` gana una sección E (12 casos) y queda en **49 verdes**; con
+`test_compact_restore`, `test_context_window` y `test_events`, **96 verdes**. Verdes a la
+primera, así que se acreditan por **inyección revertida desde copia verificada por `sha256`**
+(`mktemp -d`, nunca `git checkout`). Nueve mutaciones, todas muertas:
+
+| mutación | qué cae |
+|---|---|
+| orden siempre resumen-primero | el bloque cronológico de `from` |
+| `up_to` no filtra fronteras rancias | el resumen nuevo se pierde en el rastreo |
+| `apiMessages` siempre la conversación entera | el prefijo cacheado de `up_to` |
+| ancla del segmento invertida | `preservedSegment` |
+| el resumen huérfano no se marca transcript-only | la distinción con `summarizeMetadata` |
+| mitades del pivote intercambiadas | qué se resume y qué sobrevive |
+| mensajes de mitad vacía intercambiados | los dos textos canónicos |
+| la parcial sin reintento por PTL | el cuerpo compartido |
+| el evento no declara la dirección | la parcial indistinguible de la completa |
+
+**Pendiente declarado**: los casos de consumidor de `/compact` en
+`agentic_code/tests/test_compaction_wire.py` (`D-15`) y la pasada de la suite de
+`agentic_code`. Hoy el comando sólo está probado por humo en scratch: la ruta manual completa
+—instrucciones al prompt, asiento en el transcript, historia no reemplazada, vista posterior
+a la frontera, y las tres traducciones de error— corrió y salió correcta, pero eso no es
+prueba asentada y no se declara como tal.
+
+### Lo que NO deroga
+
+`D-42` intacto y **cerrado como arco**: la historia no se reemplaza tampoco en la parcial.
+`D-44` intacto: la compactación sigue sin consumir vuelta. `D-45` y `D-46` intactos.
+`D-40` intacto: esto es algoritmo y cableado, no conducta de modelo.
+
+---
+
+## `D-48` · La compactación parcial se EXPONE en el integrador, y el pivote se direcciona por ORDINAL (2026-08-26)
+
+- **Fecha:** 2026-08-26, cierre del tramo 6 del arco K6.
+- **Encargo del usuario, verbatim:** *«esta fase no estuvo planeada y surgio de la necesida de compactar
+  por el modelo local que la extendimos porque ya que estabamos viendo el tema, lo cerramos a homologar
+  canonico e incorporar el mecanismo para el local tambien, por tanto no puedes escaparte con decir para
+  otra fase, simplemente necesitamos ya que estamos terminar la implementacion»*, y acto seguido *«si
+  consideras que puedes ser capaz de exponerla haciendo ajustes donde se requiera adelante»*.
+- **Qué la originó.** `partial_compact_conversation` entró en el motor durante el tramo 6 y quedó **sin
+  consumidor de producción**: el `/compact` de A no la llama nunca (`commands/compact/compact.ts`, 288 L
+  leídas 1→EOF), quien la llama es el selector interactivo (`MessageSelector.tsx`, `onSummarize`). Yo
+  propuse diferir el cableado a otra fase; el usuario lo rechazó. Sin exponerla, media rama del motor
+  —filtro de marcadores rancios, `PRESERVED_ANCHOR_SUMMARY`, orden resumen-primero,
+  `ERROR_MESSAGE_NOTHING_BEFORE`— era `L09` puro: cableado que no existe.
+
+### El hueco real no era el motor: era cómo se NOMBRA el pivote
+
+A señala el pivote por `UserMessage.uuid` elegido en una lista visual. Los mensajes de B son `dict`
+planos sin identidad, y `/history` sólo emitía un recuento de turnos. **DECISIÓN:** el pivote se
+direcciona por **ordinal** sobre los mensajes de usuario señalables de
+`messages_after_compact_boundary(...)`; `/history` publica la lista numerada y `/compact from:N` /
+`/compact upto:N` la consumen. El filtro de señalables se homologa de `selectableUserMessagesFilter`
+(`MessageSelector.tsx:767-791`): fuera el caveat (`isMeta`), el resumen (`isCompactSummary`), lo
+visible sólo en transcript y las etiquetas de salida de comando local; **dentro** el `<command-name>`,
+que en A también es señalable.
+
+### Divergencias declaradas (`D-21`, `D-22`)
+
+1. **`upto:` se expone pese al portón de A.** «Summarize up to here» vive tras
+   `if ("external" === 'ant')` (`MessageSelector.tsx:121`). Ese portón es **catálogo de producto**, que
+   `D-22` deja fuera en las dos direcciones; el mecanismo entra. Y es la dirección barata: sólo el
+   prefijo viaja al resumidor (`engine.py:762-764`), que es justo lo que el modelo local necesita.
+2. **`ERROR_MESSAGE_NOTHING_AFTER` es inalcanzable por esta superficie.** Con `from` el pivote entra
+   siempre en `to_summarize`, luego la mitad nunca queda vacía. Se declara en vez de fabricar un
+   `pivot_index` que el mando no puede emitir.
+3. **`NotEnoughMessagesError` se traduce por su MENSAJE, no por su clase.** Traducirla por clase
+   sustituía las dos cadenas propias de la parcial por la genérica; era defecto propio y se paga aquí.
+4. **El rastro de `/compact` se añade al final del bloque ya ordenado**, no dentro de `messages_to_keep`
+   como hace A. Con dirección `from` el orden es `[…conservado, resumen]`, y meterlo en `kept` lo dejaría
+   delante del resumen y en mitad de la línea temporal. Los conteos no cambian —se calculan antes— y
+   `attachments`/`hook_results` son vacíos en esta ruta, así que para la compactación completa el bloque
+   persistido es idéntico al de A.
+5. **`is_local_command_message` se retira.** No tenía consumidor (`L09`, precedente
+   `owns_search_dispatch`); la sustituye `is_local_command_output_message`, más estrecha y homologada del
+   filtro de A, que sí lo tiene.
+
+### Acreditación
+
+7 pruebas nuevas en `agentic_code/tests/test_compaction_wire.py` (`D-15`, consumidor real): las dos
+direcciones sobre transcript real, el orden del bloque en cada una, `preserved_segment` con su ancla, el
+texto libre llegando como `user_context`, la cadena de mitad vacía, el ordinal fuera de rango, el rastro
+excluido de los pivotes y `/history` publicándolos. Verdes a la primera ⇒ acreditadas por **mutación
+revertida** (`D-12·b`) desde copia `sha256` en `mktemp -d`: **9 inyecciones → 9 rojas, 0 falsos
+positivos**; restauración verificada byte a byte por `sha256`. Suite de `agentic_code`: **247 passed**.
+
+### Lo que NO deroga
+
+`D-47` intacto y ampliado, no corregido. `D-42` intacto: la historia se AÑADE también en la parcial.
+`D-08` intacto: el orden, el ancla y el filtro salen del fuente de A, no de lo que pareciera lógico.

@@ -1,4 +1,4 @@
-"""Homologación K6·tramos 2 y 5 — prompts, guardas, cortacircuitos, frontera y reintento por PTL.
+"""Homologación K6·tramos 2, 5 y 6 — prompts, guardas, frontera, reintento por PTL y parcial.
 
 Contrapartes canónicas leídas ÍNTEGRAS:
 - `services/compact/prompt.ts` (375) — `DETAILED_ANALYSIS_INSTRUCTION_BASE` (31-44)
@@ -22,6 +22,12 @@ Contrapartes canónicas leídas ÍNTEGRAS:
   (227-228), `truncateHeadForPTLRetry` (243-291) y el lazo de reintento de
   `compactConversation` (445-491), gemelo del de `partialCompactConversation`
   (854-899).
+- `services/compact/compact.ts` (1705), tramo 6 — `annotateBoundaryWithPreservedSegment`
+  (349-367) y `partialCompactConversation` (772-1106): el corte por el pivote
+  (806-812), el filtrado de lo conservado (818-836), las guardas de mitad vacía
+  (838-846), la elección de `apiMessages` por dirección (869-872), el lazo de PTL
+  gemelo (854-899), `summarizeMetadata` frente a `isVisibleInTranscriptOnly`
+  (1040-1050), el ancla (1060-1064) y `logEvent('tengu_partial_compact')` (990-1005).
 - `services/compact/grouping.ts` (63) — `groupMessagesByApiRound` (24-50).
 - `services/api/errors.ts` (1207) — `PROMPT_TOO_LONG_ERROR_MESSAGE` (62),
   `isPromptTooLongMessage` (64-77), `parsePromptTooLongTokenCounts` (85-96),
@@ -59,9 +65,16 @@ from agentic_runtime.context.compact import (
     COMPACT_BOUNDARY_KEY,
     COMPACT_SUMMARY_KEY,
     COMPACT_SYSTEM_PROMPT,
+    ERROR_MESSAGE_NOTHING_AFTER,
+    ERROR_MESSAGE_NOTHING_BEFORE,
     MAX_PTL_RETRIES,
+    PRESERVED_ANCHOR_BOUNDARY,
+    PRESERVED_ANCHOR_SUMMARY,
+    PRESERVED_SEGMENT_KEY,
     PROMPT_TOO_LONG_ERROR_MESSAGE,
     PTL_RETRY_MARKER,
+    SUMMARIZE_METADATA_KEY,
+    TRANSCRIPT_ONLY_KEY,
     ApiErrorSummaryError,
     AutoCompactTracking,
     IncompleteResponseError,
@@ -83,8 +96,10 @@ from agentic_runtime.context.compact import (
     is_ptl_retry_marker_message,
     messages_after_compact_boundary,
     parse_prompt_too_long_token_counts,
+    partial_compact_conversation,
     prompt_too_long_token_gap,
     should_auto_compact,
+    split_partial_compact_messages,
     strip_images_from_messages,
     truncate_head_for_ptl_retry,
 )
@@ -655,3 +670,210 @@ async def test_the_circuit_breaker_stops_calling_the_model_at_three_failures():
     assert caller.calls == []
     assert seen[-1].outcome == "skipped"
     assert seen[-1].reason == "circuit_breaker"
+
+
+# --- E · Compactación parcial (par de compact.ts:772-1106) -------------------
+
+
+def _partial_history() -> list[dict[str, Any]]:
+    return [
+        {"role": "user", "content": "primero"},
+        {"role": "assistant", "content": "uno"},
+        {"role": "user", "content": "segundo"},
+        {"role": "assistant", "content": "dos"},
+        {"role": "user", "content": "tercero"},
+        {"role": "assistant", "content": "tres"},
+    ]
+
+
+def test_the_pivot_decides_which_half_is_summarized_and_which_survives_verbatim():
+    """`partialCompactConversation` corta en `slice(0, pivot)` / `slice(pivot)`
+    (compact.ts:806-812) y la dirección dice cuál de las dos mitades va al resumidor:
+    `from` resume DESDE el pivote y conserva lo anterior; `up_to` resume HASTA él y
+    conserva lo posterior."""
+    history = _partial_history()
+    summarize, kept = split_partial_compact_messages(history, 3, "from")
+    assert [m["content"] for m in summarize] == ["dos", "tercero", "tres"]
+    assert [m["content"] for m in kept] == ["primero", "uno", "segundo"]
+
+    summarize, kept = split_partial_compact_messages(history, 3, "up_to")
+    assert [m["content"] for m in summarize] == ["primero", "uno", "segundo"]
+    assert [m["content"] for m in kept] == ["dos", "tercero", "tres"]
+
+
+def test_up_to_strips_the_stale_boundary_and_summary_from_what_it_preserves():
+    """En `up_to` el resumen nuevo va DELANTE de lo conservado, así que una frontera
+    rancia sobreviviente ganaría el rastreo hacia atrás y se llevaría por delante el
+    resumen recién hecho. A la filtra (compact.ts:824-833); `from` no la necesita
+    porque allí lo conservado va detrás de la frontera nueva."""
+    stale_boundary = create_compact_boundary_message("auto", 10)
+    stale_summary = {"role": "user", "content": "resumen viejo", COMPACT_SUMMARY_KEY: True}
+    history = [
+        {"role": "user", "content": "previo"},
+        stale_boundary,
+        stale_summary,
+        {"role": "assistant", "content": "posterior"},
+    ]
+    _summarize, kept = split_partial_compact_messages(history, 1, "up_to")
+    assert [m["content"] for m in kept] == ["posterior"]
+
+
+async def test_an_empty_half_names_which_side_had_nothing_to_summarize():
+    caller = FakeCaller(LONG_SUMMARY)
+    history = _partial_history()
+    with pytest.raises(NotEnoughMessagesError) as before:
+        await partial_compact_conversation(history, 0, caller, LOCAL_BUDGET, direction="up_to")
+    assert str(before.value) == ERROR_MESSAGE_NOTHING_BEFORE
+
+    with pytest.raises(NotEnoughMessagesError) as after:
+        await partial_compact_conversation(
+            history, len(history), caller, LOCAL_BUDGET, direction="from"
+        )
+    assert str(after.value) == ERROR_MESSAGE_NOTHING_AFTER
+    assert caller.calls == []
+
+
+async def test_up_to_sends_only_the_prefix_and_from_sends_the_whole_conversation():
+    """`apiMessages` no es siempre el conjunto a resumir (compact.ts:869-872): en
+    `up_to` el prefijo es exactamente el que ya está cacheado, y mandarlo entero
+    aprovecha el prefix cache; en `from` el resumidor necesita ver lo anterior para
+    entender de qué habla la cola."""
+    history = _partial_history()
+
+    up_to = FakeCaller(LONG_SUMMARY)
+    await partial_compact_conversation(history, 3, up_to, LOCAL_BUDGET, direction="up_to")
+    assert len(up_to.calls[0]["messages"]) == 4
+
+    from_caller = FakeCaller(LONG_SUMMARY)
+    await partial_compact_conversation(history, 3, from_caller, LOCAL_BUDGET, direction="from")
+    assert len(from_caller.calls[0]["messages"]) == len(history) + 1
+
+
+async def test_the_user_context_reaches_the_prompt_and_the_boundary():
+    caller = FakeCaller(LONG_SUMMARY)
+    result = await partial_compact_conversation(
+        _partial_history(), 3, caller, LOCAL_BUDGET, user_context="quédate con el bug"
+    )
+    assert "User context: quédate con el bug" in caller.calls[0]["messages"][-1]["content"]
+    assert result.boundary_marker[COMPACT_BOUNDARY_KEY]["user_context"] == "quédate con el bug"
+
+
+async def test_a_summary_with_survivors_carries_its_metadata_and_alone_it_is_transcript_only():
+    """Con mitad conservada el resumen lleva `summarizeMetadata` (compact.ts:1040-1048);
+    sin ella no hay nada que anclar y A lo marca `isVisibleInTranscriptOnly`
+    (compact.ts:1050): es historia para el humano, no contexto para el modelo."""
+    history = _partial_history()
+    with_survivors = await partial_compact_conversation(
+        history, 3, FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, direction="up_to"
+    )
+    summary = with_survivors.summary_messages[0]
+    assert summary[SUMMARIZE_METADATA_KEY] == {
+        "messages_summarized": 3,
+        "user_context": None,
+        "direction": "up_to",
+    }
+    assert TRANSCRIPT_ONLY_KEY not in summary
+
+    alone = await partial_compact_conversation(
+        history, len(history), FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, direction="up_to"
+    )
+    assert alone.summary_messages[0][TRANSCRIPT_ONLY_KEY] is True
+    assert SUMMARIZE_METADATA_KEY not in alone.summary_messages[0]
+
+
+async def test_the_preserved_segment_is_annotated_by_function_not_by_uuid():
+    """Divergencia DECLARADA (`D-21`): `annotateBoundaryWithPreservedSegment`
+    (compact.ts:349-367) escribe `{headUuid, anchorUuid, tailUuid}` para recoser la
+    cadena `parentUuid` de A. B no tiene cadena que recoser —los mensajes son dicts
+    planos en una lista persistida—, así que se porta la FUNCIÓN: qué ancla el
+    segmento y cuánto mide. El ancla sigue la del canónico: el resumen en `up_to`,
+    la frontera en `from`."""
+    history = _partial_history()
+    up_to = await partial_compact_conversation(
+        history, 3, FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, direction="up_to"
+    )
+    assert up_to.boundary_marker[PRESERVED_SEGMENT_KEY] == {
+        "anchor": PRESERVED_ANCHOR_SUMMARY,
+        "count": 3,
+    }
+    from_result = await partial_compact_conversation(
+        history, 3, FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, direction="from"
+    )
+    assert from_result.boundary_marker[PRESERVED_SEGMENT_KEY] == {
+        "anchor": PRESERVED_ANCHOR_BOUNDARY,
+        "count": 3,
+    }
+
+
+async def test_the_block_stays_chronological_and_the_boundary_still_opens_it():
+    """El orden de `buildPostCompactMessages` deja de ser uno solo en cuanto hay
+    parciales: en `from` lo conservado es ANTERIOR al resumen de la cola, y ponerlo
+    detrás le mentiría al modelo sobre el orden de los hechos. La frontera abre el
+    bloque en las dos direcciones, que es lo que hace que el rastreo hacia atrás se
+    lleve el bloque entero y no un trozo."""
+    history = _partial_history()
+    from_result = await partial_compact_conversation(
+        history, 3, FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, direction="from"
+    )
+    from_block = build_post_compact_messages(from_result)
+    assert from_block[0] is from_result.boundary_marker
+    assert [m["content"] for m in from_block[1:4]] == ["primero", "uno", "segundo"]
+    assert from_block[4] is from_result.summary_messages[0]
+
+    up_to_result = await partial_compact_conversation(
+        history, 3, FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, direction="up_to"
+    )
+    up_to_block = build_post_compact_messages(up_to_result)
+    assert up_to_block[0] is up_to_result.boundary_marker
+    assert up_to_block[1] is up_to_result.summary_messages[0]
+    assert [m["content"] for m in up_to_block[2:]] == ["dos", "tercero", "tres"]
+
+    assert messages_after_compact_boundary([*history, *up_to_block]) == up_to_block
+
+
+async def test_the_event_tells_a_partial_apart_from_a_full_compaction():
+    """`D-22`: A rinde la parcial por `logEvent('tengu_partial_compact', …)`
+    (compact.ts:990-1005), que es telemetría propia y no costura. Sin estos campos el
+    consumidor ve «se compactó» y no puede saber qué mitad sobrevivió literal."""
+    seen, emit = _collector()
+    await partial_compact_conversation(
+        _partial_history(), 3, FakeCaller(LONG_SUMMARY), LOCAL_BUDGET,
+        direction="up_to", emit=emit,
+    )
+    event = next(e for e in seen if isinstance(e, CompactionEvent))
+    assert event.trigger == "manual"
+    assert event.direction == "up_to"
+    assert event.messages_kept == 3
+    assert event.messages_summarized == 3
+
+    seen_full, emit_full = _collector()
+    await compact_conversation(_history(), FakeCaller(LONG_SUMMARY), LOCAL_BUDGET, emit=emit_full)
+    assert next(e for e in seen_full if isinstance(e, CompactionEvent)).direction == ""
+
+
+async def test_the_partial_reuses_the_same_ptl_retry_as_the_full_path():
+    """En A los dos lazos son gemelos copiados (compact.ts:445-491 y 854-899). Se
+    homologa la CONDUCTA, no la duplicación: un solo cuerpo, y esta prueba es la que
+    acredita que la parcial no se quedó sin él."""
+    caller = ScriptedCaller(
+        ("error", "API Error: prompt is too long: 300000 tokens > 200000"),
+        ("token", LONG_SUMMARY),
+    )
+    result = await partial_compact_conversation(
+        _tool_history(6), 1, caller, LOCAL_BUDGET, direction="from"
+    )
+    assert len(caller.calls) == 2
+    assert len(caller.calls[1]["messages"]) < len(caller.calls[0]["messages"])
+    assert result.summary == LONG_SUMMARY
+
+
+async def test_the_partial_refuses_the_same_summaries_as_the_full_path():
+    history = _partial_history()
+    with pytest.raises(SummaryTooShortError):
+        await partial_compact_conversation(history, 3, FakeCaller(SHORT_SUMMARY), LOCAL_BUDGET)
+    with pytest.raises(ApiErrorSummaryError):
+        await partial_compact_conversation(
+            history, 3, FakeCaller("API Error: overloaded"), LOCAL_BUDGET
+        )
+    with pytest.raises(IncompleteResponseError):
+        await partial_compact_conversation(history, 3, FakeCaller("  "), LOCAL_BUDGET)

@@ -1453,3 +1453,59 @@ grafía del token—; el predicado se implementó, se falsificó y se retiró. L
 vigilada por un test.
 
 Retoma por el tramo 5: reintento por PTL (`truncateHeadForPTLRetry`, `compact.ts:243-291`).
+
+## § 5 · addendum 2026-08-26 — tramo 5 cerrado
+
+Hecho: `truncate_head_for_ptl_retry`, `group_messages_by_api_round`, el marcador sintético
+`PTL_RETRY_MARKER`, el lazo de reintento en `compact_conversation`, el parseo del gap desde el
+texto del error, y el pago del hueco del estimador (`TRANSPORTED_ROLES` incluye `tool`).
+Detalle, divergencias y las nueve mutaciones de acreditación en
+`SEPARACION/DECISIONES.md § D-46`.
+
+## § 5 · addendum 2026-08-26 — tramo 6 cerrado (último del arco K6)
+
+Hecho, en `agentic_runtime`: `partial_compact_conversation` y
+`split_partial_compact_messages`, `annotate_boundary_with_preserved_segment`,
+`CompactionResult.direction` y `build_post_compact_messages` sensible a dirección, el lazo de
+PTL y la validación del resumen factorizados en un solo cuerpo para las dos rutas, y
+`CompactionEvent` con `direction`/`messages_kept`/`messages_summarized`.
+En `agentic_code`: `/compact` con instrucciones opcionales
+(`compaction.py` nuevo, `ManualCompaction`), `build_model_caller` extraído de
+`build_runtime` para que el comando use el MISMO puente que el turno,
+`ConversationState.append` (asiento del bloque en el transcript, que es la fuente de verdad
+porque `dispatch_prompt` hace `reload()`), y el cable `cli.py` → `WorkspaceRepl` →
+`BuiltinCommandContext`.
+
+`POST_COMPACT` **ya existía**: lo construyó el tramo 4 (`hooks/protocol.py:30`). El enunciado
+de retoma que decía lo contrario estaba rancio; se anota y no se reconstruye nada.
+
+Pruebas: `test_compact_engine.py` **49 verdes** (sección E nueva, 12 casos), acreditados por
+nueve mutaciones revertidas desde copia verificada por `sha256` —todas muertas—;
+`test_compact_engine` + `test_compact_restore` + `test_context_window` + `test_events`
+= **96 verdes**. Detalle y divergencias en `SEPARACION/DECISIONES.md § D-47`.
+
+**Pendiente del tramo, PAGADO en la misma ventana**: los casos de consumidor de `/compact`
+en `agentic_code/tests/test_compaction_wire.py` (`D-15`) y la pasada de la suite.
+
+## § 5 · addendum 2026-08-26 — la parcial EXPUESTA en el integrador (cierre del tramo 6)
+
+Hecho, en `agentic_code`: `/compact from:N` y `/compact upto:N` con texto libre detrás que
+viaja como `user_context`; `selectable_pivot_indices` (homologado de
+`selectableUserMessagesFilter`, `MessageSelector.tsx:767-791`); `/history` publicando la lista
+numerada de pivotes, que es la superficie que el ordinal necesitaba; el rastro del comando
+añadido al final del bloque ya ordenado; y la traducción de `NotEnoughMessagesError` por su
+MENSAJE, que era defecto propio y se paga aquí.
+En `agentic_runtime`: `is_local_command_message` retirada por no tener consumidor (`L09`) y
+sustituida por `is_local_command_output_message`, que sí lo tiene.
+
+Divergencia declarada (`D-21`/`D-22`): `upto:` se expone pese a que A lo esconde tras
+`if ("external" === 'ant')` — ese portón es catálogo de producto. Y
+`ERROR_MESSAGE_NOTHING_AFTER` queda declarado **inalcanzable** por esta superficie.
+
+Pruebas: `agentic_code` **247 verdes**, con 7 casos nuevos acreditados por **9 mutaciones
+revertidas → 9 rojas, 0 falsos positivos**, restauración verificada por `sha256`. Sin procesos
+supervivientes. Detalle en `SEPARACION/DECISIONES.md § D-48`.
+
+Retoma: la **sonda de ejecución** desde `agentic_code`, con enunciado expreso (resultado
+funcional, uso de tools, t/s, tiempo, declaraciones de compactación) y el riesgo del KV `q4_0`
+a examen.

@@ -39,6 +39,12 @@ COMPACT_SYSTEM_PROMPT = "You are a helpful AI assistant tasked with summarizing 
 COMPACT_BOUNDARY_KEY = "compact_boundary"
 COMPACT_BOUNDARY_CONTENT = "Conversation compacted"
 COMPACT_SUMMARY_KEY = "is_compact_summary"
+SUMMARIZE_METADATA_KEY = "summarize_metadata"
+TRANSCRIPT_ONLY_KEY = "is_visible_in_transcript_only"
+PRESERVED_SEGMENT_KEY = "preserved_segment"
+
+PRESERVED_ANCHOR_BOUNDARY = "boundary"
+PRESERVED_ANCHOR_SUMMARY = "summary"
 
 API_ERROR_PREFIX = "API Error"
 PROMPT_TOO_LONG_ERROR_MESSAGE = "Prompt is too long"
@@ -59,6 +65,8 @@ ERROR_MESSAGE_INCOMPLETE_RESPONSE = (
     "Compaction interrupted · This may be due to network issues — please try again."
 )
 ERROR_MESSAGE_SUMMARY_TOO_SHORT = "Summary too short to replace the conversation."
+ERROR_MESSAGE_NOTHING_BEFORE = "Nothing to summarize before the selected message."
+ERROR_MESSAGE_NOTHING_AFTER = "Nothing to summarize after the selected message."
 
 MEDIA_MARKERS = {"image": "[image]", "document": "[document]"}
 
@@ -298,6 +306,7 @@ class CompactionResult:
     attachments: list[dict[str, Any]] = field(default_factory=list)
     hook_results: list[dict[str, Any]] = field(default_factory=list)
     messages_to_keep: list[dict[str, Any]] | None = None
+    direction: PartialCompactDirection | None = None
     user_display_message: str | None = None
     summary: str = ""
     pre_compact_token_count: int = 0
@@ -307,13 +316,28 @@ class CompactionResult:
 
 
 def build_post_compact_messages(result: CompactionResult) -> list[dict[str, Any]]:
+    kept = result.messages_to_keep or []
+    if result.direction == "from":
+        ordered = [*kept, *result.summary_messages]
+    else:
+        ordered = [*result.summary_messages, *kept]
     return [
         result.boundary_marker,
-        *result.summary_messages,
-        *(result.messages_to_keep or []),
+        *ordered,
         *result.attachments,
         *result.hook_results,
     ]
+
+
+def annotate_boundary_with_preserved_segment(
+    boundary_marker: dict[str, Any],
+    anchor: str,
+    preserved_count: int,
+) -> dict[str, Any]:
+    return {
+        **boundary_marker,
+        PRESERVED_SEGMENT_KEY: {"anchor": anchor, "count": preserved_count},
+    }
 
 
 def merge_hook_instructions(
@@ -467,6 +491,74 @@ async def _summarize_once(
     return summary, True, False
 
 
+async def _summarize_with_ptl_retry(
+    caller: ModelCallerProtocol,
+    to_summarize: list[dict[str, Any]],
+    prompt: str,
+    *,
+    model_id: str,
+    max_tokens: int,
+    trigger: str,
+    pre_compact_token_count: int,
+    stop: AbortSignal | None,
+    emit: EmitFn | None,
+) -> tuple[str, bool, bool, int]:
+    thinking_disabled = True
+    reasoning_fallback = False
+    ptl_attempts = 0
+    while True:
+        try:
+            summary, thinking_disabled, reasoning_fallback = await _summarize_once(
+                caller,
+                [*to_summarize, {"role": "user", "content": prompt}],
+                model_id=model_id,
+                max_tokens=max_tokens,
+                stop=stop,
+            )
+            error_text = summary if summary.startswith(PROMPT_TOO_LONG_ERROR_MESSAGE) else ""
+        except PromptTooLongError as error:
+            summary = ""
+            error_text = error.details or str(error)
+
+        if not error_text:
+            return summary, thinking_disabled, reasoning_fallback, ptl_attempts
+
+        ptl_attempts += 1
+        truncated = (
+            truncate_head_for_ptl_retry(to_summarize, error_text)
+            if ptl_attempts <= MAX_PTL_RETRIES
+            else None
+        )
+        if truncated is None:
+            raise PromptTooLongError(details=error_text, ptl_attempts=ptl_attempts)
+
+        if emit is not None:
+            await emit(
+                CompactionEvent(
+                    trigger=trigger,
+                    outcome="ptl_retry",
+                    reason="prompt_too_long",
+                    pre_tokens=pre_compact_token_count,
+                    ptl_attempt=ptl_attempts,
+                    dropped_messages=len(to_summarize) - len(truncated),
+                    remaining_messages=len(truncated),
+                )
+            )
+        to_summarize = truncated
+
+
+def _validate_summary(summary: str, budget: ContextBudget) -> str:
+    if not summary:
+        raise IncompleteResponseError
+    if starts_with_api_error_prefix(summary):
+        raise ApiErrorSummaryError(summary)
+
+    formatted = format_compact_summary(summary)
+    if len(formatted) < budget.min_summary_chars:
+        raise SummaryTooShortError
+    return formatted
+
+
 async def compact_conversation(
     messages: Sequence[dict[str, Any]],
     caller: ModelCallerProtocol,
@@ -507,57 +599,18 @@ async def compact_conversation(
 
     to_summarize = strip_images_from_messages(messages_after_compact_boundary(messages))
 
-    thinking_disabled = True
-    reasoning_fallback = False
-    ptl_attempts = 0
-    while True:
-        try:
-            summary, thinking_disabled, reasoning_fallback = await _summarize_once(
-                caller,
-                [*to_summarize, {"role": "user", "content": prompt}],
-                model_id=model_id,
-                max_tokens=budget.reserved_for_summary,
-                stop=stop,
-            )
-            error_text = summary if summary.startswith(PROMPT_TOO_LONG_ERROR_MESSAGE) else ""
-        except PromptTooLongError as error:
-            summary = ""
-            error_text = error.details or str(error)
-
-        if not error_text:
-            break
-
-        ptl_attempts += 1
-        truncated = (
-            truncate_head_for_ptl_retry(to_summarize, error_text)
-            if ptl_attempts <= MAX_PTL_RETRIES
-            else None
-        )
-        if truncated is None:
-            raise PromptTooLongError(details=error_text, ptl_attempts=ptl_attempts)
-
-        if emit is not None:
-            await emit(
-                CompactionEvent(
-                    trigger=trigger,
-                    outcome="ptl_retry",
-                    reason="prompt_too_long",
-                    pre_tokens=pre_compact_token_count,
-                    ptl_attempt=ptl_attempts,
-                    dropped_messages=len(to_summarize) - len(truncated),
-                    remaining_messages=len(truncated),
-                )
-            )
-        to_summarize = truncated
-
-    if not summary:
-        raise IncompleteResponseError
-    if starts_with_api_error_prefix(summary):
-        raise ApiErrorSummaryError(summary)
-
-    formatted = format_compact_summary(summary)
-    if len(formatted) < budget.min_summary_chars:
-        raise SummaryTooShortError
+    summary, thinking_disabled, reasoning_fallback, ptl_attempts = await _summarize_with_ptl_retry(
+        caller,
+        to_summarize,
+        prompt,
+        model_id=model_id,
+        max_tokens=budget.reserved_for_summary,
+        trigger=trigger,
+        pre_compact_token_count=pre_compact_token_count,
+        stop=stop,
+        emit=emit,
+    )
+    formatted = _validate_summary(summary, budget)
 
     kept = list(messages_to_keep or [])
     boundary_marker = create_compact_boundary_message(
@@ -602,6 +655,7 @@ async def compact_conversation(
         attachments=attachments,
         hook_results=hook_results,
         messages_to_keep=kept or None,
+        direction=direction,
         user_display_message=user_display_message,
         summary=summary,
         pre_compact_token_count=pre_compact_token_count,
@@ -615,9 +669,191 @@ async def compact_conversation(
             CompactionEvent(
                 trigger=trigger,
                 outcome="compacted",
+                direction=direction or "",
                 pre_tokens=pre_compact_token_count,
                 post_tokens=true_post_compact_token_count,
                 summary_chars=len(formatted),
+                messages_kept=len(kept),
+                messages_summarized=len(messages) - len(kept),
+                thinking_disabled=thinking_disabled,
+                reasoning_fallback=reasoning_fallback,
+                ptl_attempt=ptl_attempts,
+            )
+        )
+
+    return result
+
+
+def _is_progress_message(message: dict[str, Any]) -> bool:
+    return message.get("type") == "progress"
+
+
+def _is_stale_compact_marker(message: dict[str, Any]) -> bool:
+    if is_compact_boundary_message(message):
+        return True
+    return message.get("role") == "user" and bool(message.get(COMPACT_SUMMARY_KEY))
+
+
+def split_partial_compact_messages(
+    messages: Sequence[dict[str, Any]],
+    pivot_index: int,
+    direction: PartialCompactDirection,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    head = list(messages[:pivot_index])
+    tail = list(messages[pivot_index:])
+
+    if direction == "up_to":
+        to_summarize = head
+        kept = [
+            message
+            for message in tail
+            if not _is_progress_message(message) and not _is_stale_compact_marker(message)
+        ]
+    else:
+        to_summarize = tail
+        kept = [message for message in head if not _is_progress_message(message)]
+
+    return to_summarize, kept
+
+
+async def partial_compact_conversation(
+    messages: Sequence[dict[str, Any]],
+    pivot_index: int,
+    caller: ModelCallerProtocol,
+    budget: ContextBudget,
+    *,
+    model_id: str = "",
+    direction: PartialCompactDirection = "from",
+    user_context: str | None = None,
+    suppress_follow_up_questions: bool = True,
+    transcript_path: str | None = None,
+    anchor: UsageAnchor | None = None,
+    stop: AbortSignal | None = None,
+    hooks: HookFn | None = None,
+    emit: EmitFn | None = None,
+    ctx: ToolUseContext | None = None,
+    provider_messages: Sequence[dict[str, Any]] | None = None,
+) -> CompactionResult:
+    if not messages:
+        raise NotEnoughMessagesError
+
+    to_summarize, kept = split_partial_compact_messages(messages, pivot_index, direction)
+    if not to_summarize:
+        raise NotEnoughMessagesError(
+            ERROR_MESSAGE_NOTHING_BEFORE if direction == "up_to" else ERROR_MESSAGE_NOTHING_AFTER
+        )
+
+    trigger = "manual"
+    pre_compact_token_count = token_count_with_estimation(list(messages), anchor)
+
+    custom_instructions, user_display_message = await _run_pre_compact_hook(
+        hooks, trigger, None
+    )
+    if user_context:
+        custom_instructions = merge_hook_instructions(
+            custom_instructions, f"User context: {user_context}"
+        )
+
+    prompt = get_partial_compact_prompt(
+        custom_instructions,
+        direction,
+        local_reasoning_guard=budget.min_summary_chars > 0,
+    )
+    api_messages = strip_images_from_messages(
+        to_summarize if direction == "up_to" else list(messages)
+    )
+
+    summary, thinking_disabled, reasoning_fallback, ptl_attempts = await _summarize_with_ptl_retry(
+        caller,
+        api_messages,
+        prompt,
+        model_id=model_id,
+        max_tokens=budget.reserved_for_summary,
+        trigger=trigger,
+        pre_compact_token_count=pre_compact_token_count,
+        stop=stop,
+        emit=emit,
+    )
+    formatted = _validate_summary(summary, budget)
+
+    boundary_marker = annotate_boundary_with_preserved_segment(
+        create_compact_boundary_message(
+            trigger,
+            pre_compact_token_count,
+            user_context,
+            len(to_summarize),
+        ),
+        PRESERVED_ANCHOR_SUMMARY if direction == "up_to" else PRESERVED_ANCHOR_BOUNDARY,
+        len(kept),
+    )
+
+    summary_message: dict[str, Any] = {
+        "role": "user",
+        "content": get_compact_user_summary_message(
+            summary,
+            suppress_follow_up_questions,
+            transcript_path,
+            bool(kept),
+        ),
+        COMPACT_SUMMARY_KEY: True,
+    }
+    if kept:
+        summary_message[SUMMARIZE_METADATA_KEY] = {
+            "messages_summarized": len(to_summarize),
+            "user_context": user_context,
+            "direction": direction,
+        }
+    else:
+        summary_message[TRANSCRIPT_ONLY_KEY] = True
+    summary_messages = [summary_message]
+
+    attachments: list[dict[str, Any]] = []
+    if ctx is not None:
+        attachments.extend(
+            await create_post_compact_file_attachments(ctx, budget, messages_to_keep=kept)
+        )
+    attachments.extend(provider_messages or [])
+
+    hook_results, post_display_message = await _run_post_compact_hook(
+        hooks, trigger, summary
+    )
+    user_display_message = _combine_display_messages(
+        user_display_message, post_display_message
+    )
+
+    ordered = (
+        [*kept, *summary_messages] if direction == "from" else [*summary_messages, *kept]
+    )
+    true_post_compact_token_count = rough_token_count_for_messages(
+        [boundary_marker, *ordered, *attachments, *hook_results]
+    )
+
+    result = CompactionResult(
+        boundary_marker=boundary_marker,
+        summary_messages=summary_messages,
+        attachments=attachments,
+        hook_results=hook_results,
+        messages_to_keep=kept or None,
+        direction=direction,
+        user_display_message=user_display_message,
+        summary=summary,
+        pre_compact_token_count=pre_compact_token_count,
+        true_post_compact_token_count=true_post_compact_token_count,
+        thinking_disabled=thinking_disabled,
+        reasoning_fallback=reasoning_fallback,
+    )
+
+    if emit is not None:
+        await emit(
+            CompactionEvent(
+                trigger=trigger,
+                outcome="compacted",
+                direction=direction,
+                pre_tokens=pre_compact_token_count,
+                post_tokens=result.true_post_compact_token_count,
+                summary_chars=len(formatted),
+                messages_kept=len(kept),
+                messages_summarized=len(to_summarize),
                 thinking_disabled=thinking_disabled,
                 reasoning_fallback=reasoning_fallback,
                 ptl_attempt=ptl_attempts,
@@ -716,16 +952,23 @@ __all__ = [
     "COMPACT_SUMMARY_KEY",
     "COMPACT_SYSTEM_PROMPT",
     "ERROR_MESSAGE_INCOMPLETE_RESPONSE",
+    "ERROR_MESSAGE_NOTHING_AFTER",
+    "ERROR_MESSAGE_NOTHING_BEFORE",
     "ERROR_MESSAGE_NOT_ENOUGH_MESSAGES",
     "ERROR_MESSAGE_PROMPT_TOO_LONG",
     "ERROR_MESSAGE_SUMMARY_TOO_SHORT",
     "ERROR_MESSAGE_USER_ABORT",
     "MAX_PTL_RETRIES",
+    "PRESERVED_ANCHOR_BOUNDARY",
+    "PRESERVED_ANCHOR_SUMMARY",
+    "PRESERVED_SEGMENT_KEY",
     "PROMPT_TOO_LONG_ERROR_MESSAGE",
     "PROMPT_TOO_LONG_PATTERN",
     "PTL_FALLBACK_DROP_RATIO",
     "PTL_RETRY_MARKER",
     "PTL_RETRY_MARKER_KEY",
+    "SUMMARIZE_METADATA_KEY",
+    "TRANSCRIPT_ONLY_KEY",
     "ApiErrorSummaryError",
     "AutoCompactTracking",
     "CompactionBlockedError",
@@ -735,6 +978,7 @@ __all__ = [
     "NotEnoughMessagesError",
     "PromptTooLongError",
     "SummaryTooShortError",
+    "annotate_boundary_with_preserved_segment",
     "auto_compact_if_needed",
     "build_post_compact_messages",
     "compact_conversation",
@@ -748,8 +992,10 @@ __all__ = [
     "merge_hook_instructions",
     "messages_after_compact_boundary",
     "parse_prompt_too_long_token_counts",
+    "partial_compact_conversation",
     "prompt_too_long_token_gap",
     "should_auto_compact",
+    "split_partial_compact_messages",
     "starts_with_api_error_prefix",
     "strip_images_from_messages",
     "truncate_head_for_ptl_retry",

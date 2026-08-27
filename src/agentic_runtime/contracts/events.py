@@ -192,14 +192,24 @@ class CompactionEvent(Event):
     (`compact.ts:479-483`) — telemetría propia, no costura. Sin ellos la
     compactación que sobrevive a un PTL es indistinguible de la que no truncó
     nada, y lo que se perdió por cabecera queda sin declarar (`D-22`).
+
+    `direction`/`messages_kept`/`messages_summarized` rinden la compactación
+    PARCIAL, que en A viaja por `logEvent('tengu_partial_compact', …)`
+    (`compact.ts:990-1005`) — otra vez telemetría propia, no costura. Sin ellos
+    una parcial es indistinguible de una completa desde fuera: el consumidor ve
+    «se compactó» y no puede saber qué mitad sobrevivió literal ni cuál se
+    resumió, que es justo lo que distingue a las dos.
     """
 
     trigger: str = ""
     outcome: str = ""
     reason: str = ""
+    direction: str = ""
     pre_tokens: int = 0
     post_tokens: int = 0
     summary_chars: int = 0
+    messages_kept: int = 0
+    messages_summarized: int = 0
     thinking_disabled: bool = True
     reasoning_fallback: bool = False
     consecutive_failures: int = 0
