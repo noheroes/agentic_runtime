@@ -665,11 +665,20 @@ resuelven **su** casilla. Divergencia de nuestro port ⇒ defecto nuestro.
 | | A (`compact.ts`) | B, medido en la sonda |
 |---|---|---|
 | razonamiento | `thinkingConfig: { type: 'disabled' }` (`:1305`) | se pide `ThinkingConfig(enabled=False)`; el modelo lo rechaza y `_summarize_once` (`engine.py:464-491`) repliega a `thinking=None` ⇒ el razonamiento por defecto corrió y **~1.600 de los 3.898 tokens** son razonamiento vertido al texto (~58 s de 143) |
-| techo de salida | `min(COMPACT_MAX_OUTPUT_TOKENS = 20_000, max del modelo)` (`context.ts:12`, `compact.ts:1317-1320`) | `budget.reserved_for_summary` = **4.096**, y se generaron 3.898: **roza el techo** |
+| techo de salida | `min(COMPACT_MAX_OUTPUT_TOKENS = 20_000, max del modelo)` (`context.ts:12`, `compact.ts:1317-1320`) | **la misma fórmula**: `_assemble` hace `min(max_output_tokens, scaled(MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000))` (`window.py:74`). Los 4.096 salen del `max_tokens` de la definición del modelo (`local_catalog.py:21`), no de una divergencia |
 | caché de prompt | camino bifurcado por defecto: comparte el prefijo del hilo, `skipCacheWrite: true`, y **no** fija `maxOutputTokens` para no invalidar la clave (`:1179-1200`) | `cached_tokens = 0` — equivalente al camino de repliegue de A, no al de por defecto |
 
-El repliegue de razonamiento **no** es divergencia (`D-21` se cumple: se declara). Lo que sí queda
-enunciado es el techo de 4.096 contra los 20.000 del canónico.
+El repliegue de razonamiento **no** es divergencia (`D-21` se cumple: se declara). **Y el techo
+tampoco lo es** — rectificado el mismo día, antes de que nadie decidiera sobre ello: la fórmula es
+literal de A y el 4.096 es el `max_tokens` que la ficha del modelo declara, con lo que
+`min(4.096, scaled(20.000))` da 4.096 con las dos políticas (`canonical` y `local`, ventana
+65.536). Del `/compact` **no hay nada que pagar en el motor**: los 20.000 son de Claude porque
+Claude los admite.
+
+**Lo que sí queda, y no es del motor:** este modelo gasta ~1.600 de esos 4.096 en razonamiento que
+no sabe callar, así que el resumen útil son ~2.300 tokens de un techo de 4.096. La palanca es la
+ficha (`local_catalog.py:21`, `max_tokens`) contra lo que el `llama-server` admita de verdad, y la
+patología del prompt de resumen ante gpt-5.x/Qwen. Catálogo P1–P9, no homologación.
 
 **(2) `FIND-COMPACT-MANUAL-EVENT` — el canónico lo contesta.** A crea la frontera **dentro de la
 propia función de compactación**, con `createCompactBoundaryMessage(isAutoCompact ? 'auto' :
