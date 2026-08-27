@@ -606,6 +606,80 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (b) — los cuatro abiertos de la sonda, **resueltos contra el canónico** (`D-08`)
+
+Ventana de lectura: **cero mutaciones de fuente**. Se leyeron 1→EOF `models/caller.py` (441),
+`agentic_models/.../openai_responses_shared.py` (486), `pi/packages/ai/src/api/
+openai-responses-shared.ts` (552), `claude-code/src/services/compact/compact.ts` (1705),
+`claude-code/src/utils/context.ts` y `context/compact/engine.py` (1002).
+
+**Corrección de un error mío de la entrada anterior.** Sostuve que `/v1/responses` de
+`llama-server` no rinde `timings`. **Es falso:** el bloque va en la raíz del `response.completed`
+(`cache_n`, `prompt_n`, `prompt_ms`, `prompt_per_second`, `predicted_n`, `predicted_ms`,
+`predicted_per_second`). La sonda derivó el prompt-eval del TTFT por esa creencia equivocada; los
+números del propio servidor **corroboran** la tabla publicada (conn 18: prompt 5.570 @882,5 t/s =
+6,3 s; predicted 3.898 en 142,95 s @27,26 t/s), así que ninguna conclusión de medida cambia. Lo
+que cambia es la afirmación, que queda retirada.
+
+**(3) `FIND-EMPTY-TOOL-OUT` — DEFECTO de nuestro port, con línea.**
+`openai_responses_shared.py:201` colapsa a dos ramas lo que el canónico tiene en tres:
+
+| | canónico `openai-responses-shared.ts:254` | nuestro port `:201` |
+|---|---|---|
+| hay texto | `textResult` | `text_result` |
+| no hay texto pero sí imágenes | `"(see attached image)"` | `"(see attached image)"` |
+| **ni texto ni imágenes** | **`"(no tool output)"`** | *(rama ausente)* ⇒ cae en la de imagen |
+
+Un `glob` sin coincidencias viaja al modelo como `(see attached image)`. Fuente de homologación de
+este fichero es **pi/ai**, no claude-code. La corrección es la tercera rama, literal.
+
+**(4) `FIND-PARALLEL-SLOT` — DEFECTO, no conducta de la API.** Probado en el cable, no inferido.
+De 21 respuestas, **5** traen dos `function_call` en la misma respuesta (conns 1, 4, 7, 8, 11) y en
+**las cinco** los dos `output_item.added` llegan **antes** que los dos `done`. Conn 8, cronológico:
+`added(rs_WnI2DUy58)` → `added(fc_fJUlhLla3, glob)` → 9 deltas → `added(fc_VrJxyvjIp, bash)` →
+120 deltas → `done(rs_…)` → `done(fc_fJUlhLla3)` → `done(fc_VrJxyvjIp)`.
+
+Causa, localizada: `openai_responses_shared.py:281-284` tiene **una sola casilla**
+(`current_item` / `current_block`, con `block_index()` = «el último»), así que el segundo `added`
+**pisa** al primero y cada `done` decide por `isinstance(current_block, …)`. Consecuencias, las
+tres del mismo origen: el `done` del razonamiento falla su `isinstance` ⇒ **`thinking_signature`
+nunca se fija y se pierde el round-trip**; el `done` de A emite `toolcall_end` **llevando B** ⇒ A
+se pierde; el `done` de B encuentra la casilla vacía y cae al `else` (`:426-428`), que reconstruye
+B desde `item_dict_done` ⇒ **B se emite dos veces**. En conn 8: `glob` descartada y `bash`
+ejecutada **dos veces** — un efecto lateral repetido.
+
+El canónico no tiene el defecto por construcción: `openai-responses-shared.ts:288-354` mantiene
+`const outputSlots = new Map<number, ResponsesOutputSlot>()` con `getSlot`/`createSlot`/
+`getOrCreateSlot` y `outputSlots.delete(event.output_index)` al cerrar; cada delta y cada `done`
+resuelven **su** casilla. Divergencia de nuestro port ⇒ defecto nuestro.
+
+**Segunda capa, que sí es decisión y no está en el canónico:** `llama-server` **no manda
+`output_index`** (las claves del payload son `item`/`item_id`/`delta`). Un port literal por
+`output_index` degeneraría igualmente a una casilla. La clave del mapa debe replegarse a
+`item.id`/`item_id`. Va al catálogo P1–P9 (`agentic_models/gpt-5.x-conducta-vs-claude.md`).
+
+`models/caller.py` queda **exonerado**: reenvía cada `toolcall_end` tal cual lo recibe.
+
+**(1) ¿Hay algo que pagar del `/compact`? El canónico dice que sí, y dice qué.**
+
+| | A (`compact.ts`) | B, medido en la sonda |
+|---|---|---|
+| razonamiento | `thinkingConfig: { type: 'disabled' }` (`:1305`) | se pide `ThinkingConfig(enabled=False)`; el modelo lo rechaza y `_summarize_once` (`engine.py:464-491`) repliega a `thinking=None` ⇒ el razonamiento por defecto corrió y **~1.600 de los 3.898 tokens** son razonamiento vertido al texto (~58 s de 143) |
+| techo de salida | `min(COMPACT_MAX_OUTPUT_TOKENS = 20_000, max del modelo)` (`context.ts:12`, `compact.ts:1317-1320`) | `budget.reserved_for_summary` = **4.096**, y se generaron 3.898: **roza el techo** |
+| caché de prompt | camino bifurcado por defecto: comparte el prefijo del hilo, `skipCacheWrite: true`, y **no** fija `maxOutputTokens` para no invalidar la clave (`:1179-1200`) | `cached_tokens = 0` — equivalente al camino de repliegue de A, no al de por defecto |
+
+El repliegue de razonamiento **no** es divergencia (`D-21` se cumple: se declara). Lo que sí queda
+enunciado es el techo de 4.096 contra los 20.000 del canónico.
+
+**(2) `FIND-COMPACT-MANUAL-EVENT` — el canónico lo contesta.** A crea la frontera **dentro de la
+propia función de compactación**, con `createCompactBoundaryMessage(isAutoCompact ? 'auto' :
+'manual', …)` (`:598-602`) y `createCompactBoundaryMessage('manual', …)` (`:1014-1020`): **no hay
+ruta manual muda**. Nuestro motor tampoco la tiene —`compact_conversation` (`:667-682`) y
+`partial_compact_conversation` (`:846-861`) emiten `CompactionEvent` **cuando se les pasa
+`emit`**—. La divergencia está en el integrador: `ManualCompaction._compact`
+(`agentic_code/compaction.py:118-152`) llama **sin `emit`**. El arreglo es esa llamada, y con él
+el texto de `_display_text` (`:154-174`) pasa a ser redundante con el render `⧉`.
+
 ### 2026-08-27 — `K6` · **TRAMO 6 cerrado** (`D-48`) + **sonda de ejecución** (sólo medida)
 
 **Marcador del tramo 6**, con lo que consta en el cierre y en `SEPARACION/DECISIONES.md § D-48`
@@ -690,10 +764,11 @@ esta ventana):
 - **`FIND-EMPTY-TOOL-OUT`** — una salida de tool **vacía** (`glob` sin coincidencias) viaja al
   modelo como el literal **`(see attached image)`** (visto en el cable, `call_mksKrj…`). El modelo
   lo registró como anomalía y lo rodeó con `ls -la`. Es del adaptador `openai-responses`.
-- **`FIND-RENDER-PARALLEL`** — con **tools en paralelo** en una misma respuesta, el deck rotula la
-  primera con el nombre de la tool y las demás con el `call_…|fc_…` crudo
-  (`agentic_code/rendering.py`). Cae junto al render de compactación, que sigue pendiente de la
-  palabra del usuario.
+- ~~**`FIND-RENDER-PARALLEL`** — con tools en paralelo el deck rotula la primera con el nombre y
+  las demás con el `call_…|fc_…` crudo (`agentic_code/rendering.py`).~~ **ENUNCIADO FALSO,
+  retractado el 2026-08-27.** El render es correcto y `rendering.py` no interviene: lo que se veía
+  era el síntoma de un defecto del adaptador, renombrado **`FIND-PARALLEL-SLOT`** y probado en la
+  entrada de abajo.
 
 **Corrección del rótulo «pendientes de la palabra del usuario» (2026-08-27).** El § 5 del tramo 5
 arrastraba dos temas bajo ese rótulo —la rama de `CompactionEvent` en `capture.py::_canonical_message`
