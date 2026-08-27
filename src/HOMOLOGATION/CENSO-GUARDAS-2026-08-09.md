@@ -695,10 +695,29 @@ esta ventana):
   (`agentic_code/rendering.py`). Cae junto al render de compactación, que sigue pendiente de la
   palabra del usuario.
 
-**PUNTO DE RETOMA.** Con el número en la mano se decide si hay algo que pagar del `/compact`; la
-sonda no propone nada. Siguen **pendientes de la palabra del usuario** los dos aplazados del tramo
-5: la rama de `CompactionEvent` en `capture.py::_canonical_message` y el render de compactación en
-`rendering.py`.
+**Corrección del rótulo «pendientes de la palabra del usuario» (2026-08-27).** El § 5 del tramo 5
+arrastraba dos temas bajo ese rótulo —la rama de `CompactionEvent` en `capture.py::_canonical_message`
+y el render de compactación en `rendering.py`— y esta entrada los copió sin contrastar. **Las dos
+cosas estaban mal.** Primera: el aplazamiento fue **decisión mía**, no del usuario; llamarlo «su
+palabra» convirtió una omisión propia en una espera ajena, y además la enterró donde no se ve, que
+es justo lo que impide contestarla. Segunda: contrastado el fuente 1→EOF, **los dos mecanismos ya
+existen** —`capture.py:233-256` proyecta el `CompactionEvent` a `system/compact_boundary` con sus
+catorce campos, y `rendering.py:190-192`, `:218-268` pinta `⧉ compactado` con desglose, sentido del
+parcial y el aviso de repliegue de razonamiento—. Lo que queda no es lo que decía el rótulo, y sale
+medido de esta sonda:
+
+**`FIND-COMPACT-MANUAL-EVENT`, ABIERTO y decidible.** `ManualCompaction._compact`
+(`agentic_code/compaction.py:118-152`) llama al motor **sin `emit`**, así que la ruta `/compact` no
+produce `CompactionEvent`: ni línea en el `.jsonl` de captura ni render `⧉`. En la corrida de esta
+sonda el usuario sólo vio `compactando…` y el `Compacted · …` que imprime `_display_text`
+(`:154-174`). Los dos consumidores están construidos y alimentados **sólo por la ruta automática**
+del lazo. Decidir: si `/compact` debe emitir el evento —y entonces el texto de `_display_text` pasa
+a ser redundante con el render— o si la ruta manual se queda deliberadamente muda en el capture.
+Es divergencia con A, que sí emite `compact_boundary` en las dos rutas.
+
+**PUNTO DE RETOMA.** Dos decisiones abiertas, ninguna en curso: (a) si se paga algo del `/compact`
+con los números de arriba —la sonda no propone nada—; (b) `FIND-COMPACT-MANUAL-EVENT`. Más los dos
+laterales de la corrida, `FIND-EMPTY-TOOL-OUT` y `FIND-RENDER-PARALLEL`.
 
 ### 2026-08-26 — `K6` motor de compactación · **TRAMO 5 de 6 cerrado** (`D-46`)
 
