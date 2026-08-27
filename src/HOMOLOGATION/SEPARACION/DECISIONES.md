@@ -3025,3 +3025,74 @@ sintéticas de `agentic_runtime` no se corrieron ni se tocaron (acuerdo de fase)
 siendo la fecha. `D-47 · 3` intacto: `/compact` sigue corriendo con `ctx=None`, sin restauración de
 ficheros. `D-42` intacto: la historia se añade. `D-08` intacto: el glifo, la frase y la ausencia de
 cifras salen del fuente de A, no de lo que pareciera informativo.
+
+## `D-51` — La observabilidad del `/compact`: el texto libre SALE por el evento y el gasto del sumarizador SE REGISTRA (2026-08-27)
+
+`D-50` cerró el cable y declaró dos carencias sin pagar (piezas 2 y 3 de su «Declarado y NO pagado»).
+Esta entrada las paga juntas porque son la misma costura: `/compact` es **comando local, no turno**
+—sin `begin_turn`, sin `finish_turn`, sin `dispatch_prompt`—, luego nada de lo que un turno monta
+por sí solo existe para él, y hay que dárselo desde el integrador (`D-22`).
+
+### Pieza A — `user_context` en el contrato del evento
+
+El dato ya viajaba al prompt del resumidor (`User context: …`, `engine.py:752-755`), al marcador de
+frontera (`:779-788`) y a `summarize_metadata` (`:800-805`), y se caía justo en los dos `emit`
+(`:667-682`, `:846-861`) — es decir, en la **única costura pública por la que un consumidor puede
+pintarlo**. `A` sí lo pinta: `CompactSummary.tsx:48`, `Context: “{metadata.userContext}”`, en línea
+aparte del titular porque no es un hecho de la compactación sino lo que se pidió de ella.
+
+Se amplía `CompactionEvent` con `user_context: str = ""` (`contracts/events.py`) y se rellena en las
+dos rutas. Sólo la **parcial** lo trae: la completa manda ese texto como `custom_instructions`,
+igual que `A` (`commands/compact/compact.ts`). El campo existe siempre y va vacío ahí, que es lo que
+`D-21` exige de una opción que esta ruta no expresa.
+
+Aguas abajo llega a las cuatro superficies del integrador y a la proyección de captura:
+`capture.py` lo mete en `compact_metadata` (junto a `trigger` y `pre_tokens`, que es donde `A` los
+tiene), `transcript.py` lo expone como `context_line` —**fuera del titular**—, y `rendering.py`,
+`tui.py` y `transcript_browser.py` lo pintan como `└ contexto: “…”`.
+
+### Pieza B — el grabador de payloads, prestado al comando
+
+`PayloadRecorder` es el **único instrumento que acredita lo que se PIDIÓ al modelo**: la captura
+ordinaria registra eventos, o sea lo que el motor devuelve. Se cosía sólo en `dispatch_prompt`, así
+que el request del sumarizador —el único gasto de modelo que no pertenece a ningún turno— era
+también el único que no quedaba anotado en ninguna parte.
+
+`ManualCompaction` gana una segunda costura, `recording: Callable[[], AbstractContextManager[None]]`,
+que envuelve la llamada al motor; sin ella el default es `nullcontext()`. El REPL la sirve con
+`_record_compaction`, y ahí está el detalle que obliga a esta forma: **`on_payload` ocurre ANTES del
+primer `CompactionEvent`**, luego el sumidero perezoso de `D-50` llegaba tarde por construcción. De
+ahí `_ensure_compaction_capture()`, extraído de `_emit_compaction`: la captura se crea antes de
+llamar al motor y la comparten evento y payload.
+
+**`borrow`, no `attach`/`detach`.** Guardar y restaurar el capture previo en vez de anularlo: la
+compactación **automática** ocurre DENTRO de un turno, y un `detach` dejaría al turno en vuelo sin
+grabador. `/compact` además no es `immediate` (sólo `/status` lo es), comparte el hueco de
+`turn_runner` y no puede solaparse con un turno; la restauración es la garantía de que anidar nunca
+resta.
+
+### Acreditación (`D-15`: el consumidor detecta)
+
+`test_compaction_wire.py` pasa de 26 a **30** casos: el texto libre llega al evento, a
+`compact_metadata` y a las tres superficies pintables como línea aparte —y **no** al titular—; una
+compactación sin texto libre no pinta línea alguna; el request del sumarizador aterriza en el
+`.jsonl` real del `/compact` como `model_request` **por delante** de la frontera (si fuese posterior
+no sería el del sumarizador); y el préstamo devuelve el grabador a la captura del turno, que no se
+queda con el gasto del comando. El caso de la automática exige además `user_context == ""`.
+
+`ruff` limpio; suite de `agentic_code` **258 passed**; sin procesos supervivientes. Las sintéticas de
+`agentic_runtime` no se corrieron ni se tocaron (acuerdo de fase).
+
+### Deuda arrastrada, presentada (`declarar-no-es-pagar`)
+
+No es cola neutra: es deuda mía, y se nombra como tal en el §5 del censo —`FIND-PARALLEL-SLOT`,
+`FIND-EMPTY-TOOL-OUT` y el techo de salida del perfil local—, cada una pagada o declarada **medida y
+vigilada**. El barrido de comentarios de los ficheros tocados sigue siendo paso propio (pieza 1 de
+`D-50`), sin cambio.
+
+### Lo que NO deroga
+
+`D-49` intacto: esto es contrato y cableado, no veredicto de conducta — el 1 de septiembre sigue
+siendo la fecha. `D-50` intacto en sus cinco piezas; esta entrada paga dos de sus declarados, no
+reabre ninguna. `D-47 · 3` intacto: `/compact` sigue corriendo con `ctx=None`. `D-08` intacto: la
+línea `Context:` y su sitio salen de `CompactSummary.tsx`, no de lo que pareciera informativo.

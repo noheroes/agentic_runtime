@@ -199,12 +199,20 @@ class CompactionEvent(Event):
     una parcial es indistinguible de una completa desde fuera: el consumidor ve
     «se compactó» y no puede saber qué mitad sobrevivió literal ni cuál se
     resumió, que es justo lo que distingue a las dos.
+
+    `user_context` es el texto libre con el que el humano orientó una parcial. A SÍ
+    lo rinde en pantalla —`CompactSummary.tsx:48`, `Context: “{userContext}”`— y el
+    motor ya lo lleva hasta el marcador de frontera y hasta `summarize_metadata`;
+    faltaba justamente en el evento, es decir en la única costura por la que un
+    consumidor puede pintarlo. Sólo la ruta PARCIAL lo trae: la completa manda ese
+    texto como `custom_instructions`, igual que A.
     """
 
     trigger: str = ""
     outcome: str = ""
     reason: str = ""
     direction: str = ""
+    user_context: str = ""
     pre_tokens: int = 0
     post_tokens: int = 0
     summary_chars: int = 0

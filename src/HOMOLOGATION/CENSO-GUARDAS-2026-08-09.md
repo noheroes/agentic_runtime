@@ -606,6 +606,67 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (e) — `D-51`: la observabilidad del `/compact` completa, y la deuda arrastrada, NOMBRADA
+
+Palabra del usuario: *«2 ampliar evento, 3 registrar, 4 no queda fuera es deuda que vienes
+arrastrando»*, y `procede` sobre el anuncio. Se pagan las piezas 2 y 3 de lo que `D-50` dejó
+**declarado y no pagado**; se toman como un paso porque son la misma costura —`/compact` es comando
+local, no turno— y se acreditan con el mismo `.jsonl` real (`D-15`).
+
+**Inyectado (2 ficheros en `agentic_runtime`, 7 en `agentic_code`):**
+- `contracts/events.py` — `CompactionEvent.user_context`. El dato ya llegaba al prompt del
+  resumidor (`engine.py:752-755`), al marcador (`:779-788`) y a `summarize_metadata` (`:800-805`),
+  y se caía en los dos `emit`: la única costura pública por la que un consumidor puede pintarlo.
+  `A` lo pinta en línea aparte del titular (`CompactSummary.tsx:48`, `Context: “{userContext}”`).
+- `context/compact/engine.py` — relleno del campo en las dos rutas. Sólo la **parcial** lo trae:
+  la completa manda ese texto como `custom_instructions`, igual que `A`; el campo existe y va
+  vacío, que es lo que `D-21` exige de una opción que la ruta no expresa.
+- `capture.py` — `user_context` dentro de `compact_metadata`, junto a `trigger` y `pre_tokens`;
+  y `PayloadRecorder.borrow`, que **guarda y restaura** en vez de anular.
+- `transcript.py` / `rendering.py` / `tui.py` / `transcript_browser.py` — `context_line`
+  (`└ contexto: “…”`), fuera del titular, en las cuatro superficies.
+- `compaction.py` — segunda costura `recording`, un context manager que envuelve la llamada al
+  motor; sin ella, `nullcontext()`.
+- `repl.py` — `_ensure_compaction_capture()` extraído de `_emit_compaction`, y `_record_compaction`
+  prestando el grabador. El orden es el motivo de la forma: **`on_payload` ocurre ANTES del primer
+  `CompactionEvent`**, luego el sumidero perezoso de `D-50` llegaba tarde por construcción. `borrow`
+  y no `attach`/`detach`: la compactación automática ocurre DENTRO de un turno y un `detach` dejaría
+  al turno en vuelo sin grabador.
+
+**Pruebas:** `test_compaction_wire.py` de 26 a **30**; `agentic_code` **258 verdes**; `ruff` limpio;
+sin procesos supervivientes. Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron.
+Detalle en `SEPARACION/DECISIONES.md § D-51`.
+
+#### Deuda que vengo arrastrando (no es cola neutra: es mía)
+
+Las tres estaban rotuladas «laterales» y «fuera de este paso». El rótulo se retira. Ninguna se paga
+en esta ventana; las tres quedan **medidas, con línea, y decidibles**:
+
+1. **`FIND-PARALLEL-SLOT` — defecto propio, localizado, NO pagado.**
+   `agentic_models/.../openai_responses_shared.py:281-284` tiene **una sola casilla** donde el
+   canónico tiene un mapa (`openai-responses-shared.ts:288-354`, `outputSlots`), así que con dos
+   `function_call` en la misma respuesta el segundo `added` pisa al primero. Consecuencias probadas
+   en el cable (conn 8): `thinking_signature` nunca se fija, la primera tool se **descarta** y la
+   segunda se **ejecuta dos veces** — efecto lateral repetido. Segunda capa, que no está en el
+   canónico: `llama-server` no manda `output_index`, luego la clave del mapa se repliega a
+   `item.id`/`item_id`. **Vigilancia:** es el más caro de los tres —ejecuta dos veces— y no tiene
+   test que lo detenga hoy.
+2. **`FIND-EMPTY-TOOL-OUT` — defecto propio, de una línea, NO pagado.**
+   `openai_responses_shared.py:201` colapsa a dos ramas lo que el canónico tiene en tres
+   (`openai-responses-shared.ts:254`): falta `"(no tool output)"`, así que un `glob` sin
+   coincidencias viaja al modelo como `(see attached image)`. **Vigilancia:** visto en el cable, el
+   modelo lo registró como anomalía y lo rodeó con `ls -la` — degrada la conducta sin fallar.
+3. **Techo de salida del perfil local — NO es divergencia, y lo que queda no es del motor.**
+   Ya rectificado el 2026-08-27 (b): la fórmula es literal de `A` y el 4.096 sale del `max_tokens`
+   de la ficha (`local_catalog.py:21`), con lo que `min(4.096, scaled(20.000))` da 4.096 con las dos
+   políticas. **Lo medido y vigilado:** este modelo gasta ~1.600 de esos 4.096 en razonamiento que
+   no sabe callar, luego el resumen útil son ~2.300. La palanca es la ficha contra lo que el
+   `llama-server` admita, y la patología del prompt de resumen ante gpt-5.x/Qwen: catálogo P1–P9
+   (`agentic_models/gpt-5.x-conducta-vs-claude.md`), no homologación.
+
+Sigue en pie, sin cambio, la pieza 1 de `D-50`: **el barrido de comentarios de los ficheros
+tocados es paso propio**.
+
 ### 2026-08-27 (d) — `FIND-COMPACT-MANUAL-EVENT` PAGADO: la frontera la crea la función de compactación
 
 Palabra del usuario: *«primero, si has detectado que lo que implemento Codex, no se alinea al
