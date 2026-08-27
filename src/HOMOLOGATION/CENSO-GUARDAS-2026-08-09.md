@@ -606,6 +606,100 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 — `K6` · **TRAMO 6 cerrado** (`D-48`) + **sonda de ejecución** (sólo medida)
+
+**Marcador del tramo 6**, con lo que consta en el cierre y en `SEPARACION/DECISIONES.md § D-48`
+(cinco divergencias declaradas allí; no se reproducen aquí): motor de compactación **parcial**
+homologado contra `claude-code/src/services/compact/compact.ts` y expuesto en el integrador como
+`/compact [from:N|upto:N] [instrucciones]` sobre los pivotes que publica `/history`. Acreditado
+por **inyección revertida desde copia verificada por `sha256`** (`D-12 · b`): **9 inyecciones,
+9 rojas**. Suite en **247 verdes**. Commits: `agentic_runtime` `9c86aee` (`fase-b/tramo-1`),
+`agentic_code` `0b66a84` (`fase-b/find-pool-1`); ambos árboles limpios al cerrar.
+
+#### La sonda de ejecución — **SOLO SE MIDE**
+
+No se optimizó nada, no se tocó el motor, no se añadió ni un test. Instrumento **fuera de los
+repos** (scratch de sesión): proxy TCP que graba el cable `127.0.0.1:8099 → :8080` y una sonda sin
+TUI que conduce una sesión REAL de `agentic_code` por la costura ya existente
+`WorkspaceRepl(reader=…)`. Ni un fichero de ninguno de los dos repos fue modificado por la sonda;
+el `base_url` se redirigió en memoria sobre `LOCAL_CATALOG`. Modelo: `local/unsloth/
+Qwen3.8-27B-GGUF:UD-IQ4_XS`, `llama-server` de un slot, KV `q4_0`, `/v1/responses` (SSE).
+
+Sesión de 10 pasos: 4 turnos de trabajo real (leer, editar con `Edit`, `bash`, resumir),
+`/history`, `/compact`, un turno posterior, `/history`, `/compact upto:1`, `/status`.
+
+**Resultado funcional: correcto.** El agente leyó `README.md`/`src/invoice.py`, añadió
+`total_with_vat(lines, country, discount_percent)` componiendo `subtotal → apply_discount →
+with_vat`, respetó «no toques los tests», y ante la fricción real del entorno (`python` inexistente,
+`pytest` no instalado) se recuperó: verificó las aserciones a mano con `python3 -c` y luego reportó
+`No module named pytest` **tal cual** cuando se le pidió literalidad. Tools usadas: `read_file`,
+`glob`, `bash`, `Edit`. Toolset publicado en cada llamada del hilo: **24**.
+
+**Los cuatro cronómetros** (`in`/`cached` del `response.completed`; `ttft` medido en el cable):
+
+| # | medida | in | cached | new | out | ttft | total | pp t/s | tg t/s |
+|---|---|---|---|---|---|---|---|---|---|
+| — | 1ª vuelta, contexto **frío** | 16.961 | 0 | 16.961 | 199 | 19,94 s | 27,58 s | **850,8** | 26,03 |
+| 1 | turno normal **caliente** (línea base) | 21.145 | 21.071 | 74 | 167 | 0,49 s | 7,34 s | — | **24,39** |
+| 2 | **`/compact` completo** | 5.570 | **0** | 5.570 | **3.898** | 7,05 s | **150,00 s** | 790,2 | 27,27 |
+| 3 | **1er turno tras el compact** | 19.209 | **16.701** | 2.508 | 217 | 4,17 s | 12,89 s | 602,1 | 24,88 |
+| 4 | **`/compact upto:1`** | 3.000 | **0** | 3.000 | 2.827 | 3,96 s | **105,34 s** | 756,9 | 27,89 |
+
+Pasos completos: 41,33 s · 107,91 s · 6,24 s · 7,41 s · `/history` 0,05 s · **`/compact` 150,07 s** ·
+turno posterior 16,80 s · `/history` 0,05 s · **`/compact upto:1` 105,40 s** · `/status` 0,05 s.
+Generación plana en toda la sesión: **24,4–26,2 t/s** en el hilo, **27,3–27,9 t/s** en las dos
+llamadas de compactación (sin tools en el prompt).
+
+**Lo que se buscaba, contestado con número.** La llamada de compactación **no comparte clave de
+caché con el hilo**: confirmado por los dos lados —`cached_tokens = 0` en el `response.completed` y
+`n_prompt_tokens_cache = 0` leído en `/slots` en pleno vuelo—, tal como predice el propio
+contrato de B (`system_override` propio, `tools` ausente del cuerpo, `max_tokens` propio de 4096).
+**Pero el segundo reprocesado completo NO se produce:** el turno (3) reutilizó **16.701 de 19.209**
+tokens y arrancó en 4,17 s, no en los ~20 s de un prefijo frío. Los 2.508 nuevos son el resumen
+recién insertado, que es coste inevitable de la conducta, no de la caché. El criterio del enunciado
+—«si el turno (3) tarda como el (2), la caché se rompió en ambos sentidos»— **no se cumple**:
+12,89 s contra 150,00 s. La caché del hilo sobrevive a la compactación.
+
+**Dónde está el coste real, entonces.** No en el reprocesado (7,05 s de los 150) sino en la
+**generación del resumen**: 3.898 tokens a 27,3 t/s = **142,95 s**, el 95 % del `/compact`. Y
+**3.898 roza el techo de 4.096**: una conversación mayor toparía. El contraste (4) confirma que
+manda el prefijo —3.000 de entrada contra 5.570— pero el ahorro es sólo de 45 s porque la salida
+apenas baja (2.827): el parcial abarata lo que menos pesa.
+
+**Peculiaridad gpt-5.x, para el catálogo P1–P9** (`agentic_models/gpt-5.x-conducta-vs-claude.md`):
+de los 3.898 tokens del resumen, **~1.600 son razonamiento vertido al canal de texto** antes del
+`<analysis>` —un recuento cronológico completo que luego el modelo repite dentro del `<summary>`—.
+Con el razonamiento apagado en la llamada de compactación (como en A, `compact.ts:1305`), este
+modelo no calla: lo escribe. Es ~60 s de los 143 y ~40 % del resumen persistido. Medido, no tocado.
+
+**KV `q4_0`: sin degradación atribuible.** El resumen reproduce rutas absolutas, el contenido final
+íntegro de `invoice.py`, el `21.78` del cálculo, los tres errores del entorno y la restricción «no
+toques los tests»; y el turno (3) contestó correctamente fichero y línea. Nada que anotar por
+cuantización en esta corrida.
+
+**Declaraciones de compactación, tal cual las emitió el integrador:**
+- `/compact` → `Compacted · 39 mensajes resumidos · 1625 → 2022 tokens`
+- `/compact upto:1` → `Compacted · 3 mensajes resumidos · 2389 → 2729 tokens` +
+  `parcial hasta el pivote · 6 mensajes conservados literales`
+
+Las dos declaran **crecimiento** de tokens. Se anota como medida, sin interpretarla aquí; en el
+cable el prefijo real del hilo sí bajó, de 21.145 a 19.209 (−1.936).
+
+**Dos hallazgos laterales, ABIERTOS y no tocados** (aparecieron en la corrida, no se persiguen en
+esta ventana):
+- **`FIND-EMPTY-TOOL-OUT`** — una salida de tool **vacía** (`glob` sin coincidencias) viaja al
+  modelo como el literal **`(see attached image)`** (visto en el cable, `call_mksKrj…`). El modelo
+  lo registró como anomalía y lo rodeó con `ls -la`. Es del adaptador `openai-responses`.
+- **`FIND-RENDER-PARALLEL`** — con **tools en paralelo** en una misma respuesta, el deck rotula la
+  primera con el nombre de la tool y las demás con el `call_…|fc_…` crudo
+  (`agentic_code/rendering.py`). Cae junto al render de compactación, que sigue pendiente de la
+  palabra del usuario.
+
+**PUNTO DE RETOMA.** Con el número en la mano se decide si hay algo que pagar del `/compact`; la
+sonda no propone nada. Siguen **pendientes de la palabra del usuario** los dos aplazados del tramo
+5: la rama de `CompactionEvent` en `capture.py::_canonical_message` y el render de compactación en
+`rendering.py`.
+
 ### 2026-08-26 — `K6` motor de compactación · **TRAMO 5 de 6 cerrado** (`D-46`)
 
 Ventana de un paso. Lo decidido queda en `SEPARACION/DECISIONES.md § D-46`; aquí el marcador y
