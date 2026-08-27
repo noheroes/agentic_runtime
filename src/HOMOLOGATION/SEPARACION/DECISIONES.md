@@ -2947,3 +2947,81 @@ El orden de pago no lo fija la gravedad narrativa sino esta decisión:
 `D-48` intactos: el arco K6 está cerrado como construcción y como cableado; lo que esta decisión
 fecha es el **veredicto**, que nunca fue de esta fase. `D-08` intacto: cuando el 1 de septiembre
 llegue, lo que se contraste sigue siendo el fuente de A.
+
+---
+
+## `D-50` — `FIND-COMPACT-MANUAL-EVENT` pagado: la frontera la crea la FUNCIÓN de compactación, y el `/compact` monta su propio sumidero (2026-08-27)
+
+- **Fecha:** 2026-08-27. Cae dentro del punto 2 de `D-49` —es de la variante manual, o sea del
+  ínterin— y no reabre nada del arco `D-41`…`D-48`.
+- **Encargo del usuario, verbatim:** *«primero, si has detectado que lo que implemento Codex, no se
+  alinea al canonico, alinearlo, en el resto estoy de acuerdo.»*
+
+### El defecto
+
+`ManualCompaction._compact` (`agentic_code/src/agentic_code/compaction.py`) llamaba al motor **sin
+`emit=`**. Consecuencia: `/compact` compactaba de verdad —bloque asentado, historia añadida, vista
+posterior a la frontera correcta— y **no emitía `CompactionEvent`**: ni línea en la captura `.jsonl`,
+ni fila rendida. En el canónico la frontera se crea **dentro de la función de compactación**, en las
+dos rutas (`services/compact/compact.ts:598-602` completa, `:1014-1020` parcial), no en la superficie
+que la invoca. La ruta automática de `D-44` sí pasaba `AgentLoop._emit`, así que el hueco era
+exclusivo de la manual: la misma compactación era observable o invisible según por dónde entrase —el
+modo de fallo que `D-46 · 2` ya había cerrado para el PTL.
+
+### La decisión, en cinco piezas
+
+1. **`emit` es campo de `ManualCompaction`** —quinto, con default `None`— y se pasa a **las dos**
+   llamadas del motor. El tipo de la costura es `EventHandler`
+   (`agentic_runtime/contracts/events.py:77`), el alias **público** equivalente al `EmitFn` privado
+   del motor: el integrador no importa símbolos privados del núcleo para cablear una costura que el
+   contrato ya publica.
+2. **El `/compact` monta su propia `StreamCapture`, por sesión y perezosa** (`repl.py`), con
+   `prompt="/compact"`. Es `D-22`: el comando local **no es un turno** —no hay `begin_turn`,
+   `finish_turn` ni `dispatch_prompt`—, luego no hay captura ni presentación montadas para él, y sin
+   sumidero el evento se emitiría al vacío. `StreamCapture._append` abre y cierra el descriptor por
+   línea, así que una captura sin `finish()` no deja asa colgando ni registro `result` fabricado.
+3. **`last_capture_path` NO se desplaza.** La captura del `/compact` se publica por
+   `compaction_capture_path`, aparte. El comando no es el último turno y hacerle sombra a
+   `last_capture_path` mentiría a todo lector que use ese puntero para leer el turno del usuario.
+4. **La frontera es fila del transcript y NO abre turno.** `TranscriptStore.apply` encamina
+   `CompactionEvent` a `_apply_compaction`, que cuelga el bloque de `self._current or el último
+   turno`, y sólo fabrica uno si no hay ninguno. Un comando local que abriese turno rompería el
+   recuento de `ConversationState` y el reparto del `PayloadRecorder`.
+5. **Se caen los contadores inventados de la era Codex.** `_display_text` decía
+   `Compacted · N mensajes resumidos · pre → post tokens` y el render añadía `pre → post tokens` y
+   `resumen de N caracteres`; el glifo era `⧉`. **A no lleva cifras de tokens en la frontera**:
+   `CompactBoundaryMessage.tsx:5-17` pinta `✻ Conversation compacted (ctrl+o for history)`, atenuado
+   y sin números, y `CompactSummary.tsx:31-73` sólo declara `Summarized {N} messages`. Queda por
+   tanto lo que A dicta —resumidos, conservados, sentido de la parcial, razón— con el glifo `✻`, en
+   las cuatro superficies: `_display_text`, `rendering.py`, la fila de la TUI y el navegador de
+   transcript. La nota al pie de `reasoning_fallback` se conserva: es `D-21`, no adorno.
+
+### Acreditación (`D-15`: el consumidor detecta)
+
+`agentic_code/tests/test_compaction_wire.py` pasa de 20 a **26** casos: las dos rutas emiten, la
+parcial declara su dirección, la frontera aterriza en un `.jsonl` real con
+`subtype="compact_boundary"`, el sumidero del REPL usa `prompt == "/compact"` y deja
+`last_capture_path is None`, el store no fabrica turno, y el round-trip de la captura reconstruye el
+evento. `agentic_code/tests/test_tui.py` gana el caso que monta la fila en un `TranscriptViewport`
+real (`App.run_test`): un widget por frontera, el texto canónico, la pista de `Ctrl+O`, **ausencia de
+la cadena `tokens`**, repintado en sitio en vez de remontaje, y el bloque colgando del turno
+existente. `ruff` limpio; suite de `agentic_code` **254 passed**; sin procesos supervivientes. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron (acuerdo de fase).
+
+### Declarado y NO pagado (`declarar-no-es-pagar`)
+
+1. **El barrido de comentarios de los ficheros tocados es paso propio.** Por `D-23` el barrido cubre
+   lo que el paso escribe —y así queda—, pero estos seis ficheros del integrador arrastran
+   documentación previa cuya purga inflaría el diff hasta hacerlo irrevisable.
+2. **`CompactionEvent` no lleva `user_context`.** La línea `Context: "…"` de `CompactSummary.tsx`
+   no se puede rendir desde el evento sin tocar el contrato del núcleo, y el texto libre del
+   `/compact` ya viaja al resumidor (`D-48`). Se declara en vez de fingirla.
+3. **`PayloadRecorder` es de ámbito de turno**, luego la petición de resumen del `/compact` y su
+   coste no se graban. Es preexistente y no lo abre esta entrada.
+
+### Lo que NO deroga
+
+`D-49` intacto: esto es cableado y presentación, no veredicto de conducta — el 1 de septiembre sigue
+siendo la fecha. `D-47 · 3` intacto: `/compact` sigue corriendo con `ctx=None`, sin restauración de
+ficheros. `D-42` intacto: la historia se añade. `D-08` intacto: el glifo, la frase y la ausencia de
+cifras salen del fuente de A, no de lo que pareciera informativo.

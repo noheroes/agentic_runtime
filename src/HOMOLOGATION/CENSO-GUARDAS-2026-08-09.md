@@ -606,6 +606,51 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (d) — `FIND-COMPACT-MANUAL-EVENT` PAGADO: la frontera la crea la función de compactación
+
+Palabra del usuario: *«primero, si has detectado que lo que implemento Codex, no se alinea al
+canonico, alinearlo, en el resto estoy de acuerdo.»* El hallazgo estaba enunciado abierto en el §2
+de este censo (líneas 705-712 y 815-827) y cae dentro del punto 2 de `D-49` —la variante manual del
+interín—, sin reabrir ningún tramo (`D-41`…`D-48`).
+
+**El defecto:** `ManualCompaction._compact` (`agentic_code/src/agentic_code/compaction.py`) llamaba
+al motor **sin `emit=`**, así que `/compact` no producía **ningún `CompactionEvent`**: ni línea en la
+captura `.jsonl` ni frontera pintada. El canónico crea la frontera **dentro de la función** de
+compactación en las dos rutas (`services/compact/compact.ts:598-602` la completa, `:1014-1020` la
+parcial); la ruta automática ya pasaba `AgentLoop._emit`, luego el mismo evento era observable o
+invisible según por dónde entrase — la misma forma que `D-46·2` cerró para el PTL.
+
+**Lo hecho, cinco superficies:**
+1. `compaction.py` — `emit` como quinto campo con default, tipado `EventHandler`
+   (`agentic_runtime/contracts/events.py:77`, el alias público equivalente al `EmitFn` privado del
+   motor), pasado a `compact_conversation` y a `partial_compact_conversation`.
+2. `repl.py` — sumidero propio del `/compact`: `StreamCapture` perezoso por sesión con
+   `prompt="/compact"`. `/compact` es comando local, **no turno**: sin `begin_turn`/`dispatch_prompt`
+   no hay captura ni presentación montadas para él (`D-22`).
+3. `repl.py` — `last_capture_path` **no** se desplaza; el camino nuevo se publica por
+   `compaction_capture_path`.
+4. `transcript.py` + `tui.py` + `transcript_browser.py` — la frontera es una fila del transcript que
+   **no abre turno**: cuelga de `self._current or self._turns[-1]`, protegiendo el recuento de
+   `ConversationState` y el corte del `PayloadRecorder`. Fila: `✻ conversación compactada` con
+   `Ctrl+O para el historial`.
+5. `rendering.py` y `_display_text` — se caen los contadores inventados de la etapa Codex
+   (`pre → post tokens`, `resumen de N caracteres`) y el glifo `⧉`; queda lo que A dicta
+   (`CompactBoundaryMessage.tsx:5-17`, `CompactSummary.tsx:31-73`): resumidos, conservados, sentido.
+   La nota de `reasoning_fallback` se conserva por `D-21`.
+
+**Acreditación:** `tests/test_compaction_wire.py` **26 casos** (6 nuevos: las dos rutas del `emit`,
+la dirección de la parcial, la frontera aterrizando en un `.jsonl` real (`D-15`), el sumidero del
+REPL con `prompt == "/compact"` y `last_capture_path is None`, y la fila del store que no fabrica
+turno) · `tests/test_tui.py` **25 casos**, con la fila montada en un `TranscriptApp` real y la
+comprobación de que `"tokens"` **no** aparece pintado · `ruff` limpio · suite de `agentic_code`
+**254 passed** · sin procesos supervivientes. Las suites sintéticas de `agentic_runtime` no se
+corrieron ni se tocaron. Detalle en `SEPARACION/DECISIONES.md § D-50`.
+
+**Declarado, no pagado:** el barrido de comentarios de los ficheros tocados sigue siendo paso propio
+· `CompactionEvent` no lleva `user_context`, así que la línea `Context: "…"` de A no se puede pintar
+sin tocar el contrato del núcleo · `PayloadRecorder` es por turno, luego la petición de modelo del
+propio `/compact` y el coste del resumidor siguen sin registrarse (preexistente).
+
 ### 2026-08-27 (c) — `D-49`: la acreditación de la compactación tiene FECHA, y no es hoy
 
 Palabra del usuario: *«la compactacion homologada de A se probaria contra el modelo frontera el 1ro
