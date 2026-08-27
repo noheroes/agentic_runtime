@@ -2882,3 +2882,68 @@ positivos**; restauración verificada byte a byte por `sha256`. Suite de `agenti
 
 `D-47` intacto y ampliado, no corregido. `D-42` intacto: la historia se AÑADE también en la parcial.
 `D-08` intacto: el orden, el ancla y el filtro salen del fuente de A, no de lo que pareciera lógico.
+
+---
+
+## `D-49` — La compactación homologada se ACREDITA contra el modelo frontera el 2026-09-01; hasta entonces, variante manual para el local (2026-08-27)
+
+**Origen, verbatim del usuario.** *«lo que habiamos acordado, la compactacion homologada de A se
+probaria contra el modelo frontera el 1ro de setiembre cuando exista el credito repuesto, mientras
+tanto trabajabamos en una variante manual para el modelo local.»*
+
+**Por qué se escribe aquí, y qué faltaba.** Verificado el fichero entero, `D-01`…`D-48`: el acuerdo
+**no estaba escrito como tal**. Lo que sí está, y es su raíz, es `D-40` —el local es un stopgap con
+fecha, la ventana se cierra el 2026-09-01, y lo medido en él vale como código y aritmética pero
+**nunca como conducta**— junto con `D-41` (dos mecanismos de umbral, uno por config) y `D-42 · 4`
+(los dos guardas empíricos del local son constante por política). Lo que ninguna de las tres dice
+es la consecuencia que el usuario acaba de enunciar: **que la acreditación de la compactación
+homologada es ella misma un evento con fecha**, y que el trabajo del ínterin es la variante manual.
+Por la propia regla de este fichero —*«si una decisión no está aquí, el siguiente ciclo la volverá a
+preguntar»*— se registra ahora, y el ciclo que la volvió a preguntar fue éste.
+
+### La regla
+
+1. **La acreditación de la compactación homologada de A tiene fecha: 2026-09-01**, con el crédito de
+   Azure repuesto, y **sujeto gpt-5.4** (`azure-openai-responses`). Es lo que cierra fila.
+2. **Hasta esa fecha, la vía viva del local es la VARIANTE MANUAL**: `/compact`, `/compact from:N`,
+   `/compact upto:N` con sus pivotes de `/history`, más los guardas de la política `local`
+   (`min_summary_chars`, `recompaction_growth_ratio`, escalado de `D-41`). Es la vía que el usuario
+   nombró, y es además la barata: en `upto:` sólo viaja el prefijo (`engine.py:762-764`).
+3. **La autocompactación por umbral no se acredita en el local.** Sigue construida, cableada y
+   probada por consumidor real (`D-44`, `D-15`), que es cableado; lo que no se emite contra ella es
+   un veredicto de conducta.
+
+### Encuadre de la sonda del 2026-08-27, corregido en sitio
+
+La sonda estaba en el enunciado de retoma del propio usuario y su mandato era *«SOLO SE MIDE»*. Lo
+que mide es **mecanismo**: que la caché del hilo sobrevive a la compactación (16.701 de 19.209
+reutilizados), dónde está el coste (95 % en la generación del resumen), y dos defectos de nuestro
+port que el cable destapó (`FIND-EMPTY-TOOL-OUT`, `FIND-PARALLEL-SLOT`). Eso vale y se conserva:
+es la clase «código y aritmética» de `D-40`.
+
+Lo que **no** es, y no debe leerse así en el § 5 del censo: acreditación de la compactación de A.
+Los ~1.600 tokens de razonamiento vertidos al texto, el resumen útil de ~2.300 sobre un techo de
+4.096 y las dos declaraciones de crecimiento de tokens son **observaciones del modelo local**, con
+su modelo dicho, destinadas al catálogo P1–P9 — no filas del marcador. El encuadre se corrige en el
+§ 5 con esta decisión por delante.
+
+### Consecuencia operativa sobre los cuatro abiertos de la sonda
+
+El orden de pago no lo fija la gravedad narrativa sino esta decisión:
+
+- **`FIND-PARALLEL-SLOT`** y **`FIND-EMPTY-TOOL-OUT`** son defectos del adaptador
+  `openai-responses` con línea canónica en pi/ai. **No dependen de la fecha**: se pagan cuando toque
+  su paso, y su acreditación es de código.
+- **`FIND-COMPACT-MANUAL-EVENT`** es exactamente de la variante manual, luego **es del ínterin** y
+  cae dentro del punto 2.
+- El **techo del resumen** quedó retirado el mismo día por falso; lo que sobrevive de él —cuánto
+  admite de verdad `llama-server` frente al `max_tokens` de `local_catalog.py:21`— es política del
+  perfil local y **decae con el stopgap** si el 1 de septiembre llega antes que la necesidad, igual
+  que la propuesta de diferir las cinco tools de mayor esquema (`D-40`).
+
+### Lo que NO deroga
+
+`D-40` intacto y **precisado**: esta entrada es su consecuencia escrita, no su enmienda. `D-41` a
+`D-48` intactos: el arco K6 está cerrado como construcción y como cableado; lo que esta decisión
+fecha es el **veredicto**, que nunca fue de esta fase. `D-08` intacto: cuando el 1 de septiembre
+llegue, lo que se contraste sigue siendo el fuente de A.

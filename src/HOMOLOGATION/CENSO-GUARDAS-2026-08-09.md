@@ -606,6 +606,28 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (c) — `D-49`: la acreditación de la compactación tiene FECHA, y no es hoy
+
+Palabra del usuario: *«la compactacion homologada de A se probaria contra el modelo frontera el 1ro
+de setiembre cuando exista el credito repuesto, mientras tanto trabajabamos en una variante manual
+para el modelo local»*. Verificado `SEPARACION/DECISIONES.md` entero (`D-01`…`D-48`): **el acuerdo
+no estaba escrito**; su raíz sí lo estaba (`D-40`, el local es stopgap con fecha y lo medido en él
+no es conducta). Se registra como **`D-49`**.
+
+**Consecuencia sobre las dos entradas de abajo, que quedan reencuadradas y no retiradas:** lo que la
+sonda del 2026-08-27 acredita es **mecanismo** —caché del hilo superviviente a la compactación,
+reparto del coste, y los dos defectos de port que el cable destapó—, que es la clase «código y
+aritmética» de `D-40`. Lo que **no** acredita es la compactación homologada de A: eso se prueba
+contra **gpt-5.4 el 2026-09-01**. Todo lo relativo a la CALIDAD del resumen en esta corrida
+—~1.600 tokens de razonamiento vertidos al texto, ~2.300 útiles de un techo de 4.096, las dos
+declaraciones de crecimiento— es **observación del modelo local con su modelo dicho**, destino
+catálogo P1–P9, no fila de marcador.
+
+**La vía viva del ínterin es la VARIANTE MANUAL**: `/compact`, `from:N`, `upto:N` sobre los pivotes
+de `/history`, más los guardas de la política `local`. De los cuatro abiertos, `FIND-COMPACT-MANUAL-EVENT`
+cae dentro de esa vía; `FIND-PARALLEL-SLOT` y `FIND-EMPTY-TOOL-OUT` son defectos de adaptador con
+línea canónica en pi/ai y no dependen de la fecha.
+
 ### 2026-08-27 (b) — los cuatro abiertos de la sonda, **resueltos contra el canónico** (`D-08`)
 
 Ventana de lectura: **cero mutaciones de fuente**. Se leyeron 1→EOF `models/caller.py` (441),
@@ -799,9 +821,10 @@ del lazo. Decidir: si `/compact` debe emitir el evento —y entonces el texto de
 a ser redundante con el render— o si la ruta manual se queda deliberadamente muda en el capture.
 Es divergencia con A, que sí emite `compact_boundary` en las dos rutas.
 
-**PUNTO DE RETOMA.** Dos decisiones abiertas, ninguna en curso: (a) si se paga algo del `/compact`
-con los números de arriba —la sonda no propone nada—; (b) `FIND-COMPACT-MANUAL-EVENT`. Más los dos
-laterales de la corrida, `FIND-EMPTY-TOOL-OUT` y `FIND-RENDER-PARALLEL`.
+**PUNTO DE RETOMA** (superado por la entrada `2026-08-27 (b)`, que los resuelve, y encuadrado por
+`D-49`): (a) del `/compact` no hay nada que pagar en el motor; (b) `FIND-COMPACT-MANUAL-EVENT`,
+abierto y de la variante manual. Más los dos laterales de la corrida, `FIND-EMPTY-TOOL-OUT` y
+`FIND-PARALLEL-SLOT` (antes rotulado `FIND-RENDER-PARALLEL`, enunciado retractado).
 
 ### 2026-08-26 — `K6` motor de compactación · **TRAMO 5 de 6 cerrado** (`D-46`)
 
