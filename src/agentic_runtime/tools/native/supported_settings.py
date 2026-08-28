@@ -8,10 +8,14 @@ from ...contracts.permissions import PermissionMode
 
 MODEL_APP_STATE_KEY = "model"
 THINKING_APP_STATE_KEY = "thinking_enabled"
+EFFORT_APP_STATE_KEY = "effort"
+
+OFF_EFFORT_LEVEL = "off"
 
 MODEL_SETTING = "model"
 PERMISSION_MODE_SETTING = "permissions.defaultMode"
 THINKING_SETTING = "alwaysThinkingEnabled"
+EFFORT_SETTING = "effortLevel"
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,12 @@ SUPPORTED_SETTINGS: dict[str, SettingDescriptor] = {
         type="boolean",
         description="Enable extended thinking (false to disable)",
         app_state_key=THINKING_APP_STATE_KEY,
+    ),
+    EFFORT_SETTING: SettingDescriptor(
+        source="global",
+        type="string",
+        description=f"Reasoning effort level ({OFF_EFFORT_LEVEL} to stop reasoning)",
+        app_state_key=EFFORT_APP_STATE_KEY,
     ),
     PERMISSION_MODE_SETTING: SettingDescriptor(
         source="project",
@@ -68,8 +78,11 @@ def get_path(key: str) -> list[str]:
 
 
 __all__ = [
+    "EFFORT_APP_STATE_KEY",
+    "EFFORT_SETTING",
     "MODEL_APP_STATE_KEY",
     "MODEL_SETTING",
+    "OFF_EFFORT_LEVEL",
     "PERMISSION_MODE_SETTING",
     "SUPPORTED_SETTINGS",
     "THINKING_APP_STATE_KEY",

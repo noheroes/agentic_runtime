@@ -3737,3 +3737,146 @@ ejercita el fuente corregido; no necesita acción.
 `D-57` intacto y **cerrado**: esta entrada paga la divergencia que aquélla declaró abierta, no
 reabre su costura. `D-49` intacto: es aritmética de port y se acredita sin proveedor frontera.
 `D-55`, `D-56` y `D-58` intactos. `D-08` intacto: el `continue` y su sitio salen del fuente de A.
+
+---
+
+## `D-60` (2026-08-28) — `/effort`: el catálogo de niveles lo DECLARA el modelo, y `off` es un nivel que hay que saber transportar
+
+- **Palabra del usuario**: `En esta ventana 1 y 2`, sobre los cinco pendientes que el enunciado de
+  retoma dejó decidibles. El 1 fue `FIND-MSGINDEX-USER` (`D-59`); éste es el 2, cuyo encargo literal
+  está en el censo § 5, entrada `2026-08-28 (i)`: *«`/effort` como slash command — seleccionar nivel
+  de razonamiento desde la TUI, incluyendo `off` (no pensar) y los niveles que el modelo local
+  declare disponibles»*.
+- **Encuadre de partida, y en qué era falso.** El encargo daba por hecho que *«el transporte ya
+  existe —`caller.py` traduce `effort` y rechaza lo inexpresable—; lo que falta es la superficie de
+  usuario»*. La superficie faltaba, sí. Pero el transporte de **`off`** no existía, y el catálogo de
+  niveles del perfil local **mentía en tres sitios**. Una superficie montada sobre eso habría
+  ofrecido niveles que devuelven HTTP 500 y un `off` que no apaga nada.
+
+### La plantilla del motor es la prueba (`D-15`: el consumidor detecta)
+
+Extraída de `http://localhost:8080/props` y leída 1→EOF (184 L), la plantilla de chat de Qwen3.8:
+
+```jinja
+{%- if enable_thinking is undefined or enable_thinking is true %}
+    {%- set resolved_reasoning_effort = reasoning_effort|default('xhigh') %}
+    {%- if resolved_reasoning_effort == 'high' %}
+        {%- set resolved_reasoning_effort = 'xhigh' %}
+    {%- endif %}
+    {%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}
+        {{- raise_exception('Unexpected reasoning effort ' ~ reasoning_effort ~ '. Supported types are xhigh (default), medium, and low.') }}
+...
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\n\n</think>\n\n' }}
+```
+
+De ahí, los tres embustes del catálogo anterior:
+
+1. **`minimal` no es un nivel: es un HTTP 500.** Cae en el `raise_exception`.
+2. **`high` no es un nivel distinto**: la plantilla lo reescribe a `xhigh` **en silencio**, antes de
+   comprobar nada. Declararlo por separado es prometer una gradación que el motor no tiene.
+3. **`xhigh` sí existe y estaba oculto** — y es además el **defecto** de la plantilla.
+
+Y el cuarto, el que obliga al mecanismo: **`off` sí existe en este motor**, pero por el kwarg de
+plantilla `enable_thinking: false`, **no** por ningún valor de `reasoning.effort`. El catálogo lo
+declaraba y no lo transportaba: `caller.py` traducía a `reasoning = "off"`, el provider no tenía
+dónde ponerlo, y el turno razonaba igual. Es exactamente el modo de fallo que `D-21` legisla —una
+opción inexpresable descartada en silencio produce la misma captura que obedecerla— sólo que aquí el
+descarte lo hacía nuestro propio port.
+
+### Lo inyectado
+
+1. **El transporte de `off` SE CREA** (`D-22`), en el proveedor y no en el puente:
+   `providers/openai_responses.py::_build_params` gana la rama `else` del bloque `model.reasoning`.
+   Con prioridad para el camino canónico —si `thinking_level_map["off"]` trae un valor de effort, se
+   manda como `reasoning: {"effort": …}`— y, sólo si no lo trae, se lee
+   `compat["thinkingOffParams"]` y se vuelca en `extra_body`. Sin declaración, **no se inventa
+   nada**: el turno sale idéntico a como salía. `github-copilot` queda fuera, como en A.
+   El campo es `extra_body` porque `AsyncResponses.create` del SDK `openai` **no tiene `**kwargs`**:
+   un campo no estándar que no viaje ahí no viaja.
+2. **El catálogo local dice lo medido** (`models/local_catalog.py`): `thinking_level_map` con
+   `minimal: None` y `high: None` —`get_supported_thinking_levels` salta el nivel cuyo valor es
+   `None`—, `low`/`medium`/`xhigh` con su grafía, y `compat={'thinkingOffParams':
+   {'chat_template_kwargs': {'enable_thinking': False}}}`. Resultado declarado:
+   `['off', 'low', 'medium', 'xhigh']`, con `clamp('high') → 'xhigh'` y `clamp('minimal') → 'low'`.
+3. **El seam de turno**: `EFFORT_APP_STATE_KEY` / `EFFORT_SETTING` (`effortLevel`, ámbito `global`)
+   en `tools/native/supported_settings.py`, y `_with_effort` en `loop/agent_loop.py`, que resuelve
+   el nivel del `app_state` a `ModelOptions`. `off` viaja como `effort=None` **más**
+   `ThinkingConfig(enabled=False)`: la ausencia sola dejaría el default del motor, que es justo lo
+   que `off` niega. Un nivel desconocido levanta `UnsupportedModelOptionError`, no se ignora.
+4. **La superficie**: `EffortState` (`agentic_code/composition.py`) —`current`/`supported`/`select`/
+   `clear`, con `attach` sobre `app_state.native`— y el comando `/effort [off|nivel|auto]`
+   (`builtin_commands.py`). Sin argumento lista el nivel vigente y **el catálogo que declara el
+   modelo**, no un vocabulario fijo; `auto` devuelve el turno al default del motor; un nivel no
+   declarado se **rechaza con su motivo** (`D-21`), no se silencia ni se recorta al vecino.
+   `cli.py` la siembra desde lo persistido: `OFF_EFFORT_LEVEL if settings.thinking is False else
+   settings.effort`.
+5. **`capture.py::_digest` proyecta `extra_body` e `include`.** No es cosmética: es lo que hizo que
+   la evidencia mintiera por omisión — ver abajo.
+
+### Divergencias declaradas frente a A (`D-21`)
+
+1. **Vocabulario.** A publica `low|medium|high|max` más `auto` y los fija en su catálogo de producto.
+   El nuestro **no es fijo**: es el que el modelo declara, y por eso el mismo comando ofrece cuatro
+   niveles aquí y otros en otro proveedor. Es `D-56` aplicado a la superficie: la funcionalidad
+   homologada —elegir esfuerzo— se preserva en todos los modelos, y lo que se adapta es el catálogo.
+2. **Ámbito.** En A la elección se persiste en `userSettings`. La nuestra es **de sesión**: se
+   siembra desde el `effortLevel` persistido y muere con el proceso. `EFFORT_SETTING` existe y es
+   legible/escribible por la vía de configuración; lo que el comando no hace es escribirla.
+3. **`off` como nivel de primera clase.** A apaga el pensamiento por otra vía; aquí `off` entra en
+   la misma lista que los demás porque el motor local lo expresa, y omitirlo dejaría al usuario sin
+   forma de pedirlo.
+
+### El defecto de instrumentación que estuvo a punto de invertir el veredicto
+
+La primera corrida E2E con `--no-thinking` mostró `reasoning: null` y **ningún** `extra_body` en el
+`.jsonl`, lo que se leía como «la inyección no llegó». Era falso: `PayloadRecorder._digest` **no
+proyectaba `extra_body`**, luego el único campo que podía probar el arreglo era el único que la
+captura no miraba. Se confirmó leyendo la clave `payload` de una corrida con
+`AGENTIC_CODE_CAPTURE_PAYLOADS_FULL=1`, y se pagó en el propio digest. Queda anotado porque es la
+forma más cara de error de este proyecto: **un instrumento ciego no dice «no sé», dice «no»**.
+
+### Acreditación
+
+**E2E en el cable, los dos sentidos** (`D-15`, `llama-server` vivo):
+
+| mando | lo que viajó | HTTP | eventos de razonamiento | respuesta |
+|---|---|---|---|---|
+| `--no-thinking` | `extra_body: {"chat_template_kwargs": {"enable_thinking": false}}` | 200 | **0** | `391` |
+| `--effort xhigh` | `reasoning: {"effort": "xhigh", "summary": "auto"}` | 200 | **28** | — |
+
+**Pruebas.** `agentic_models/tests/test_thinking_off_transport.py` (4 casos): `off` viaja cuando el
+modelo declara cómo apagarlo; sin declaración **no se inventa** nada; un valor de effort para `off`
+en `thinking_level_map` **conserva la precedencia**; y el perfil local declara los niveles medidos.
+`agentic_code/tests/test_effort_command.py` (6 casos) reescrito **contra la medición, no ablandado**
+(`no-debilitar-la-prueba`): el listado exige `off, low, medium, xhigh · auto` y **ausencia** de
+`minimal`; `off` llega al turno como `effort is None` + `thinking.enabled is False`; `xhigh` llega
+como `Effort.XHIGH`; `minimal` se rechaza con su motivo y no llega `effort` alguno; `auto` limpia.
+Las citas de la plantilla viven en los docstrings, única excepción del § 4.
+
+**`D-12·b`**: copia en `mktemp -d` verificada por `sha256`
+(`a5450c0f4037c97a94f7d26a86db1d36a1fb1a30d6750b618c28a347f1c94228`), mutación `off_params = None`
+⇒ **una roja**, revert desde la copia con `sha256` idéntico, 4/4 verdes, scratch borrado por ruta
+absoluta.
+
+**Suites**: `agentic_models` **70 → 74 passed**, `agentic_code` **266 → 267 passed**, sin procesos
+supervivientes. `ruff` limpio en lo tocado; los dos avisos preexistentes de `openai_responses.py`
+(`I001`, `BLE001`) no se tocan. Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron
+(acuerdo de fase).
+
+### Riesgo residual, declarado y NO generalizado (`declarar-no-es-pagar`)
+
+`get_supported_thinking_levels` sigue declarando `off` para **cualquier** modelo de razonamiento
+cuyo mapa no traiga la clave `off` y cuyo proveedor no tenga off-params — es decir, puede seguir
+prometiendo un `off` que no viaja, en otros perfiles. Aquí se paga donde hay medición; extenderlo a
+proveedores no medidos sería inventar conducta. Queda vigilado.
+
+### Lo que NO deroga
+
+`D-21` intacto y **aplicado**: la opción que el motor no expresa se rechaza en la superficie con su
+motivo, y la que sí expresa se transporta en vez de descartarse. `D-56` intacto: el catálogo se
+deriva del modelo, no se recorta al mínimo común. `D-49` intacto: esto es transporte y superficie,
+no veredicto de conducta — el `xhigh` de 28 eventos acredita **mecanismo**, y el 1 de septiembre
+sigue siendo la fecha del sujeto real. `D-59` intacto.

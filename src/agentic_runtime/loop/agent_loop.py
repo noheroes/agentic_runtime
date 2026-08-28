@@ -40,7 +40,13 @@ from ..events.event_types import (
     TurnStartEvent,
 )
 from ..hooks import HookEvent
-from ..models.protocol import ModelCallerProtocol, ModelOptions, ThinkingConfig
+from ..models.protocol import (
+    Effort,
+    ModelCallerProtocol,
+    ModelOptions,
+    ThinkingConfig,
+    UnsupportedModelOptionError,
+)
 from ..tools.agent_listing_delta import (
     ANNOUNCED_KEY,
     compute_agent_listing_delta,
@@ -49,7 +55,9 @@ from ..tools.agent_listing_delta import (
 from ..tools.dispatcher import ToolDispatcher
 from ..tools.native.agent import AGENT_TOOL_NAME
 from ..tools.native.supported_settings import (
+    EFFORT_APP_STATE_KEY,
     MODEL_APP_STATE_KEY,
+    OFF_EFFORT_LEVEL,
     THINKING_APP_STATE_KEY,
 )
 from ..tools.pool import ToolPool
@@ -76,6 +84,27 @@ def _vacio(valor: Any) -> bool:
 
 def _aborted(ctx: ToolUseContext) -> bool:
     return ctx.stop is not None and ctx.stop.aborted
+
+
+def _with_effort(options: ModelOptions, level: str) -> ModelOptions:
+    budget = options.thinking.budget_tokens if options.thinking is not None else None
+    if level == OFF_EFFORT_LEVEL:
+        return replace(
+            options,
+            effort=None,
+            thinking=ThinkingConfig(enabled=False, budget_tokens=budget),
+        )
+    try:
+        chosen = Effort(level)
+    except ValueError as exc:
+        raise UnsupportedModelOptionError(
+            f"nivel de razonamiento desconocido en el estado de aplicación: {level!r}"
+        ) from exc
+    return replace(
+        options,
+        effort=chosen,
+        thinking=ThinkingConfig(enabled=True, budget_tokens=budget),
+    )
 
 
 def _as_reminder(content: str) -> str:
@@ -138,6 +167,9 @@ class AgentLoop:
                 options,
                 thinking=ThinkingConfig(enabled=bool(thinking), budget_tokens=budget),
             )
+        effort = native.get(EFFORT_APP_STATE_KEY)
+        if effort is not None:
+            options = _with_effort(options, str(effort))
         return model_id, options
 
     def _build_tool_pool(self, ctx: ToolUseContext) -> ToolPool:

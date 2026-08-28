@@ -606,6 +606,52 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-28 (m) — `/effort` PAGADO: el catálogo lo declara el modelo, y `off` ya viaja
+
+Segundo de los dos pendientes que autorizó `En esta ventana 1 y 2`; el encargo literal es el de la
+entrada (i). Lo que faltaba **no** era sólo la superficie: el transporte de `off` no existía y el
+catálogo del perfil local mentía en tres sitios.
+
+**La plantilla del motor es la prueba** (`/props`, 184 L leídas 1→EOF): `minimal` cae en el
+`raise_exception('Unexpected reasoning effort … Supported types are xhigh (default), medium, and
+low.')`, o sea es un HTTP 500; `high` **no es un nivel**, la plantilla lo reescribe a `xhigh` en
+silencio antes de comprobar nada; `xhigh` sí existe y estaba oculto, y es el defecto. Y `off` existe
+**por `enable_thinking: false`**, no por ningún valor de `reasoning.effort`: se declaraba y no se
+transportaba, que es `D-21` incumplido por nuestro propio port.
+
+**Inyectado:** la rama `else` de `_build_params` (`providers/openai_responses.py`) que transporta el
+apagado —prioridad al camino canónico `thinking_level_map["off"]`, y si no lo hay,
+`compat["thinkingOffParams"] → extra_body`, porque `AsyncResponses.create` no tiene `**kwargs`—;
+sin declaración no se inventa nada (`D-22`) · el catálogo local con lo medido, que declara
+`['off','low','medium','xhigh']`, `clamp('high')→'xhigh'`, `clamp('minimal')→'low'` · el seam de
+turno (`EFFORT_APP_STATE_KEY`/`EFFORT_SETTING` en `supported_settings.py`, `_with_effort` en
+`loop/agent_loop.py`, donde `off` = `effort=None` **más** `ThinkingConfig(enabled=False)`) ·
+`EffortState` y el comando `/effort [off|nivel|auto]` en `agentic_code`, sembrado desde lo
+persistido en `cli.py` · y `capture.py::_digest`, que no proyectaba `extra_body` y por eso la
+primera evidencia dijo «no» donde debía decir «no sé».
+
+**E2E en el cable, los dos sentidos** (`D-15`, `llama-server` vivo): `--no-thinking` →
+`extra_body:{"chat_template_kwargs":{"enable_thinking":false}}`, 200, **0** eventos de razonamiento,
+respuesta `391`; `--effort xhigh` → `reasoning:{"effort":"xhigh","summary":"auto"}`, 200, **28**
+eventos de razonamiento.
+
+**Acreditación:** 4 casos nuevos en `agentic_models/tests/test_thinking_off_transport.py` y los 6 de
+`agentic_code/tests/test_effort_command.py` reescritos **contra la medición, no ablandados**
+(el listado exige `off, low, medium, xhigh · auto` y ausencia de `minimal`; `minimal` se rechaza con
+su motivo). `D-12·b`: copia `sha256 a5450c0f…` en `mktemp -d`, mutación `off_params = None` ⇒ **una
+roja**, revert con hash idéntico, 4/4 verdes, scratch borrado por ruta absoluta. `agentic_models`
+**70 → 74 passed**, `agentic_code` **266 → 267 passed**, sin supervivientes; `ruff` limpio en lo
+tocado, los dos avisos preexistentes de `openai_responses.py` sin tocar. Las sintéticas de
+`agentic_runtime` no se corrieron ni se tocaron. Detalle en `SEPARACION/DECISIONES.md § D-60`.
+
+**Riesgo residual declarado y NO generalizado:** `get_supported_thinking_levels` sigue declarando
+`off` para cualquier modelo de razonamiento sin clave `off` en el mapa y sin off-params; se paga
+donde hay medición, y queda vigilado.
+
+**Siguen abiertos:** `FIND-GOOGLE-CASING` · el techo de salida del perfil local y la mentira de
+`llama.cpp` (`server-task.cpp:696`), que va al catálogo P1–P9 · el contador de razonamiento derivado
+(`D-56`), bloqueado hasta el 2026-09-01 por `D-49`.
+
 ### 2026-08-28 (l) — `FIND-MSGINDEX-USER` PAGADO: el otro `continue` del mismo bucle
 
 Palabra del usuario: `En esta ventana 1 y 2`, sobre el pendiente que el enunciado de retoma dejaba
