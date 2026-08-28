@@ -3664,3 +3664,76 @@ Copia propia de los nueve verificada por `sha256` antes de tocar. Censo § 5, en
 
 `D-23` intacto en su reparto —el barrido cubre lo que el paso escribe—: esta purga total es
 justamente el **paso propio** que `D-50` reservó para ella. `FIND-MSGINDEX-USER` sigue abierto.
+
+---
+
+## `D-59` (2026-08-28) — `FIND-MSGINDEX-USER`: el hermano del defecto de `D-57`, en la rama de usuario
+
+- **Palabra del usuario**: el enunciado de retoma dejó los cinco pendientes decidibles y su
+  orden bastaba por escrito —*«Si es el 1, la orden basta con “replica el continue”»*—; elegido
+  con `En esta ventana 1 y 2`.
+- **Origen:** la divergencia hermana que `D-57` dejó **ABIERTA y no pagada** en su § final.
+
+### El defecto
+
+`D-57` pagó el camino del asistente y midió el otro sin tocarlo. Es el mismo `msgIndex++` de
+`openai-responses-shared.ts:263` —final del cuerpo del `for`, fuera de todas las ramas— y el
+otro de sus dos `continue`:
+
+- `:220` — `if (output.length === 0) continue;`, el asistente sin ítems. **Pagado en `D-57`.**
+- `:157` — `if (content.length === 0) continue;`, el usuario con `content` en lista vacía.
+
+El port no tenía ahí un `continue` sino una guarda de emisión: `if parts:`
+(`openai_responses_shared.py:108-109`). El mensaje no se emitía —eso estaba bien— pero el cuerpo
+seguía hasta el `msg_index += 1` de `:203`, así que el usuario descartado **sí consumía número**.
+Mismo criterio que `D-57`: el contador numera mensajes **emitidos**, no **recorridos**.
+
+### Lo inyectado — la guarda se vuelve `continue`
+
+`agentic_models/.../openai_responses_shared.py:108-110`, literal del canónico:
+
+```python
+if not parts:
+    continue
+messages.append({"role": "user", "content": parts})
+```
+
+Efecto medido **con el módulo real** antes y después, igual que en `D-57`: un texto sin firma
+detrás de un usuario de contenido vacío se firmaba `msg_pi_1` donde A firma `msg_pi_0`.
+
+### Alcance real, sin cambio respecto de `D-57`
+
+El repliegue sólo actúa sobre bloques de texto **sin** `text_signature`, y eso es historial
+cross-model (`transform_messages.py:127` reconstruye el `TextContent` sin firma cuando el mensaje
+no es del modelo actual). Con el mismo modelo la firma la pone el proveedor y el fallback no se
+alcanza. Y el usuario llega intacto a la conversión: `transform_messages` lo reenvía tal cual
+(`transform_messages.py:80-82`), luego la lista vacía no se filtra antes.
+
+### Acreditación (`D-12·b`)
+
+`test_provider_roundtrip_openai_responses.py::test_openai_responses_discarded_user_does_not_advance_the_fallback_index`,
+con criterio y citas en la docstring; contrasta dos historiales que sólo difieren en el usuario
+vacío de cabeza y exige el **mismo** id de repliegue en los dos. Verde a la primera ⇒ **mutación
+inyectada y revertida** —reponer la guarda `if parts:`— desde copia propia verificada por
+`sha256`: **una roja** (`assert ['msg_pi_2'] == ['msg_pi_1']`), **cero falsos positivos**, y el
+caso de `D-57` **verde durante la mutación**, que es lo que acredita que los dos casos son
+independientes y no uno medido dos veces.
+
+`agentic_models` **69 → 70 passed**, `agentic_code` **261 passed**, sin procesos supervivientes.
+`ruff` medido contra baseline —copias de `HEAD` en `mktemp -d`, mismo `pyproject.toml`—: **6
+avisos antes, 6 después**, los preexistentes de `D-52`/`D-53` (`S110`/`BLE001` en el proveedor,
+`RUF059`/`I001` en el fichero de tests) y ninguno en línea tocada. Deuda neta cero por diff. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron (acuerdo de fase).
+
+**Pata de `.jsonl` real: declarada inalcanzable por esta superficie**, por el mismo motivo que en
+`D-57` y no por omisión — exige a la vez un usuario con `content` en lista vacía y un texto sin
+firma detrás, o sea historial cross-model, que ninguna corrida de `agentic_code` produce a
+voluntad (`D-21`). Cableado en `agentic_code` (`cablear-en-agentic-code-al-cerrar`): verificado
+que su venv monta `agentic_models` en editable sobre `agentic_models/src`, luego el consumidor ya
+ejercita el fuente corregido; no necesita acción.
+
+### Lo que NO deroga
+
+`D-57` intacto y **cerrado**: esta entrada paga la divergencia que aquélla declaró abierta, no
+reabre su costura. `D-49` intacto: es aritmética de port y se acredita sin proveedor frontera.
+`D-55`, `D-56` y `D-58` intactos. `D-08` intacto: el `continue` y su sitio salen del fuente de A.

@@ -606,6 +606,44 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-28 (l) — `FIND-MSGINDEX-USER` PAGADO: el otro `continue` del mismo bucle
+
+Palabra del usuario: `En esta ventana 1 y 2`, sobre el pendiente que el enunciado de retoma dejaba
+pre-autorizado (*«Si es el 1, la orden basta con “replica el continue”»*). Es el hermano del defecto
+que pagó `D-57` y que aquella entrada dejó **medido y abierto**.
+
+**El defecto:** `msgIndex++` vive al final del cuerpo del `for` y fuera de todas las ramas
+(`openai-responses-shared.ts:263`), así que sus dos `continue` lo saltan. `D-57` pagó el del
+asistente (`:220`); faltaba el del usuario con `content` en lista vacía (`:157`), que el port había
+sustituido por la guarda de emisión `if parts:` (`openai_responses_shared.py:108-109`): el mensaje
+no se emitía, pero el cuerpo seguía hasta el `msg_index += 1` y **el descarte consumía número**.
+
+**Inyectado:** tres líneas por dos, `openai_responses_shared.py:108-110` — `if not parts: continue`
+delante del `append`, literal del canónico. Medido con el módulo real: un texto sin firma detrás de
+un usuario vacío se firmaba `msg_pi_1` donde A firma `msg_pi_0`.
+
+**Alcance real, sin cambio respecto de `D-57`:** el repliegue sólo actúa sobre bloques de texto sin
+`text_signature`, o sea historial cross-model (`transform_messages.py:127`). Y el usuario llega
+intacto a la conversión (`transform_messages.py:80-82`), luego la lista vacía no se filtra antes.
+
+**Acreditación:** un caso nuevo con criterio y citas en la docstring, que contrasta dos historiales
+que sólo difieren en el usuario vacío de cabeza y exige el mismo id de repliegue; verde a la primera
+⇒ **mutación inyectada y revertida** —reponer `if parts:`— desde copia propia verificada por
+`sha256`: **una roja** (`assert ['msg_pi_2'] == ['msg_pi_1']`), cero falsos positivos, y el caso de
+`D-57` **verde durante la mutación**, que es lo que prueba que son dos casos y no uno medido dos
+veces. `agentic_models` **70 passed**, `agentic_code` **261 passed**, sin supervivientes; `ruff`
+**6 avisos antes, 6 después**, los preexistentes de `D-52`/`D-53` y ninguno en línea tocada. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron. Detalle en
+`SEPARACION/DECISIONES.md § D-59`.
+
+**Pata de `.jsonl` real: declarada inalcanzable por esta superficie**, no omitida — exige a la vez
+un usuario con `content` vacío y un texto sin firma detrás (`D-21`). El cableado en `agentic_code`
+no necesita acción: su venv monta `agentic_models` en editable sobre `agentic_models/src`.
+
+**Siguen abiertos:** los dos encargos de la entrada (i) —el `/effort` y el contador de razonamiento
+derivado, este después del 2026-09-01— · `FIND-GOOGLE-CASING` · el techo de salida del perfil local ·
+y la mentira de `llama.cpp` (`server-task.cpp:696`), que va al catálogo P1–P9.
+
 ### 2026-08-28 (k) — pieza 1 de `D-50` PAGADA: barrido de comentarios de sus nueve ficheros
 
 Paso 3 del orden acordado. `D-50` declaró el barrido **paso propio** porque los ficheros del
