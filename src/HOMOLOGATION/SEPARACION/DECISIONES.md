@@ -3275,3 +3275,92 @@ introdujo se pagó antes de cerrar.
 
 `D-49` intacto. Queda pendiente la pieza 1 de `D-50` —el barrido de comentarios de sus nueve
 ficheros— y el techo de salida del perfil local, que no es divergencia de motor.
+
+---
+
+## `D-54` (2026-08-27) — `FIND-RESP-INCOMPLETE` + `FIND-RESP-TERMINAL`: el cierre del stream de Responses es UNA costura, y se homologa entera
+
+Palabra del usuario: `procede`, sobre el anuncio de la inyección. Paga las dos divergencias que
+`D-53` dejó ABIERTAS en su § final, que son la misma costura —el cierre del stream de Responses— y
+viven en el fichero ya leído 1→EOF.
+
+### Lo que el contraste contra el canónico convirtió en cinco
+
+Se anunciaron dos; leído `pi/packages/ai/src/api/openai-responses-shared.ts` 1→EOF antes de tocar
+nada, son **cinco**, y las tres nuevas se anunciaron antes de inyectar:
+
+1. **`response.incomplete` no se atendía.** El canónico llama `finalizeResponse` en la rama
+   `response.completed || response.incomplete` (`:512-513`); nuestro port sólo atendía `completed`.
+   Un turno truncado por techo no fijaba `usage`, ni coste, ni `stop_reason`, y la rama
+   `"incomplete" → "length"` de `_map_stop_reason` era inalcanzable por ese camino.
+2. **Faltaba el centinela.** `sawTerminalResponseEvent` (`:302`) y el `throw` posterior al bucle
+   (`:528-530`, `"OpenAI Responses stream ended before a terminal response event"`): un stream
+   cortado se cerraba en silencio como turno bueno.
+3. **El cuerpo entero colgaba de `if response:`.** A guarda con condición sólo el `id` y el `usage`
+   (`:356-374`); el coste, el tier y el `stopReason` se calculan **siempre** (`:375-387`). Con la
+   forma anterior, un terminal sin objeto `response` dejaba el turno sin coste ni razón de parada.
+4. **`response.failed` no lanzaba siempre.** A lanza incondicionalmente (`:516-525`) y el ternario
+   cuelga de `details?.reason`: sin error y sin razón, el literal es
+   `"Unknown error (no error details in response)"`. B no lanzaba con carga vacía y decía
+   `incomplete: unknown` donde A dice el literal.
+5. **El tier de servicio recibía el ESTADO.** `st = resp_status` en vez del `service_tier` de la
+   respuesta (A: `:376-381`). Como el envoltorio real no pasa `resolve_service_tier`
+   (`openai_responses.py:229-236`), los multiplicadores `flex` (0.5) y `priority` **nunca se
+   aplicaban**: el precio del turno salía siempre a tarifa plena.
+
+### Lo inyectado
+
+`agentic_models/src/agentic_models/providers/openai_responses_shared.py`: `_resp_field` (lectura
+indistinta de `dict` o de objeto del SDK), `saw_terminal_response_event`, `finalize_response` como
+función homóloga de `finalizeResponse`, la rama terminal `("response.completed",
+"response.incomplete")`, el `response.failed` con sus tres literales, y el `raise` posterior al
+bucle. El bloque anterior de `response.completed` (34 líneas) se retira entero. Las otras tres
+entradas al mismo motor —`azure_openai_responses.py:211` y `openai_codex_responses.py:570,749`—
+heredan la conducta por el mismo punto, igual que en A.
+
+### Fuera de alcance, declarado (`declarar-no-es-pagar`)
+
+- **`FIND-USAGE-REASONING` — ABIERTO.** A pone `reasoning: usage.output_tokens_details
+  ?.reasoning_tokens` en el `Usage` (`:370`); nuestro `Usage` (`model_types.py:166-173`) **no tiene
+  ese campo**. Es cambio del contrato `Usage`, que tocan todos los providers y el puente del
+  runtime: no se paga de tapadillo dentro de este paso. Queda registrado en el § 5 del censo.
+- **El `msg_index`** que se incrementa donde el canónico hace `continue` sigue abierto: es de
+  `convert_responses_messages`, no de esta costura, y sólo afecta a los ids de repliegue
+  `msg_pi_{n}`.
+
+### Acreditación (`D-12·b` y `D-15`)
+
+Cuatro casos nuevos en `test_provider_roundtrip_openai_responses.py`, cada uno con su docstring
+declarando el criterio canónico y su cita: `incomplete` como evento terminal con `usage` y
+`stop_reason == "length"`; el EOF temprano rindiendo el literal de A por la vía de error del
+envoltorio; `failed` en sus tres formas de carga; y el tier recibiendo el tier y no el estado
+(precio a mitad con `flex`).
+
+Mutación inyectada y revertida desde copia propia verificada por `sha256` (previo
+`c78c448cfee9d510fe45e383aad35981045180dc900d7fb35edbcf22bef0c5af`, inyectado
+`aaca33e0fcc90490dc99f18f26176dd396398a8caadb4ecc77c842227aa619ac`), **cuatro pasadas, cuatro
+rojas**, cada una tumbando exactamente su caso y sólo ése: retirar el `raise` posterior al bucle ·
+volver la rama terminal a `completed` sola · leer `"status"` como tier · devolver el `raise` final
+de `failed` a la guarda `if response:`. Hash idéntico tras cada revert.
+
+Consumidor real (`D-15`): turno contra el `llama-server` vivo pasando por el nuevo
+`finalize_response`; la línea `result` del `.jsonl` cierra `"stop_reason": "stop"` con
+`input_tokens` 14 803 / `output_tokens` 250 / `cache_read` 14 709 y `status: "completed"`.
+
+`agentic_models` **60 passed**, `agentic_code` **258 passed**, sin procesos supervivientes. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron (acuerdo de fase). `ruff`: los **6**
+avisos preexistentes de `D-52`/`D-53` y ninguno nuevo.
+
+### Barrido de comentarios
+
+`D-23`: los dos ficheros tocados quedan sin comentarios ni docstrings de módulo o función; las citas
+del canónico viven en el docstring de cada test, que es la única excepción de la regla. Esto **no**
+paga la pieza 1 de `D-50` —el barrido de sus nueve ficheros—, que sigue siendo paso propio.
+
+### Lo que NO deroga
+
+`D-49` intacto: esto es adaptador de proveedor, no compactación, y no depende de la fecha del 1 de
+septiembre. `D-52` y `D-53` intactos: esta entrada extiende su costura, no la reabre. `D-08`
+intacto: los cinco cortes, sus literales y el orden de guardas salen del fuente de A. La divergencia
+de `llama.cpp` (`server-task.cpp:696`, `"status": "completed"` incondicional) sigue ABIERTA y va al
+catálogo P1–P9: el servidor miente, pero ya no es cierto que no escucharíamos la verdad si la dijera.

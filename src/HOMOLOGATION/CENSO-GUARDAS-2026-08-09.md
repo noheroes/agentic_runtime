@@ -606,6 +606,55 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (h) — `FIND-RESP-INCOMPLETE` + `FIND-RESP-TERMINAL` PAGADOS: el cierre del stream es UNA costura
+
+Palabra del usuario: `procede`. Las dos divergencias que dejó abiertas la entrada (g) se pagan
+juntas porque son la misma costura —el final del stream de Responses— y viven en el fichero ya
+leído 1→EOF.
+
+**Los dos defectos anunciados, con línea:**
+- `openai_responses_shared.py:461` atendía sólo `response.completed`; el canónico cierra el turno
+  con **`response.completed` y `response.incomplete`** (`openai-responses-shared.ts:512-513`), así
+  que un turno truncado no fijaba `usage`, ni coste, ni `stop_reason`, y la rama `"incomplete"` →
+  `"length"` de `_map_stop_reason` era **inalcanzable por construcción**.
+- No existía el centinela `sawTerminalResponseEvent` (`:302`, `:528-530`): un stream cortado antes
+  del evento terminal se cerraba **en silencio como turno bueno**. Literal canónico:
+  `"OpenAI Responses stream ended before a terminal response event"`.
+
+**Lo que añadió el contraste hasta EOF — tres divergencias más, anunciadas antes de inyectar:**
+1. El cuerpo entero del cierre colgaba de `if response:`, mientras A guarda del payload sólo `id` y
+   `usage` (`:356-374`) y **calcula coste, tier y `stopReason` siempre** (`:375-387`).
+2. `response.failed` no lanzaba siempre; A lanza **incondicionalmente** (`:516-525`) y, sin error ni
+   razón, con el literal `"Unknown error (no error details in response)"`.
+3. El precio por tier recibía el **estado** (`st = resp_status`) en vez del `service_tier` (A
+   `:376-381`). Con el envoltorio real (`openai_responses.py:229-236`, que no pasa por
+   `resolve_service_tier`) los multiplicadores `flex` (0.5) y `priority` **nunca** se aplicaban.
+
+**Inyectado:** `_resp_field`, la bandera `saw_terminal_response_event`, `finalize_response`, la rama
+terminal `("response.completed", "response.incomplete")`, el `response.failed` con sus tres
+literales y el `raise` posterior al bucle; retirado el bloque anterior de `response.completed` (34
+líneas). Las otras tres entradas al motor (`azure_openai_responses.py:211`,
+`openai_codex_responses.py:570,749`) heredan la conducta sin tocarse.
+
+**Acreditación:** cuatro casos nuevos con criterio y citas en la docstring —terminal `incomplete`,
+stream sin evento terminal, `failed` que siempre lanza con el literal, y el tier que recibe el tier
+y no el estado—; **cuatro mutaciones inyectadas y revertidas** desde copia propia verificada por
+`sha256` (previo `c78c448c…`, inyectado `aaca33e0…`, hash idéntico tras cada revert) ⇒ **cuatro
+rojas, cero falsos positivos**; y turno real contra el `llama-server` vivo con `"stop_reason":
+"stop"` y `usage` completo (in 14.803 / out 250 / cache 14.709) en el `.jsonl` (`D-15`).
+`agentic_models` **60 passed**, `agentic_code` **258 passed**, sin supervivientes; `ruff` con los
+**6** avisos preexistentes de `D-52`/`D-53` y ninguno nuevo. Las sintéticas de `agentic_runtime` no
+se corrieron ni se tocaron. Detalle en `SEPARACION/DECISIONES.md § D-54`.
+
+**Divergencia nueva, ABIERTA y declarada fuera de alcance — `FIND-USAGE-REASONING`:** A puebla
+`reasoning: usage.output_tokens_details?.reasoning_tokens` (`:370`) y nuestro `Usage`
+(`model_types.py:166-173`) **no tiene el campo**, así que pagarlo es cambio del contrato `Usage`,
+no de este fichero. **Sigue abierto, sin cambio:** el `msg_index` que se incrementa donde el
+canónico hace `continue` (es de `convert_responses_messages`, dos líneas, sólo afecta a los ids de
+repliegue `msg_pi_{n}`) · la pieza 1 de `D-50`, el barrido de comentarios de sus nueve ficheros ·
+el techo de salida del perfil local · y la mentira de `llama.cpp` (`"status": "completed"`
+incondicional, `server-task.cpp:696`), que va al catálogo P1–P9 y no a homologación.
+
 ### 2026-08-27 (g) — `FIND-EMPTY-TOOL-OUT` PAGADO: el resultado vacío se declara vacío
 
 Palabra del usuario: `procede`. Segunda de las tres deudas nombradas en la entrada (e); queda la
