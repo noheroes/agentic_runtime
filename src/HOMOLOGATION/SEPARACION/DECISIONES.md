@@ -3625,3 +3625,42 @@ decidible**; no entraba en el enunciado del paso y no se toca sin palabra del us
 
 `D-49` intacto: esto es aritmética de port, no contabilidad, y se acredita sin proveedor frontera.
 `D-55` y `D-56` intactos. `D-50` pieza 1 sigue siendo paso propio.
+
+---
+
+## `D-58` (2026-08-28) — La excepción del §4 es la DIRECTIVA, y el docstring de un test es el del test
+
+- **Palabra del usuario**: `procede`, sobre el anuncio del paso 3 —la pieza 1 de `D-50`— que llevaba
+  las dos lecturas declaradas por delante.
+
+Contexto: el §4 manda que el fuente vaya sin comentarios ni docstrings, salva las directivas
+`# noqa` / `# type:` y admite que **el docstring de un test** declare criterio y citas. Al barrer los
+nueve ficheros de `D-50` aparecieron dos casos que el §4 no contestaba, y se deciden aquí en vez de
+resolverse en silencio (`D-21` en su forma general: lo no expresable se declara).
+
+### (1) Directiva desnuda: la prosa pegada a un `# noqa` cae
+
+Cuatro directivas llevaban explicación detrás (`tui.py:1369` «layout coordinado por la app»,
+`:1374` «frontera de la aplicación TUI», `test_tui.py:439` «contrato de windowing», `:835` «lo normal
+es que lo siembre una tool»). Lo que el §4 salva es lo que la herramienta LEE; el texto contiguo es
+un comentario ordinario y sesga igual. Se conserva `# noqa: CODE` y cae el resto.
+
+### (2) Andamiaje de un test no es un test
+
+Sobreviven el docstring de módulo del fichero de test y los de las funciones `test_*`. Los de las
+clases de apoyo (`CompactingCaller`, `ReadingCaller`, `RecordingCaller`, `_ToolTurnRuntime`) caen:
+no declaran el criterio de ninguna prueba, describen un doble. La excepción existe para que el
+criterio y la cita canónica viajen con lo que MIDE, no con lo que lo monta.
+
+### Acreditación del barrido
+
+No es una conducta nueva: es una purga que debe ser NEUTRA, y así se midió. AST con docstrings
+quitados de los dos lados ⇒ **idéntico en 8 de los 9**; `tui.py` difiere **sólo** por el comentario
+que vivía dentro de la cadena CSS de `WorkspaceTuiApp` (una cadena, no un token: se retiró a mano y
+se exhibió en diff). `ruff` idéntico al baseline, `agentic_code` **261 passed**, sin supervivientes.
+Copia propia de los nueve verificada por `sha256` antes de tocar. Censo § 5, entrada `2026-08-28 (k)`.
+
+### Lo que NO deroga
+
+`D-23` intacto en su reparto —el barrido cubre lo que el paso escribe—: esta purga total es
+justamente el **paso propio** que `D-50` reservó para ella. `FIND-MSGINDEX-USER` sigue abierto.
