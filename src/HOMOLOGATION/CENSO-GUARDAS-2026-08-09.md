@@ -606,6 +606,38 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-28 (k) — pieza 1 de `D-50` PAGADA: barrido de comentarios de sus nueve ficheros
+
+Paso 3 del orden acordado. `D-50` declaró el barrido **paso propio** porque los ficheros del
+integrador arrastraban documentación previa cuya purga habría hecho irrevisable el diff de aquel
+paso; `D-51`..`D-55` y `D-57` lo reiteraron sin cambio. Aquí se paga entero.
+
+**Alcance:** los nueve — `compaction.py`, `repl.py`, `transcript.py`, `tui.py`,
+`transcript_browser.py`, `rendering.py`, `capture.py` (los seis de `D-50` más el séptimo de `D-51`)
+y los tests `test_compaction_wire.py` y `test_tui.py`. **6381 → 6114 líneas.**
+
+**Regla aplicada (§4):** cae todo docstring y todo comentario de los siete fuentes, incluidos los
+`#:` de campo y el comentario que vivía dentro del CSS de `WorkspaceTuiApp` —cadena, no token, así
+que se retiró a mano—. Sobrevive la **directiva desnuda** `# noqa` / `# type:`; la prosa que
+acompañaba a cuatro de ellas cae con el resto (`tui.py` ×2, `test_tui.py` ×2): la excepción es la
+directiva, no el comentario pegado a ella. En los tests sobreviven el docstring de módulo de
+`test_compaction_wire.py` y los de las funciones `test_*` —declaran criterio y citan el canónico—;
+los de las clases de andamiaje (`CompactingCaller`, `ReadingCaller`, `RecordingCaller`,
+`_ToolTurnRuntime`) **no son docstrings de un test** y caen. Las dos lecturas van declaradas porque
+el §4 no las contestaba.
+
+**Acreditación —el barrido es NEUTRO, y se mide, no se declara:** copia propia de los nueve
+verificada por `sha256` antes de tocar; después, comparación del **AST con docstrings quitados de
+los dos lados**: ocho `IDÉNTICO` y `tui.py` `DIFIERE` **por el único cambio de cadena previsto**,
+exhibido en diff (el comentario CSS). `ruff` idéntico al baseline (limpio antes y después) y
+`agentic_code` **261 passed** en 28 s, sin procesos supervivientes. Las sintéticas de
+`agentic_runtime` no se corrieron ni se tocaron.
+
+**Siguen abiertos, sin cambio:** `FIND-MSGINDEX-USER` (medido y decidible, pendiente de palabra) ·
+los dos encargos de la entrada (i) —el `/effort` y el contador de razonamiento derivado, este
+después del 2026-09-01— · `FIND-GOOGLE-CASING` · el techo de salida del perfil local · y la mentira
+de `llama.cpp` (`server-task.cpp:696`), que va al catálogo P1–P9.
+
 ### 2026-08-28 (j) — `msg_index` PAGADO: el índice de repliegue numera mensajes EMITIDOS
 
 Enunciado de retoma del paso 2 del orden acordado, con su pago condicionado a lo que dijera el
