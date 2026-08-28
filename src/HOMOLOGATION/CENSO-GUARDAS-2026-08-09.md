@@ -654,9 +654,12 @@ de `D-50`. Detalle en `SEPARACION/DECISIONES.md § D-55`.
 razonamiento real **no es una incidencia pendiente de resolver**. El `401` de Azure es el crédito
 agotado, y su reposición tiene fecha acordada en `D-49`: el 2026-09-01. La pata viaja a esa ventana,
 donde ya espera la acreditación de la compactación contra el modelo frontera; no se persigue clave
-alguna hasta entonces. El `llama-server` local sí se ejercitó, y su `thinking_tokens: 0` es **fiel**
-porque su `/v1/responses` no emite `output_tokens_details`: por eso no sustituye a la pata aplazada
-—daría el mismo `.jsonl` antes y después de la inyección—, y por eso tampoco es un fallo. **Deuda
+alguna hasta entonces. El `llama-server` local sí se ejercitó y **sí emite razonamiento** —medido en
+vivo el 2026-08-28: item `{"type": "reasoning"}` en la ruta no-streaming y
+`response.reasoning_text.delta` en la de streaming—; lo que no emite es `output_tokens_details`, o
+sea el **contador**. Su `thinking_tokens: 0` es por tanto fiel **al wire** y falso sobre lo
+ocurrido, y no sustituye a la pata aplazada: daría el mismo `.jsonl` antes y después de la
+inyección. Catalogado como **`P14`** en `agentic_models/gpt-5.x-conducta-vs-claude.md`. **Deuda
 que la fecha NO cierra:** `cache_write_1h` sólo lo emite Anthropic (`anthropic-messages.ts:555`),
 así que gpt-5.x no lo acreditará **nunca**; el campo que corrige un precio mal cobrado seguirá sin
 consumidor real después del 2026-09-01, y su acreditación necesita proveedor Anthropic o queda

@@ -3467,12 +3467,25 @@ fija su reposición el **2026-09-01**. La pata viaja a esa ventana, junto a la a
 compactación contra el modelo frontera; hasta entonces **no se persigue clave alguna**, y rotularla
 «bloqueada» sería invitar a la ventana siguiente a gastar en lo ya decidido.
 
-El `llama-server` local sí se ejercitó, y **no puede sustituirla**: su `/v1/responses` no emite
-`output_tokens_details`, luego su `thinking_tokens: 0` es **fiel**, no un fallo de la costura. El
-turno pasa por `finalize_response`, pero por la rama del `or 0`: daría el mismo `.jsonl` antes y
-después de la inyección. Es el caso degenerado, y darlo por acreditación sería exactamente la trampa
-de `no-debilitar-la-prueba`. Concuerda con `D-40` y con `D-49`: el local acredita **mecanismo**,
-nunca conducta — y aquí ni siquiera mecanismo, porque el motor es mudo sobre el campo.
+El `llama-server` local sí se ejercitó, y **no puede sustituirla**. Precisión que costó una
+corrección del usuario y que hay que dejar bien escrita: **el local SÍ emite razonamiento**. Medido
+en vivo el 2026-08-28 en las dos rutas de su `/v1/responses` —item `{"type": "reasoning"}` con su
+`reasoning_text` en la no-streaming, y `response.reasoning_text.delta` en la de streaming, que es la
+que ve el usuario en pantalla—. Lo que **no** emite es `output_tokens_details`, es decir el
+**contador** `reasoning_tokens`; los tokens de razonamiento se cobran dentro de `output_tokens` sin
+desglosar.
+
+Luego su `thinking_tokens: 0` es fiel **al wire** y **falso sobre lo ocurrido**: convive con un
+turno que razonó a la vista. El turno pasa por `finalize_response`, pero por la rama del `or 0`, y
+rinde el mismo `.jsonl` antes y después de la inyección. Es el caso degenerado, y darlo por
+acreditación sería exactamente la trampa de `no-debilitar-la-prueba`. Concuerda con `D-40` y con
+`D-49`: el local acredita **mecanismo**, nunca conducta — y aquí ni siquiera mecanismo, porque el
+motor es mudo sobre el campo. Catalogado como **`P14`** en
+`agentic_models/gpt-5.x-conducta-vs-claude.md`, junto a la otra omisión del mismo servidor.
+
+Corolario que sí queda pagado por el local, y conviene no perderlo: el **contenido** del
+razonamiento es acreditable contra él de punta a punta (`reasoning_text.delta` → `ThinkingEvent` →
+captura). Lo mudo es el contador, no el canal.
 
 **Deuda que la fecha NO cierra — `cache_write_1h`.** Sólo lo emite Anthropic
 (`anthropic-messages.ts:555`), luego **gpt-5.x no lo acreditará nunca**. El campo que corrige un
