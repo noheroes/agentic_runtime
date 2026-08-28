@@ -606,6 +606,61 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-28 (i) — `FIND-USAGE-REASONING` PAGADO: el contrato `Usage` gana `reasoning` y `cache_write_1h`
+
+Palabra del usuario: `Se atacan los 3 en el orden que propones` + `procede`. Se paga la deuda que
+`D-54` había declarado fuera de alcance; era la primera de las tres del orden acordado.
+
+**El defecto, con línea:** el canónico lleva en `Usage` (`types.ts`) dos campos que B no tenía.
+`reasoning` es SUBCONJUNTO de `output` —coste neutro— y lo pueblan **cinco** productores
+(`openai-responses-shared.ts:370`, `openai-completions.ts:1141`, `anthropic-messages.ts:708`
+—sólo si no es nulo—, `google-generative-ai.ts:225`, `google-vertex.ts:242`). `cacheWrite1h` es
+SUBCONJUNTO de `cacheWrite` (`anthropic-messages.ts:555`) y se factura a **2 × input**
+(`models.ts:385-395`): sin él, la escritura larga se cobraba a tarifa corta y **el precio del turno
+salía mal**, no sólo incompleto.
+
+**Inyectado (nueve ficheros):** `model_types.py` (los dos campos, **al final** del dataclass, para
+que la construcción posicional conserve su significado) · `models/registry.py` (el tramo de 1 h en
+**los dos** caminos de precio: el método `Registry.calculate_cost` y la función de módulo
+`calculate_cost_values`, porque `models.ts:385-395` es un solo algoritmo que aquí vive en dos
+sitios) · `openai_responses_shared.py` y `openai_completions.py` · `anthropic.py` (los dos campos)
+· `google_shared.py` (`read_usage_metadata` y `read_usage_field`, lectura dual `snake`/`camel`), con
+`google.py` y `google_vertex.py` recableados sobre ellas.
+
+**Hallazgo del paso, PAGADO — `FIND-GOOGLE-USAGE`:** el caso de Google salió en rojo con el `Usage`
+**entero a cero**, no sólo `reasoning`. El bloque leía `usageMetadata`/`promptTokenCount`, nombres
+del SDK **TypeScript**; el SDK Python los da en `snake_case`, luego `usage_meta` era **siempre
+`None`** y Google no reportaba consumo alguno. Verificado contra el SDK instalado.
+
+**Acreditación:** ocho casos nuevos en `agentic_models` con criterio y citas en la docstring, más
+tres en `agentic_code` que ejercitan el puente REAL (`caller.py`) y el capturador REAL
+(`capture.py`) escribiendo la línea `.jsonl` de verdad —incluido el `Usage` antiguo sin el campo,
+que debe rendir 0 y no reventar—. **Ocho mutaciones inyectadas y revertidas** desde copia propia
+verificada por `sha256` ⇒ **ocho rojas**, cada una tumbando exactamente su caso. Hashes idénticos
+tras cada revert (`caller.py` `fdc9ee22…`, `capture.py` `92fbdd93…`,
+`openai_responses_shared.py` `bdb4ba23…`, `registry.py` `e6ad40e7…`, `anthropic.py` `d315b851…`,
+`google_shared.py` `c567de8a…`, `openai_completions.py` `34323232…`). **La mutación M1 fue un falso
+negativo mío y se declara:** el patrón llevaba la indentación del método de clase y no mutó la
+función de módulo que el caso llama; defecto de la mutación, no del test — corregido con un caso
+propio para el método y dos pasadas separadas, ambas rojas.
+
+`agentic_models` **68 passed**, `agentic_code` **261 passed**, sin supervivientes; `ruff` sin avisos
+nuevos (comparados uno a uno contra la copia previa, fichero por fichero; el único `I001` nuevo, que
+dejó el barrido en `model_types.py`, se corrigió en el acto). Las sintéticas de `agentic_runtime` no
+se corrieron ni se tocaron. Barrido de comentarios de los nueve ficheros, que **no** paga la pieza 1
+de `D-50`. Detalle en `SEPARACION/DECISIONES.md § D-55`.
+
+**Declarado y NO pagado:** el turno real contra **gpt-5.x está BLOQUEADO** —Azure responde `401
+invalid subscription key`—, así que la pata de `.jsonl` con razonamiento real no está pagada contra
+el proveedor que lo emite; el `llama-server` local sí se ejercitó, y su `thinking_tokens: 0` es
+**fiel** porque su `/v1/responses` no emite `output_tokens_details`. **`FIND-GOOGLE-CASING`,
+ABIERTO:** la misma grafía TS fuera del bloque de usage —`finishReason` (`google.py:258`) y
+`thoughtSignature` (`:216`, `:222`, `:251`)—, que es paso propio con su lectura 1→EOF de los dos
+ficheros gemelos. **Siguen abiertos, sin cambio:** el `msg_index` de `convert_responses_messages`
+(paso 2 del orden acordado) · la pieza 1 de `D-50` (paso 3) · el techo de salida del perfil local ·
+y la mentira de `llama.cpp` (`server-task.cpp:696`), que va al catálogo P1–P9.
+
+
 ### 2026-08-27 (h) — `FIND-RESP-INCOMPLETE` + `FIND-RESP-TERMINAL` PAGADOS: el cierre del stream es UNA costura
 
 Palabra del usuario: `procede`. Las dos divergencias que dejó abiertas la entrada (g) se pagan

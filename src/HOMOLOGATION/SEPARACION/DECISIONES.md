@@ -3364,3 +3364,126 @@ septiembre. `D-52` y `D-53` intactos: esta entrada extiende su costura, no la re
 intacto: los cinco cortes, sus literales y el orden de guardas salen del fuente de A. La divergencia
 de `llama.cpp` (`server-task.cpp:696`, `"status": "completed"` incondicional) sigue ABIERTA y va al
 catálogo P1–P9: el servidor miente, pero ya no es cierto que no escucharíamos la verdad si la dijera.
+
+---
+
+## `D-55` (2026-08-28) — `FIND-USAGE-REASONING`: el contrato `Usage` gana `reasoning` y `cache_write_1h`, y se acredita hasta el `.jsonl`
+
+- **Palabra del usuario:** `Se atacan los 3 en el orden que propones` (orden en vigor: 1)
+  `FIND-USAGE-REASONING`, 2) `msg_index`, 3) pieza 1 de `D-50`) y `procede` sobre la inyección.
+- **Origen:** deuda declarada y NO pagada en `D-54`, § *Fuera de alcance*.
+
+### El defecto
+
+El canónico transporta en `Usage` dos campos que B no tenía (`types.ts`):
+
+1. **`reasoning`** — SUBCONJUNTO de `output`, luego **coste neutro**. Lo pueblan **cinco**
+   productores: `openai-responses-shared.ts:370` (`output_tokens_details.reasoning_tokens`),
+   `openai-completions.ts:1141` (`completion_tokens_details.reasoning_tokens`),
+   `anthropic-messages.ts:708` (`output_tokens_details.thinking_tokens`, **sólo si no es nulo**),
+   `google-generative-ai.ts:225` y `google-vertex.ts:242` (`thoughtsTokenCount`).
+2. **`cacheWrite1h`** — SUBCONJUNTO de `cacheWrite`, producido en `anthropic-messages.ts:555`
+   (`cache_creation.ephemeral_1h_input_tokens`) y **facturado a `2 × input`** (`models.ts:385-395`),
+   con `short = cacheWrite - cacheWrite1h`. Sin el campo, la escritura larga se cobraba a tarifa de
+   escritura corta: **el precio del turno salía mal**, no sólo incompleto.
+
+Por eso el paso no es «añadir un campo»: es el contrato `Usage`, sus cinco productores, las **dos**
+funciones de precio y las **dos** costuras que lo llevan hasta el consumidor.
+
+### Lo inyectado
+
+- `model_types.py` — `Usage.reasoning: int = 0` y `Usage.cache_write_1h: int = 0`, **al final** del
+  dataclass para que la construcción posicional existente conserve su significado.
+- `models/registry.py` — el tramo de 1 h en **los dos** caminos de precio: el método
+  `Registry.calculate_cost` y la función de módulo `calculate_cost_values`. `models.ts:385-395` es
+  un solo algoritmo y aquí vive en dos sitios; homologar uno solo deja el otro mintiendo.
+- `providers/openai_responses_shared.py` y `providers/openai_completions.py` — `reasoning` desde
+  los detalles de salida.
+- `providers/anthropic.py` — `cache_write_1h` desde `cache_creation.ephemeral_1h_input_tokens`, y
+  `reasoning` desde `output_tokens_details.thinking_tokens` **sólo si no es nulo**, como A.
+- `providers/google_shared.py` — `read_usage_metadata` y `read_usage_field`, que leen el nombre en
+  `snake_case` **y** en `camelCase`; `providers/google.py` y `providers/google_vertex.py` recablean
+  su bloque de usage sobre ellas.
+
+### `FIND-GOOGLE-USAGE` — hallazgo del paso, pagado
+
+El caso de Google salió en rojo con el `Usage` **entero a cero**, no sólo `reasoning`. Causa: el
+bloque leía `usageMetadata` / `promptTokenCount` / `candidatesTokenCount`, que son los nombres del
+SDK **TypeScript**. El SDK Python (`google.genai`) los expone en `snake_case`
+(`GenerateContentResponse.usage_metadata`, `…UsageMetadata.thoughts_token_count`), luego
+`usage_meta` era **siempre `None`** y Google no reportaba consumo alguno. Verificado contra el SDK
+real instalado. Pagado dentro de esta costura por las dos funciones de lectura dual.
+
+### `FIND-GOOGLE-CASING` — ABIERTO y declarado (`declarar-no-es-pagar`)
+
+El mismo error de grafía vive fuera del bloque de usage y **no** se toca aquí: `finishReason` en
+`google.py:258` (el SDK Python da `Candidate.finish_reason`) y `thoughtSignature` en `google.py:216`,
+`:222` y `:251` (`Part.thought_signature`). Es paso propio, con su lectura 1→EOF de los dos ficheros
+gemelos; rotularlo aquí no lo paga.
+
+### Acreditación (`D-12·b`)
+
+Ocho casos nuevos en `agentic_models/tests/test_usage_reasoning.py`, con el criterio canónico y sus
+citas en el docstring: los cuatro productores contra `LocalSSEServer`; el tramo de 1 h a `2 × input`
+por **las dos** funciones de precio; el precio sin tramo de 1 h idéntico al de antes; y `reasoning`
+sin coste por ser subconjunto de `output`.
+
+**Seis mutaciones inyectadas y revertidas** desde copia propia verificada por `sha256`, **seis
+rojas**, cada una tumbando exactamente su caso. Hash idéntico tras cada revert: `registry.py`
+`e6ad40e7…`, `anthropic.py` `d315b851…`, `google_shared.py` `c567de8a…`,
+`openai_completions.py` `34323232…`, `openai_responses_shared.py`
+`bdb4ba237835a32ca174c37a7ebaeee891ee895b49d857fe808fc44074a7e9b7`.
+
+**La mutación M1 fue un falso negativo mío, y se declara.** El patrón que inyecté llevaba la
+indentación del método de clase, así que sólo mutó `Registry.calculate_cost` y **no** la función de
+módulo que el caso llama: la suite siguió verde. El defecto era de la mutación, no del test. Se
+corrigió añadiendo el caso que ejercita el método de clase y repitiendo la pasada por separado
+(M1a función de módulo → roja, M1b método de clase → roja).
+
+### Acreditación en el consumidor real (`D-15`)
+
+`agentic_code/tests/test_usage_reasoning_bridge.py`, tres casos, con el puente **real**
+(`agentic_runtime/models/caller.py`) y el capturador **real** (`agentic_code/capture.py`);
+lo único sustituido es el motor. Cubre las dos costuras que quedaban:
+
+1. el puente proyecta `Usage.reasoning` sobre `DoneEvent.usage.thinking_tokens`;
+2. la captura escribe ese `Usage` en la línea `.jsonl` de verdad (`handle` sobre fichero), tanto en
+   `runtime_event` como en la proyección `message.event.usage`.
+
+El tercer caso fija que un `Usage` antiguo **sin** el campo rinde 0 y no revienta: el puente lee por
+`getattr`, y eso también es contrato.
+
+**Dos mutaciones más, dos rojas**, desde copia verificada por `sha256`: `caller.py`
+(`thinking_tokens=0`) tumba los dos casos del puente y deja verde el del `Usage` antiguo —que es lo
+correcto, porque afirma 0—; `capture.py` (`"usage": None`) tumba sólo el de la línea de captura.
+Hashes tras revert: `caller.py`
+`fdc9ee22a9d35c5bfffb5cf7cf50509089124ac1636bae6241999e59783ab26b`, `capture.py`
+`92fbdd9324f35f7c4da945d41e065816f7e573b7392e799be2558d595bf6a520`.
+
+**Turno real contra gpt-5.x: BLOQUEADO y declarado.** Azure responde `401 invalid subscription key`,
+así que la pata de `.jsonl` real con razonamiento **no está pagada** contra el proveedor que lo
+emite. El `llama-server` local sí se ejercitó: su `/v1/responses` no emite `output_tokens_details`,
+luego su `thinking_tokens: 0` es **fiel**, no un fallo de la costura — y por eso no sustituye a la
+pata bloqueada.
+
+### Suites, `ruff` y procesos
+
+`agentic_models` **68 passed**, `agentic_code` **261 passed**, sin procesos supervivientes (el
+`llama-server` vivo es del usuario y precede a la ronda). `ruff`: `agentic_code` **All checks
+passed**; en `agentic_models` los avisos son los **preexistentes**, comparados uno a uno contra la
+copia previa fichero por fichero. El único aviso nuevo —un `I001` en `model_types.py` por una línea
+en blanco que dejó el barrido— se corrigió en el acto. Deuda neta cero por diff.
+
+### Barrido de comentarios
+
+`D-23`: los nueve ficheros tocados quedan sin comentarios ni docstrings salvo directivas `# noqa` /
+`# type:`; las citas del canónico viven en el docstring de cada test, única excepción de la regla.
+Esto **no** paga la pieza 1 de `D-50` —el barrido de sus nueve ficheros—, que sigue siendo paso
+propio y es el tercero del orden acordado.
+
+### Lo que NO deroga
+
+`D-49` intacto: esto es contrato de `Usage`, no compactación. `D-52`, `D-53` y `D-54` intactos: esta
+entrada paga la deuda que `D-54` declaró, no reabre su costura. `D-08` intacto: los campos, su
+condición de subconjunto y el precio del tramo de 1 h salen del fuente de A. `D-21` intacto:
+`FIND-GOOGLE-CASING` y el turno de Azure se **declaran**, no se descartan en silencio.

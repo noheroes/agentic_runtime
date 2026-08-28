@@ -1,9 +1,3 @@
-"""
-Concrete ModelCallerProtocol implementation backed by agentic_models.
-
-Bridges agentic_runtime's dict-based message format to agentic_models Context
-and maps agentic_models stream events to agentic_runtime event types.
-"""
 from __future__ import annotations
 
 import json
@@ -33,12 +27,6 @@ def _compose_system_prompt(
     base: str | None,
     sections: list[str] | None,
 ) -> str | None:
-    """Ensambla el system prompt base (integrador) + secciones (runtime).
-
-    El runtime ensambla, el caller solo transporta. Mantener las secciones al final
-    y en orden estable preserva un buen prefijo de caché entre turnos. Sin secciones
-    el resultado es el base intacto (backward-compatible).
-    """
     parts = [p for p in [base, *(sections or [])] if p]
     if not parts:
         return None
@@ -51,15 +39,6 @@ def _dict_messages_to_context(
     system_prompt: str | None,
     model: Any = None,
 ) -> Any:
-    """Convert dict messages + tool schemas to agentic_models.Context.
-
-    Recibe el `Model` entero, no sólo su id, porque el mensaje de asistente que se
-    rearma tiene que llevar la IDENTIDAD de quien lo produjo: el motor compara
-    `model`/`provider`/`api` del mensaje con los del modelo en curso y, si no
-    coinciden, degrada el pensamiento a texto plano. Es la conducta correcta —las
-    firmas están atadas al modelo—, pero un mensaje rearmado sin identidad cae
-    siempre en esa rama y el round-trip se pierde en silencio.
-    """
     model_id = getattr(model, "id", "") or ""
     from agentic_models.model_types import (
         AssistantMessage,
@@ -95,21 +74,6 @@ def _dict_messages_to_context(
                     name=fn.get("name") or "",
                     arguments=args,
                 ))
-            # Razonamiento de vuelta al motor. Va DELANTE del resto del contenido
-            # porque el item de razonamiento tiene que preceder a la llamada que
-            # justificó —así lo exige la Responses API— y porque es el orden en que
-            # el motor lo emitió.
-            #
-            # `thinking_blocks` es el carril con firma (el item entero, opaco) y es
-            # el que hace que el modelo CONTINÚE su cadena en vez de re-razonar; el
-            # `thinking` suelto es el carril viejo, sólo texto, y se conserva para no
-            # romper a quien ya lo escribía.
-            #
-            # **Las firmas están atadas al modelo**: replicarlas contra otro modelo
-            # es un 400 (`query.ts:924`, `stripSignatureBlocks`). Un bloque sin
-            # `model_id` registrado se considera del modelo en curso — es historia
-            # escrita antes de que este carril existiera, y descartarla sería perder
-            # razonamiento válido por falta de una etiqueta.
             blocks = m.get("thinking_blocks") or []
             reasoning: list[Any] = []
             for block in blocks:
@@ -126,10 +90,6 @@ def _dict_messages_to_context(
                 reasoning.append(ThinkingContent(thinking=thinking))
             parts[:0] = reasoning
             rebuilt = AssistantMessage(content=parts)
-            # Los bloques que sobreviven al filtro de arriba son del modelo en curso
-            # (o historia sin etiquetar, que se le atribuye), así que sellar con él es
-            # decir la verdad sobre lo que va dentro — y es lo que hace que el item
-            # llegue al request en vez de degradarse a texto.
             if model is not None:
                 rebuilt.model = model_id
                 rebuilt.provider = getattr(model, "provider", "") or ""
@@ -143,7 +103,6 @@ def _dict_messages_to_context(
                 content=[TextContent(text=content)] if content else [],
             )
 
-        # system or unknown — skip (system goes into Context.system_prompt)
         return None
 
     typed_messages = [r for m in messages if (r := _to_message(m)) is not None]
@@ -163,17 +122,6 @@ def _dict_messages_to_context(
 
 
 class AgenticModelsCaller:
-    """
-    ModelCallerProtocol implementation that delegates to agentic_models.stream().
-
-    Usage:
-        from agentic_models import get_model, register_builtins
-        register_builtins()
-        caller = AgenticModelsCaller(
-            model=get_model("<model-id>"),  # el id lo elige el integrador; el runtime es multi-modelo
-            api_key="sk-...",
-        )
-    """
 
     def __init__(
         self,
@@ -186,7 +134,7 @@ class AgenticModelsCaller:
         self._model = model
         self._api_key = api_key
         self._system_prompt = system_prompt
-        self._options = options  # agentic_models.StreamOptions override
+        self._options = options
 
     async def complete(
         self,
@@ -205,10 +153,6 @@ class AgenticModelsCaller:
         tool_choice: ToolChoice | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> AsyncGenerator[Any, None]:
-        # Lo que este motor no sabe expresar se rechaza AQUÍ, antes de abrir el
-        # stream: si se dejara pasar, el turno correría y devolvería algo que no
-        # es lo pedido (texto libre donde se pidió schema, tool opcional donde se
-        # exigió obligatoria) sin una sola señal.
         if output_format is not None:
             raise UnsupportedModelOptionError(
                 "`output_format` (salida estructurada) no existe en agentic_models 0.2.0: "
@@ -245,21 +189,8 @@ class AgenticModelsCaller:
         from agentic_models import stream, stream_simple
         from agentic_models.model_types import SimpleStreamOptions, StreamOptions
 
-        # Subagente especializado (homologación subagent_type): su system prompt REEMPLAZA
-        # el base del integrador (espejo getAgentSystemPrompt → [agentPrompt]); las secciones
-        # del runtime se concatenan igual. `None`/`""` → base intacto del constructor.
         base = system_override if system_override else self._system_prompt
 
-        # Resolución del modelo por request: model_id manda; el del constructor es el default.
-        # La identidad canónica de agentic_models es (provider, id): el mismo id existe en
-        # varios providers. El puente es mono-provider por construcción (un solo api_key, un
-        # solo modelo default), así que se resuelve DENTRO del provider del modelo del
-        # constructor — resolver solo por id es ambiguo y podría devolver un Model de otro
-        # provider cuyo api_key no corresponde. Un model_id desconocido en ese provider es un
-        # error explícito (get_by_provider lanza ModelNotFoundError), no se cae al default.
-        #
-        # Se resuelve ANTES de armar nada: de él dependen tanto qué firmas de razonamiento
-        # son reproducibles (están atadas al modelo) como qué opciones sabe expresar.
         model = self._model
         if model_id:
             from agentic_models import get_registry
@@ -277,30 +208,17 @@ class AgenticModelsCaller:
         if self._api_key and not opts.api_key:
             opts = replace(opts, api_key=self._api_key)
         if stop is not None:
-            # `signal` es lo que los providers consultan por `.aborted`. Con el tipo
-            # viejo (`asyncio.Event`) esto viajaba igual y no lo leía nadie.
             opts = replace(opts, signal=stop)
         if temperature is not None:
             opts = replace(opts, temperature=temperature)
         if max_tokens is not None:
             opts = replace(opts, max_tokens=max_tokens)
         if metadata:
-            # `ID-7`: opaca. Se funde con la que traiga el integrador en sus options
-            # y no se lee por el camino — el runtime sólo la transporta.
             opts = replace(opts, metadata={**dict(opts.metadata or {}), **dict(metadata)})
 
-        # Razonamiento: NO es passthrough. `agentic_models` sólo lo expone por
-        # `stream_simple(SimpleStreamOptions.reasoning=…)`, así que el puente TRADUCE
-        # (`SEAMS §S1 A2.2`).
         reasoning: str | None = effort.value if effort is not None else None
 
         if thinking is not None and not thinking.enabled:
-            # Apagar es un NIVEL (`off`), no la ausencia de nivel: omitir el parámetro
-            # deja que el motor aplique su default —`medium` en la familia gpt-5.x—, que
-            # es lo contrario de lo pedido. Y no todo modelo sabe apagarse: el catálogo
-            # marca `off: None` (= bloqueado por el proveedor) en buena parte de la
-            # familia, y `clamp_thinking_level` ESCALA lo no soportado, de modo que un
-            # `off` mudo se convertiría en `minimal` sin que nadie se entere.
             from agentic_models import get_registry
 
             if "off" not in get_registry().get_supported_thinking_levels(model):
@@ -313,11 +231,6 @@ class AgenticModelsCaller:
             reasoning = "off"
 
         if thinking is not None and thinking.budget_tokens is not None:
-            # El presupuesto en TOKENS es un concepto Anthropic/Google. La familia
-            # OpenAI Responses expresa el razonamiento por nivel y no tiene campo
-            # equivalente: `build_base_options` devuelve un `StreamOptions` plano y el
-            # provider sólo re-adjunta el nivel, así que el presupuesto se perdería sin
-            # una sola señal — el defecto exacto que este contrato existe para eliminar.
             from agentic_models import supports_thinking_budget
 
             if not supports_thinking_budget(model):
@@ -342,9 +255,6 @@ class AgenticModelsCaller:
                 )
             budgets = opts.thinking_budgets
             if thinking is not None and thinking.budget_tokens is not None:
-                # El techo pedido se aplica al nivel que se vaya a usar; se puebla
-                # todo el mapa porque el provider clampa el nivel (`xhigh → high`)
-                # y elegiría un presupuesto distinto del pedido.
                 b = thinking.budget_tokens
                 budgets = ThinkingBudgets(minimal=b, low=b, medium=b, high=b)
             opts = replace(opts, reasoning=reasoning, thinking_budgets=budgets)
@@ -355,7 +265,6 @@ class AgenticModelsCaller:
             else stream(model, context, opts)
         )
 
-        # Providers push dicts; match on the "type" key
         async for event in event_stream:
             t = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
 
@@ -364,17 +273,10 @@ class AgenticModelsCaller:
                 yield TokenEvent(content=delta)
 
             elif t == "thinking_delta":
-                # En vivo, para que la espera no sea muda: es el resumen de
-                # razonamiento que el motor va emitiendo. Sin firma a propósito —
-                # el item completo sólo existe cuando el bloque cierra.
                 delta = event["delta"] if isinstance(event, dict) else event.delta
                 yield ThinkingEvent(content=delta, model_id=model.id)
 
             elif t == "toolcall_end":
-                # Dos grafías vivas del mismo campo: los providers empujan dicts
-                # camelCase (`toolCall`) y el dataclass de agentic_models 0.2.0 lo
-                # llama `tool_call`. Se aceptan ambas — quedarse con una sola
-                # rompería en silencio el día que el emisor cambie de forma.
                 if isinstance(event, dict):
                     tc = event.get("toolCall") or event["tool_call"]
                 else:
@@ -389,19 +291,11 @@ class AgenticModelsCaller:
                 msg = event["message"] if isinstance(event, dict) else event.message
                 reason = event.get("reason") if isinstance(event, dict) else getattr(event, "reason", "stop")
 
-                # Bloques de razonamiento CERRADOS, con su item entero como firma.
-                # Se rinden aquí y no en `thinking_end` porque el mensaje final es la
-                # única fuente que los trae completos y en orden; y ANTES del `done`
-                # porque el loop corta en cuanto lo ve, y son lo que tiene que
-                # persistir para devolvérselos al modelo en el request siguiente.
                 for block in getattr(msg, "content", None) or []:
                     if getattr(block, "type", None) != "thinking":
                         continue
                     signature = getattr(block, "thinking_signature", None)
                     if not signature:
-                        # Sin firma no hay round-trip posible: devolver el texto suelto
-                        # no continúa ninguna cadena y en algunos motores invalida el
-                        # historial. Se rinde igual para que se vea, marcado como final.
                         yield ThinkingEvent(
                             content=getattr(block, "thinking", "") or "",
                             final=True, model_id=model.id,
@@ -420,7 +314,7 @@ class AgenticModelsCaller:
                     usage=Usage(
                         input_tokens=u.input,
                         output_tokens=u.output,
-                        thinking_tokens=0,
+                        thinking_tokens=getattr(u, "reasoning", 0) or 0,
                         cache_read=u.cache_read,
                         cache_write=u.cache_write,
                     ),
@@ -436,6 +330,3 @@ class AgenticModelsCaller:
                 yield ErrorEvent(message=msg_text)
                 return
 
-            # start, text_start, text_end, thinking_start/end, tool_call_start/delta — skip
-            # (`thinking_end` no se usa: el bloque cerrado con firma se rinde desde el
-            # mensaje final del `done`, que es donde llega completo)
