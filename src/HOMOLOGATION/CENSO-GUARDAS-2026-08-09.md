@@ -686,12 +686,17 @@ ficheros gemelos.
    (`thinking_tokens` + `thinking_tokens_source: "provider" | "counted"`), porque sin la marca un
    0 y un 70 calculado son indistinguibles en el `.jsonl`. **Prohibición expresa:** el valor
    derivado NO acredita `FIND-USAGE-REASONING`; si lo hiciera, el test mediría el contador propio
-   en vez de la costura (`no-debilitar-la-prueba`). **Límite de alcance:** sólo vale para motores
-   que emiten el razonamiento ÍNTEGRO como deltas. Con gpt-5.x **no** vale —`reasoning_summary` es
-   un resumen, mucho más corto que el razonamiento real, y contarlo da un número seguro y
-   equivocado; con `encrypted_content` no llega ni texto—. Se activa por motor y es divergencia
-   deliberada por familia, de la clase ya declarada para `curl`/`wget` en `P4`. Coste: nulo,
-   `reasoning` es subconjunto de `output`.
+   en vez de la costura (`no-debilitar-la-prueba`). **Encuadre, corregido por el usuario y fijado
+   en `D-56`:** esto **no** es divergencia deliberada por familia —así lo había rotulado yo, y era
+   el encuadre contrario—. El canónico define que `Usage` transporta el razonamiento; sostener esa
+   funcionalidad en un motor que no la desglosa es **fidelidad al contrato**, `D-22` aplicado a la
+   capa de proveedor. La regla no tiene casos especiales: si el proveedor da el contador se usa el
+   suyo; si no lo da pero emite razonamiento se deriva; si no se puede derivar **no se emite un 0
+   mudo**, se marca indisponible. De ahí que la procedencia sea de tres valores —`provider` /
+   `counted` / `unavailable`—: es lo que hace comprobable el «sin excepciones». gpt-5.x nunca entra
+   en la rutina porque trae el contador. Coste: nulo, `reasoning` es subconjunto de `output`.
+   **Orden:** después de la ventana del 2026-09-01, que es el único patrón contra el que calibrar
+   que la cuenta de deltas acierta.
 
 **Siguen abiertos, sin cambio:** el `msg_index` de `convert_responses_messages`
 (paso 2 del orden acordado) · la pieza 1 de `D-50` (paso 3) · el techo de salida del perfil local ·

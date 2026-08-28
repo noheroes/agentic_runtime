@@ -3514,3 +3514,54 @@ propio y es el tercero del orden acordado.
 entrada paga la deuda que `D-54` declaró, no reabre su costura. `D-08` intacto: los campos, su
 condición de subconjunto y el precio del tramo de 1 h salen del fuente de A. `D-21` intacto:
 `FIND-GOOGLE-CASING` y el turno de Azure se **declaran**, no se descartan en silencio.
+
+---
+
+## `D-56` (2026-08-28) — Una funcionalidad homologada se preserva en TODOS los modelos: si el proveedor no la da, se deriva
+
+- **Palabra del usuario**, literal: *«al ser en esencia una solucion multi modelos, debemos
+  adaptarnos a situaciones como esta, para preservar una funcionalidad que homologamos del
+  canonico, sin excepciones»*.
+- **Qué corrige.** Yo había rotulado el contador derivado de razonamiento como *«divergencia
+  deliberada por familia de modelo, de la clase de `curl`/`wget` en `P4`»*. **Es el encuadre
+  contrario y estaba mal.** El canónico define que `Usage` transporta el razonamiento; eso es la
+  funcionalidad homologada. Que un motor no la desglose no nos exime del contrato: nos obliga a
+  sostenerlo por otra vía. Adaptarse es **fidelidad**, no desviación — `D-22` aplicado a la capa de
+  proveedor.
+
+### La regla, sin casos especiales
+
+1. **El proveedor da el contador** → se usa el suyo, tal cual, sin tocar. No se cuenta nada. Es el
+   caso de los cinco productores homologados en `D-55`.
+2. **No lo da pero emite el razonamiento** → **se deriva**. En el motor local, contando deltas:
+   medido el 2026-08-28, son **por token** (70 de razonamiento + 54 de texto = 124 contra
+   `output_tokens` 127; los 3 restantes son tokens de control no emitidos como texto).
+   `llama-server` expone además `/tokenize` si se quisiera exactitud al token.
+3. **Ni lo da ni emite razonamiento legible** → **no se emite un `0` mudo**. Se marca indisponible.
+   Un cero sin explicación es exactamente el defecto catalogado en `P14`: fiel al wire y falso
+   sobre lo ocurrido.
+
+### Consecuencia de contrato
+
+La procedencia deja de ser un adorno y pasa a ser lo que hace comprobable el «sin excepciones»:
+`thinking_tokens_source: "provider" | "counted" | "unavailable"`. Sin ella, un 0 del proveedor, un
+70 calculado y un motor mudo son indistinguibles en el `.jsonl`, y el consumidor no puede saber si
+el número es de fiar.
+
+`Usage.reasoning` de `agentic_models` **no se toca**: sigue siendo lo que dijo el proveedor, porque
+esa capa es espejo de A. La derivación vive en el puente (`agentic_runtime`), que es código nuestro.
+
+### Límite que la regla NO deroga
+
+El valor derivado **no acredita `FIND-USAGE-REASONING`**. Son dos cosas distintas y conviene no
+confundirlas: la **funcionalidad** se preserva en todos los modelos (esta decisión); el **port del
+parseo** del proveedor se acredita contra un proveedor que lo emita (`D-55`, pata aplazada al
+2026-09-01 por `D-49`). Si el derivado acreditara la costura, el test mediría el contador propio en
+vez del parseo — `no-debilitar-la-prueba`.
+
+### Orden de ejecución
+
+La derivación se implementa **después** de la ventana del 2026-09-01, no antes: el proveedor que sí
+desglosa es el único patrón contra el que calibrar que la cuenta de deltas acierta. Implementarla
+antes sería validarla contra sí misma. Anotado como encargo abierto en el censo § 5, entrada
+`2026-08-28 (i)`, junto al `/effort`.
