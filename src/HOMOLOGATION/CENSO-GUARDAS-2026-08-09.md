@@ -666,7 +666,34 @@ consumidor real después del 2026-09-01, y su acreditación necesita proveedor A
 declarada indefinidamente. **`FIND-GOOGLE-CASING`,
 ABIERTO:** la misma grafía TS fuera del bloque de usage —`finishReason` (`google.py:258`) y
 `thoughtSignature` (`:216`, `:222`, `:251`)—, que es paso propio con su lectura 1→EOF de los dos
-ficheros gemelos. **Siguen abiertos, sin cambio:** el `msg_index` de `convert_responses_messages`
+ficheros gemelos.
+
+**Dos encargos NUEVOS del usuario (2026-08-28), anotados sin tocar fuente:**
+
+1. **`/effort` como slash command** — seleccionar nivel de razonamiento desde la TUI, incluyendo
+   **`off` (no pensar)** y los niveles que el modelo **local** declare disponibles. Engancha con
+   `D-21` (`off` es un nivel, no una omisión: omitirlo deja el default del motor) y con `P10·2`.
+   El transporte ya existe —`caller.py` traduce `effort` y rechaza lo inexpresable—; lo que falta
+   es la superficie de usuario y la consulta de niveles soportados por modelo.
+2. **Contador de razonamiento DERIVADO para motores que no lo desglosan** — a raíz de `P14`.
+   Medido el 2026-08-28: los deltas del local son **por token** (70 de razonamiento + 54 de texto
+   = 124, contra `output_tokens` 127; los 3 restantes son tokens de control no emitidos como
+   texto), luego el desglose que el servidor calla **se reconstruye contando deltas**, sin
+   heurística ni tokenizador —y `llama-server` expone `/tokenize` si hiciera falta exactitud—.
+   **Forma acordada como correcta, y su razón:** `Usage.reasoning` de `agentic_models` se queda
+   **intacto** con lo que dijo el proveedor —es capa espejo de A, y A no hace esto—; el valor
+   derivado se calcula en el puente (`agentic_runtime`) y viaja con procedencia explícita
+   (`thinking_tokens` + `thinking_tokens_source: "provider" | "counted"`), porque sin la marca un
+   0 y un 70 calculado son indistinguibles en el `.jsonl`. **Prohibición expresa:** el valor
+   derivado NO acredita `FIND-USAGE-REASONING`; si lo hiciera, el test mediría el contador propio
+   en vez de la costura (`no-debilitar-la-prueba`). **Límite de alcance:** sólo vale para motores
+   que emiten el razonamiento ÍNTEGRO como deltas. Con gpt-5.x **no** vale —`reasoning_summary` es
+   un resumen, mucho más corto que el razonamiento real, y contarlo da un número seguro y
+   equivocado; con `encrypted_content` no llega ni texto—. Se activa por motor y es divergencia
+   deliberada por familia, de la clase ya declarada para `curl`/`wget` en `P4`. Coste: nulo,
+   `reasoning` es subconjunto de `output`.
+
+**Siguen abiertos, sin cambio:** el `msg_index` de `convert_responses_messages`
 (paso 2 del orden acordado) · la pieza 1 de `D-50` (paso 3) · el techo de salida del perfil local ·
 y la mentira de `llama.cpp` (`server-task.cpp:696`), que va al catálogo P1–P9.
 
