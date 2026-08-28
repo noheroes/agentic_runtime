@@ -650,10 +650,17 @@ dejó el barrido en `model_types.py`, se corrigió en el acto). Las sintéticas 
 se corrieron ni se tocaron. Barrido de comentarios de los nueve ficheros, que **no** paga la pieza 1
 de `D-50`. Detalle en `SEPARACION/DECISIONES.md § D-55`.
 
-**Declarado y NO pagado:** el turno real contra **gpt-5.x está BLOQUEADO** —Azure responde `401
-invalid subscription key`—, así que la pata de `.jsonl` con razonamiento real no está pagada contra
-el proveedor que lo emite; el `llama-server` local sí se ejercitó, y su `thinking_tokens: 0` es
-**fiel** porque su `/v1/responses` no emite `output_tokens_details`. **`FIND-GOOGLE-CASING`,
+**Declarado y NO pagado — APLAZADO al 2026-09-01, no bloqueado:** la pata de `.jsonl` con
+razonamiento real **no es una incidencia pendiente de resolver**. El `401` de Azure es el crédito
+agotado, y su reposición tiene fecha acordada en `D-49`: el 2026-09-01. La pata viaja a esa ventana,
+donde ya espera la acreditación de la compactación contra el modelo frontera; no se persigue clave
+alguna hasta entonces. El `llama-server` local sí se ejercitó, y su `thinking_tokens: 0` es **fiel**
+porque su `/v1/responses` no emite `output_tokens_details`: por eso no sustituye a la pata aplazada
+—daría el mismo `.jsonl` antes y después de la inyección—, y por eso tampoco es un fallo. **Deuda
+que la fecha NO cierra:** `cache_write_1h` sólo lo emite Anthropic (`anthropic-messages.ts:555`),
+así que gpt-5.x no lo acreditará **nunca**; el campo que corrige un precio mal cobrado seguirá sin
+consumidor real después del 2026-09-01, y su acreditación necesita proveedor Anthropic o queda
+declarada indefinidamente. **`FIND-GOOGLE-CASING`,
 ABIERTO:** la misma grafía TS fuera del bloque de usage —`finishReason` (`google.py:258`) y
 `thoughtSignature` (`:216`, `:222`, `:251`)—, que es paso propio con su lectura 1→EOF de los dos
 ficheros gemelos. **Siguen abiertos, sin cambio:** el `msg_index` de `convert_responses_messages`

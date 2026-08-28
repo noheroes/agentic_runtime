@@ -3460,11 +3460,25 @@ Hashes tras revert: `caller.py`
 `fdc9ee22a9d35c5bfffb5cf7cf50509089124ac1636bae6241999e59783ab26b`, `capture.py`
 `92fbdd9324f35f7c4da945d41e065816f7e573b7392e799be2558d595bf6a520`.
 
-**Turno real contra gpt-5.x: BLOQUEADO y declarado.** Azure responde `401 invalid subscription key`,
-así que la pata de `.jsonl` real con razonamiento **no está pagada** contra el proveedor que lo
-emite. El `llama-server` local sí se ejercitó: su `/v1/responses` no emite `output_tokens_details`,
-luego su `thinking_tokens: 0` es **fiel**, no un fallo de la costura — y por eso no sustituye a la
-pata bloqueada.
+**Turno real contra gpt-5.x: APLAZADO al 2026-09-01 por `D-49`, no bloqueado.** La pata de `.jsonl`
+real con razonamiento **no está pagada** contra el proveedor que lo emite, pero eso no es una
+incidencia abierta: el `401 invalid subscription key` de Azure es el crédito agotado, y `D-49` ya
+fija su reposición el **2026-09-01**. La pata viaja a esa ventana, junto a la acreditación de la
+compactación contra el modelo frontera; hasta entonces **no se persigue clave alguna**, y rotularla
+«bloqueada» sería invitar a la ventana siguiente a gastar en lo ya decidido.
+
+El `llama-server` local sí se ejercitó, y **no puede sustituirla**: su `/v1/responses` no emite
+`output_tokens_details`, luego su `thinking_tokens: 0` es **fiel**, no un fallo de la costura. El
+turno pasa por `finalize_response`, pero por la rama del `or 0`: daría el mismo `.jsonl` antes y
+después de la inyección. Es el caso degenerado, y darlo por acreditación sería exactamente la trampa
+de `no-debilitar-la-prueba`. Concuerda con `D-40` y con `D-49`: el local acredita **mecanismo**,
+nunca conducta — y aquí ni siquiera mecanismo, porque el motor es mudo sobre el campo.
+
+**Deuda que la fecha NO cierra — `cache_write_1h`.** Sólo lo emite Anthropic
+(`anthropic-messages.ts:555`), luego **gpt-5.x no lo acreditará nunca**. El campo que corrige un
+precio mal cobrado seguirá sin consumidor real después del 2026-09-01: su acreditación necesita
+proveedor Anthropic, o queda declarada indefinidamente. Se anota aquí para que la ventana del
+2026-09-01 no la dé por cerrada de arrastre.
 
 ### Suites, `ruff` y procesos
 
