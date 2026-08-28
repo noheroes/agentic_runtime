@@ -606,6 +606,44 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-28 (j) — `msg_index` PAGADO: el índice de repliegue numera mensajes EMITIDOS
+
+Enunciado de retoma del paso 2 del orden acordado, con su pago condicionado a lo que dijera el
+canónico. Dice esto: `msgIndex++` vive en `openai-responses-shared.ts:263`, al final del cuerpo del
+bucle y fuera de todas las ramas, y los dos `continue` lo saltan —`:220` el asistente sin ítems,
+`:157` el usuario con `content` vacío—. En A el contador numera mensajes **emitidos**; en B numeraba
+los **recorridos**.
+
+**Inyectado:** una línea retirada, `openai_responses_shared.py:169` (`msg_index += 1` delante del
+`continue` del asistente vacío). Un texto sin firma detrás de un asistente descartado se firmaba
+`msg_pi_2` donde A firma `msg_pi_1`.
+
+**Alcance real, medido:** el repliegue sólo actúa sobre bloques de texto **sin** `text_signature`, y
+eso es historial cross-model (`transform_messages.py:127` reconstruye el `TextContent` sin firma
+cuando el mensaje no es del modelo actual). Con el mismo modelo la firma la pone el proveedor.
+
+**Acreditación:** un caso nuevo con criterio y citas en la docstring, y **mutación inyectada y
+revertida** —reponer el `msg_index += 1`— desde copia propia verificada por `sha256` (`ffad7943…`,
+hash idéntico tras el revert) ⇒ **una roja, cero falsos positivos**. `agentic_models` **69 passed**,
+`agentic_code` **261 passed**, sin supervivientes; `ruff` con los 6 avisos preexistentes de
+`D-52`/`D-53` y ninguno nuevo. Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron.
+Detalle en `SEPARACION/DECISIONES.md § D-57`.
+
+**Pata de `.jsonl` real: declarada inalcanzable por esta superficie**, no omitida — exige a la vez un
+asistente sin ítems y un texto sin firma detrás, o sea historial cross-model, que ninguna corrida
+produce a voluntad (`D-21`). El cableado en `agentic_code` no necesita acción: su venv monta
+`agentic_models` en editable sobre `agentic_models/src`.
+
+**Divergencia hermana NUEVA, ABIERTA y no pagada — `FIND-MSGINDEX-USER`:** el mismo defecto en el
+otro camino de descarte. A hace `continue` en `:157`; el port lo sustituyó por `if parts:`
+(`openai_responses_shared.py:108-109`), así que el usuario con `content` vacío sí avanza el índice.
+Medido y decidible; fuera del enunciado del paso, no se toca sin palabra del usuario.
+
+**Siguen abiertos, sin cambio:** la pieza 1 de `D-50` (paso 3) · los dos encargos de la entrada (i)
+—el `/effort` y el contador de razonamiento derivado, este después del 2026-09-01— ·
+`FIND-GOOGLE-CASING` · el techo de salida del perfil local · y la mentira de `llama.cpp`
+(`server-task.cpp:696`), que va al catálogo P1–P9.
+
 ### 2026-08-28 (i) — `FIND-USAGE-REASONING` PAGADO: el contrato `Usage` gana `reasoning` y `cache_write_1h`
 
 Palabra del usuario: `Se atacan los 3 en el orden que propones` + `procede`. Se paga la deuda que

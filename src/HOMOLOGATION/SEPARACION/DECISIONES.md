@@ -3565,3 +3565,63 @@ La derivación se implementa **después** de la ventana del 2026-09-01, no antes
 desglosa es el único patrón contra el que calibrar que la cuenta de deltas acierta. Implementarla
 antes sería validarla contra sí misma. Anotado como encargo abierto en el censo § 5, entrada
 `2026-08-28 (i)`, junto al `/effort`.
+
+---
+
+## `D-57` (2026-08-28) — El índice de repliegue `msg_pi_{n}` numera mensajes EMITIDOS, no recorridos
+
+- **Palabra del usuario**: el enunciado de retoma del paso 2, que fija la primera tarea —leer
+  `openai-responses-shared.ts:263` y determinar si A avanza el índice en el camino que
+  descarta— y su pago condicionado: *«si no lo hace, la numeración `msg_pi_{n}` posterior a un
+  asistente vacío diverge y el pago es retirar la línea 169»*.
+
+### Lo leído en el canónico
+
+`msgIndex++` está en `openai-responses-shared.ts:263`, al final del cuerpo del `for` y fuera de
+todas las ramas. Dos `continue` lo saltan:
+
+- `:220` — `if (output.length === 0) continue;`, el asistente sin ítems de salida.
+- `:157` — `if (content.length === 0) continue;`, el usuario con `content` array vacío.
+
+Luego en A el contador numera **mensajes emitidos**. En B numeraba **mensajes recorridos**.
+
+### Lo inyectado — una línea retirada
+
+`agentic_models/.../openai_responses_shared.py:169`, el `msg_index += 1` que precedía al
+`continue` del asistente vacío. Nada más. Efecto medido con el módulo real: un texto sin firma
+detrás de un asistente descartado se firmaba `msg_pi_2` donde A firma `msg_pi_1`.
+
+### Alcance real de la divergencia, medido
+
+El repliegue sólo actúa cuando el bloque de texto **no** trae `text_signature`, y eso ocurre en
+historial **cross-model**: `transform_messages.py:127` reconstruye el `TextContent` sin firma
+cuando el mensaje no es del modelo actual. Con el mismo modelo la firma viene del proveedor y el
+fallback no se alcanza.
+
+### Acreditación
+
+`test_provider_roundtrip_openai_responses.py::test_openai_responses_discarded_assistant_does_not_advance_the_fallback_index`,
+con criterio y citas en la docstring. **Mutación inyectada y revertida** —reponer el
+`msg_index += 1`— desde copia propia verificada por `sha256` (`ffad7943…`, hash idéntico tras el
+revert) ⇒ **una roja, cero falsos positivos**. `agentic_models` **69 passed**, `agentic_code`
+**261 passed**, sin supervivientes de la prueba. `ruff`: los **6** avisos preexistentes de
+`D-52`/`D-53`, ninguno nuevo (el `I001` que dejó el caso nuevo se corrigió en el acto subiendo
+los imports al encabezado). Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron.
+
+**Pata de `.jsonl` real: declarada inalcanzable por esta superficie, no omitida.** Exige a la vez
+un asistente sin ítems de salida en el historial y un bloque de texto sin firma detrás, o sea un
+historial cross-model; ninguna corrida de `agentic_code` lo produce a voluntad. Se declara en vez
+de simularse (`D-21`). El cableado en `agentic_code` no necesita acción: su venv monta
+`agentic_models` en editable sobre `agentic_models/src`.
+
+### Divergencia hermana, ABIERTA y NO pagada — `FIND-MSGINDEX-USER`
+
+El mismo defecto en el otro camino de descarte: A hace `continue` en `:157` y no avanza; el port
+sustituyó ese `continue` por `if parts:` (`openai_responses_shared.py:108-109`), de modo que el
+usuario con `content` vacío cae igualmente en el `msg_index += 1` final. Queda **medido y
+decidible**; no entraba en el enunciado del paso y no se toca sin palabra del usuario.
+
+### Lo que NO deroga
+
+`D-49` intacto: esto es aritmética de port, no contabilidad, y se acredita sin proveedor frontera.
+`D-55` y `D-56` intactos. `D-50` pieza 1 sigue siendo paso propio.
