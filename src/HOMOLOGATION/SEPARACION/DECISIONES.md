@@ -3192,3 +3192,86 @@ los nueve ficheros de `D-50`/`D-51` y sigue siendo paso propio.
 `D-49` intacto: esto es adaptador de proveedor, no compactación, y no depende de la fecha del 1 de
 septiembre. Queda pendiente y nombrado `FIND-EMPTY-TOOL-OUT` (una línea, `:201` del fichero
 original), el techo de salida del perfil local, y la pieza 1 de `D-50`.
+
+---
+
+## `D-53` (2026-08-27) — `FIND-EMPTY-TOOL-OUT`: el resultado vacío se declara vacío
+
+Palabra del usuario: `procede`, sobre el anuncio de la inyección. Paga la deuda 2 de las tres
+nombradas en `D-51`; la 1 se pagó en `D-52`.
+
+### El defecto
+
+`openai-responses-shared.ts:254` resuelve la salida de tool con un ternario de **tres** ramas:
+
+```ts
+output = sanitizeSurrogates(hasText ? textResult : hasImages ? "(see attached image)" : "(no tool output)");
+```
+
+Nuestro port lo tenía colapsado a dos (`openai_responses_shared.py:194`; era `:201` antes del
+desplazamiento de `D-52`): sin texto, la salida caía **siempre** en la de imagen. Un `glob` sin
+coincidencias le llegaba al modelo anunciando una imagen que no existe. Visto en el cable de la
+sonda: el modelo lo registró como anomalía y lo rodeó con `ls -la`. Degrada la conducta sin fallar.
+
+### Lo que el contraste hasta EOF añadió al enunciado
+
+`transformMessages` corre **antes** de la conversión (`:123`) y `downgradeUnsupportedImages`
+(`transform-messages.ts:34-56`) sustituye la imagen por `"(tool image omitted: model does not
+support images)"` cuando el modelo no admite imágenes — nuestro port hace lo mismo
+(`transform_messages.py:15-16`, `:33-57`). Luego `hasImages` sólo puede ser cierto junto a
+`model.input` con imagen, que es la rama de partes: **la rama `"(see attached image)"` es defensiva
+y no se alcanza por este camino ni en A**. La consecuencia agrava el defecto en vez de suavizarlo:
+sin la tercera rama, todo resultado vacío heredaba una cadena muerta.
+
+### Lo inyectado
+
+Una línea, `openai_responses_shared.py:194`, literal del canónico:
+
+```python
+output_val = sanitize_surrogates(
+    text_result if has_text else "(see attached image)" if has_images else "(no tool output)"
+)
+```
+
+### Acreditación (`D-12·b` y `D-15`)
+
+Dos casos nuevos en `test_provider_roundtrip_openai_responses.py`: el resultado vacío —lista vacía
+y `TextContent` vacío— exige `"(no tool output)"`; el segundo fija las otras dos ramas tal como el
+cable las alcanza de verdad, con la razón de por qué la de imagen no se alcanza.
+
+Mutación inyectada y revertida desde copia propia verificada por `sha256`
+(`c78c448cfee9d510fe45e383aad35981045180dc900d7fb35edbcf22bef0c5af`, el estado inyectado; el previo
+era `7c4f32ff…`), dos pasadas, **dos rojas**: retirada de la tercera rama (estado previo) y literal
+cambiado a `"(empty)"`. En las dos cae sólo el caso del vacío; los demás siguen verdes.
+
+Consumidor real (`D-15`): turno contra el `llama-server` vivo en workspace de scratch, `glob` con
+patrón `*.zzz` sin coincidencias, captura con `AGENTIC_CODE_CAPTURE_PAYLOADS_FULL`. El segundo
+`model_request` del `.jsonl` lleva
+`{"type": "function_call_output", "call_id": "call_3ibb…", "output": "(no tool output)"}`,
+y el razonamiento del modelo dice *«The glob tool didn't find any files»* — sin la anomalía de la
+imagen inexistente.
+
+`agentic_models` **56 passed**, `agentic_code` **258 passed**, sin procesos supervivientes. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron. `ruff` sobre los dos ficheros: los
+**6** preexistentes de `D-52` y ninguno nuevo — el `I001` que la primera forma del bloque de imports
+introdujo se pagó antes de cerrar.
+
+### Divergencias del mismo fichero halladas al leerlo 1→EOF — ABIERTAS, no de este paso
+
+1. **`FIND-RESP-INCOMPLETE`.** El canónico llama `finalizeResponse` para `response.completed` **y**
+   `response.incomplete` (`:512`). Nuestro `:461` sólo atiende `completed`: un turno truncado por
+   techo no fija `usage`, ni coste, ni `stop_reason`, y la rama `"incomplete" → "length"` de
+   `_map_stop_reason` (`:242`) es inalcanzable por ese camino. Enlaza con la divergencia abierta de
+   `llama.cpp` (`server-task.cpp:696`, `"status": "completed"` incondicional): allí el servidor
+   miente; aquí no escucharíamos la verdad ni aunque la dijera.
+2. **`FIND-RESP-TERMINAL`.** Falta el centinela `sawTerminalResponseEvent` (`:302`, `:528-530`): el
+   canónico lanza `"OpenAI Responses stream ended before a terminal response event"` si el stream
+   muere sin evento terminal; nuestro port cierra en silencio como turno bueno.
+3. Menor: el canónico **no incrementa `msgIndex`** al descartar un mensaje vacío (`continue` en
+   `:157` y `:220`, antes del `:263`); nuestro port lo incrementa siempre (`:168-170`, `:202`). Sólo
+   afecta a los ids de repliegue `msg_pi_{n}`.
+
+### Lo que NO deroga
+
+`D-49` intacto. Queda pendiente la pieza 1 de `D-50` —el barrido de comentarios de sus nueve
+ficheros— y el techo de salida del perfil local, que no es divergencia de motor.

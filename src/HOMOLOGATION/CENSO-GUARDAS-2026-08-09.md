@@ -606,6 +606,38 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (g) — `FIND-EMPTY-TOOL-OUT` PAGADO: el resultado vacío se declara vacío
+
+Palabra del usuario: `procede`. Segunda de las tres deudas nombradas en la entrada (e); queda la
+pieza 1 de `D-50` y el techo de salida del perfil local, que no es divergencia de motor.
+
+**El defecto, con línea:** `openai_responses_shared.py:194` (era `:201` antes del desplazamiento de
+`D-52`) colapsaba a dos ramas lo que el canónico tiene en tres (`openai-responses-shared.ts:254`).
+Sin texto, la salida caía **siempre** en `"(see attached image)"`: un `glob` sin coincidencias
+viajaba al modelo anunciando una imagen inexistente.
+
+**Lo que añadió el contraste hasta EOF:** `transformMessages` corre antes (`:123`) y sustituye la
+imagen por su texto de repliegue cuando el modelo no admite imágenes (`transform-messages.ts:34-56`,
+espejado en `transform_messages.py:33-57`), así que **la rama de imagen es defensiva y no se alcanza
+por este camino ni en A**. Lo que heredaba el resultado vacío era, literalmente, una cadena muerta.
+
+**Inyectado:** una línea, el ternario de tres ramas literal del canónico.
+
+**Acreditación:** dos casos nuevos —el vacío exige `"(no tool output)"`; el otro fija las ramas
+alcanzables y por qué la de imagen no lo es—; mutación inyectada y revertida desde copia propia
+verificada por `sha256` en dos pasadas (rama retirada y literal cambiado), **dos rojas**; y turno
+real contra el `llama-server` vivo con `glob *.zzz` sin coincidencias, cuyo `.jsonl` lleva
+`{"type": "function_call_output", …, "output": "(no tool output)"}` en el segundo `model_request`
+(`D-15`). `agentic_models` **56 passed**, `agentic_code` **258 passed**, sin supervivientes; `ruff`
+sin avisos nuevos. Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron. Detalle en
+`SEPARACION/DECISIONES.md § D-53`.
+
+**Dos divergencias nuevas del mismo fichero, ABIERTAS y no de este paso** (detalle en `D-53`):
+`FIND-RESP-INCOMPLETE` —`response.incomplete` no se atiende (`:461` vs canónico `:512`), luego un
+turno truncado no fija `usage` ni `stop_reason`, y enlaza con la mentira de `llama.cpp`— y
+`FIND-RESP-TERMINAL` —falta el centinela `sawTerminalResponseEvent` (`:302`, `:528-530`), y un
+stream cortado se cierra en silencio como turno bueno—.
+
 ### 2026-08-27 (f) — `FIND-PARALLEL-SLOT` PAGADO: una casilla por item, con la clave replegada a `item.id`
 
 Palabra del usuario: `de acuerdo, procede`, precedida de su encargo de investigar antes la
