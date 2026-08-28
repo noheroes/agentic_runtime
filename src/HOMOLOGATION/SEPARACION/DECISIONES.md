@@ -3096,3 +3096,99 @@ vigilada**. El barrido de comentarios de los ficheros tocados sigue siendo paso 
 siendo la fecha. `D-50` intacto en sus cinco piezas; esta entrada paga dos de sus declarados, no
 reabre ninguna. `D-47 · 3` intacto: `/compact` sigue corriendo con `ctx=None`. `D-08` intacto: la
 línea `Context:` y su sitio salen de `CompactSummary.tsx`, no de lo que pareciera informativo.
+
+## `D-52` — `FIND-PARALLEL-SLOT` pagado: una casilla POR ITEM, con la clave replegada a `item.id` (2026-08-27)
+
+Primera de las tres deudas nombradas en `D-51`, y la más cara: no rotula mal, **ejecuta dos veces**.
+
+### El defecto, reproducido en vivo antes de tocar nada
+
+`process_responses_stream` (`agentic_models/.../openai_responses_shared.py`) llevaba **una sola
+casilla** de turno (`current_item` / `current_block`) donde el canónico tiene un mapa
+(`pi/packages/ai/src/api/openai-responses-shared.ts:288-354`, `outputSlots`, con `contentIndex`
+congelado al crear la casilla y `outputSlots.delete` en cada `done`). Además, `block_index()`
+calculaba el índice en el momento del delta (`len(output.content) - 1`) en vez de al crear.
+
+Captura cruda contra `llama-server` (`curl` a `/v1/responses`, una tool, prompt de dos llamadas):
+`added rs_…` → 31 × `reasoning_text.delta` → `added fc_A` → deltas de `a.txt` → `added fc_B` (con
+`fc_A` aún abierto) → deltas de `b.txt` → `done rs_…` → `done fc_A` → `done fc_B`. Daño exacto sobre
+el código de entonces: el `added` de `fc_B` pisa la casilla, luego (a) la rama `done` del
+razonamiento no encuentra su bloque ⇒ **`thinking_signature` nunca se fija** y el item de
+razonamiento no se reenvía en el request siguiente; (b) el `done` de `fc_A` escribe `{"path":"a.txt"}`
+**en el bloque de `fc_B`**; (c) el `done` de `fc_B` no encuentra bloque y **fabrica** un `ToolCall`
+que no está en `output.content`. Neto: `b.txt` descartado y `a.txt` ejecutado dos veces.
+
+### La segunda capa: llama.cpp no manda `output_index` — acreditado en su fuente
+
+Antes de inyectar se leyó el emisor Responses de `llama.cpp` (`/home/noheroes/ai/llama.cpp`, HEAD
+`c060ca974`, tag `b10603`): `tools/server/server-task.cpp:1166-1314` (los deltas) y `:599-714` (el
+cierre). Hechos:
+
+- **`output_index` no se escribe en ningún evento.** Tampoco `content_index`, `summary_index`,
+  `sequence_number`. El estado del turno (`server-task.h`) sólo guarda `oai_resp_reasoning_id`,
+  `oai_resp_message_id` y un `oai_resp_fc_id` («*function call ID for current args delta*»): **no
+  existe el concepto de índice de salida**. Los tests de conformidad del propio `llama.cpp`
+  (`tests/unit/test_compat_oai_responses.py`) anclan la identidad en `item.id`/`item_id`.
+- **Todos los `output_item.done` salen al FINAL**, desde el resultado final: razonamiento, mensaje y
+  luego todas las tools. El solapamiento no es contingente, es la arquitectura.
+- Todo evento del stream lleva **o `item_id` o `item.id`**, sin excepción, y los tres ids son
+  estables durante el turno. La clave replegada es total, no un apaño.
+- No emite `function_call_arguments.done`, ni `reasoning_text.done`, ni los eventos de
+  `reasoning_summary_*`, ni `refusal.delta`, ni `response.incomplete` / `response.failed`.
+- **Divergencia que queda ABIERTA, no de este paso:** `to_json_oaicompat_resp_stream()` emite
+  `"status": "completed"` **incondicionalmente** (`:696`), también con `stop == STOP_TYPE_LIMIT`. Un
+  turno truncado por techo de salida se anuncia como completado, y `_map_stop_reason` no puede
+  distinguirlo. Va al catálogo P1–P9, no a homologación.
+
+### Lo inyectado
+
+Mapa `output_slots` con casillas `{type, block, content_index, keys}`. `content_index` se congela al
+crear, como el canónico. La casilla se **registra bajo todas las claves disponibles** —`("index", output_index)`
+cuando no es `None`, y `("item", item_id)`— y se busca por cualquiera de las dos; `drop_slot` retira
+todas. Un mapa indexado sólo por `output_index` colapsaría los tres items en uno bajo `llama-server`,
+porque el SDK `openai` no valida el campo ausente y lo entrega como `None`.
+
+Cada handler pasa a la forma canónica `slot = get_slot(...); if slot is None: continue`, y
+`output_item.done` usa `get_or_create_slot`, con lo que **desaparece la fabricación** del `ToolCall`
+suelto: si la casilla no existe, se crea y el bloque entra en `output.content`. Dentro del mismo
+bloque reescrito se homologa también el orden de resolución de argumentos del `done`, que era del
+revés: el canónico (`:500`) prefiere `item.arguments` y cae al `partialJson`.
+
+El nombre del buffer de trabajo sigue siendo `_partial_json`: el camino de error de
+`openai_responses.py:246-252` lo despoja **por nombre**.
+
+### Acreditación (`D-12·b` y `D-15`)
+
+Dos casos nuevos en `test_provider_roundtrip_openai_responses.py`, mismo criterio y dos formas de
+cable: con `output_index` (forma OpenAI) y sin él (forma `llama-server`, con el orden capturado).
+Ambos exigen dos tool calls con argumentos distintos, ids distintos, tres `contentIndex` distintos,
+el objeto del `toolcall_end` **presente en `output.content`**, y firma de razonamiento fijada.
+
+Mutación inyectada y revertida desde copia propia verificada por `sha256`
+(`7c4f32ffa99deb930a79fe7c1abdd3bd8e1ca10cf75768c720d4bbc567315683`, el estado final; la primera
+tanda se corrió sobre `2e2dcc…`, antes de subsanar dos avisos de `ruff` propios), dos pasadas:
+- clave constante (casilla única): **los dos casos nuevos caen**, con el diff exacto del defecto
+  descrito —`a.txt` dos veces, `b.txt` perdido—; los cuatro previos siguen verdes.
+- clave sólo por `output_index`: **cae únicamente** el caso sin índice. Aísla la segunda capa.
+
+Consumidor real: el mismo turno contra el `llama-server` vivo devuelve `stop_reason == toolUse`,
+`contentIndex` 0/1/2, `{"path":"a.txt"}` y `{"path":"b.txt"}` en tool calls distintas, un bloque de
+razonamiento con firma de tipo `reasoning`.
+
+`agentic_models` **54 passed**, `agentic_code` **258 passed**, sin procesos supervivientes. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron. `ruff` sobre los dos ficheros: **8
+avisos antes, 6 después** — los dos que la inyección introdujo (`B023` por un cierre sobre variables
+de bucle, `SIM114`) se pagaron; los 6 restantes son preexistentes y no se tocan en este paso.
+
+### Barrido de comentarios
+
+`D-23`: los dos ficheros tocados quedan sin comentarios ni docstrings de módulo/función; el criterio
+y las citas del bloque de prosa que había en el fichero de tests se pliegan al docstring de su test,
+que es la única excepción de la regla. Esto **no** paga la pieza 1 de `D-50`, que es el barrido de
+los nueve ficheros de `D-50`/`D-51` y sigue siendo paso propio.
+
+### Lo que NO deroga
+
+`D-49` intacto: esto es adaptador de proveedor, no compactación, y no depende de la fecha del 1 de
+septiembre. Queda pendiente y nombrado `FIND-EMPTY-TOOL-OUT` (una línea, `:201` del fichero
+original), el techo de salida del perfil local, y la pieza 1 de `D-50`.

@@ -606,6 +606,50 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-27 (f) — `FIND-PARALLEL-SLOT` PAGADO: una casilla por item, con la clave replegada a `item.id`
+
+Palabra del usuario: `de acuerdo, procede`, precedida de su encargo de investigar antes la
+implementación real del servidor (*«antes no seria bueno buscar la implementacion del modelo y la
+compatibilidad real que existe con gpt?»*). La primera de las tres deudas nombradas en la entrada
+(e) queda pagada; era la más cara porque **ejecuta dos veces**.
+
+**Reproducido antes de tocar nada** (`curl` crudo a `/v1/responses`, una tool, prompt de dos
+llamadas): el `added` de la segunda `function_call` llega con la primera abierta y el razonamiento
+también abierto, y **todos los `done` salen al final**. Sobre la casilla única de entonces eso daba
+las tres averías enunciadas en (e): firma de razonamiento nunca fijada, argumentos de la tool #1
+escritos en el bloque de la #2, y un `ToolCall` fabricado fuera de `output.content` para la #2 —
+neto, `b.txt` descartado y `a.txt` ejecutado dos veces.
+
+**Investigación previa a la inyección, en fuente de `llama.cpp`** (HEAD `c060ca974`, tag `b10603`;
+`tools/server/server-task.cpp:1166-1314` y `:599-714`): el emisor Responses **no escribe
+`output_index` en ningún evento** —ni `content_index`, ni `summary_index`, ni `sequence_number`—
+porque no existe el concepto: el estado del turno sólo guarda un id de razonamiento, uno de mensaje
+y un `oai_resp_fc_id` «actual». En cambio **todo evento lleva `item_id` o `item.id`**, estables
+durante el turno: la clave replegada es total, no un apaño. El solapamiento es arquitectura, no
+azar. Inventario completo de lo que emite y lo que omite, en `SEPARACION/DECISIONES.md § D-52`.
+
+**Inyectado** (`agentic_models/.../openai_responses_shared.py`): mapa `output_slots` con
+`content_index` congelado al crear, casilla registrada **bajo todas las claves disponibles**
+(`output_index` cuando no es `None`, más el id del item) y retirada por todas en cada `done`. Los
+handlers pasan a `slot = get_slot(...); if slot is None: continue` y `output_item.done` usa
+`get_or_create_slot`, con lo que desaparece la fabricación del `ToolCall` suelto. Se homologa además
+el orden de resolución de argumentos del `done`, que estaba del revés respecto de `:500`.
+
+**Acreditación:** dos casos nuevos (forma OpenAI con `output_index` y forma `llama-server` sin él,
+con el orden capturado); mutación inyectada y revertida desde copia propia verificada por `sha256`
+en dos pasadas —clave constante tumba los dos casos nuevos, clave sólo por índice tumba únicamente
+el caso sin índice—; y el turno real contra el `llama-server` vivo con las dos tools distintas y la
+firma fijada. `agentic_models` **54 passed**, `agentic_code` **258 passed**, sin supervivientes. Las
+sintéticas de `agentic_runtime` no se corrieron ni se tocaron.
+
+**Divergencia nueva, ABIERTA y no de este paso:** `llama.cpp` emite `"status": "completed"`
+**incondicionalmente** al cerrar el stream (`server-task.cpp:696`), también cuando paró por techo de
+salida. Un turno truncado se anuncia completado y `_map_stop_reason` no puede distinguirlo. Destino
+catálogo P1–P9, no homologación.
+
+**Sigue pendiente, sin cambio:** `FIND-EMPTY-TOOL-OUT` (una línea) · el techo de salida del perfil
+local · la pieza 1 de `D-50`, el barrido de comentarios de sus nueve ficheros.
+
 ### 2026-08-27 (e) — `D-51`: la observabilidad del `/compact` completa, y la deuda arrastrada, NOMBRADA
 
 Palabra del usuario: *«2 ampliar evento, 3 registrar, 4 no queda fuera es deuda que vienes
@@ -642,7 +686,7 @@ Detalle en `SEPARACION/DECISIONES.md § D-51`.
 Las tres estaban rotuladas «laterales» y «fuera de este paso». El rótulo se retira. Ninguna se paga
 en esta ventana; las tres quedan **medidas, con línea, y decidibles**:
 
-1. **`FIND-PARALLEL-SLOT` — defecto propio, localizado, NO pagado.**
+1. **`FIND-PARALLEL-SLOT` — defecto propio, localizado. PAGADO en la entrada (f), `D-52`.**
    `agentic_models/.../openai_responses_shared.py:281-284` tiene **una sola casilla** donde el
    canónico tiene un mapa (`openai-responses-shared.ts:288-354`, `outputSlots`), así que con dos
    `function_call` en la misma respuesta el segundo `added` pisa al primero. Consecuencias probadas
