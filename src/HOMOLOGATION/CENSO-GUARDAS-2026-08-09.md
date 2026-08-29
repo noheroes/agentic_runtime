@@ -2336,3 +2336,30 @@ supervivientes. Detalle en `SEPARACION/DECISIONES.md § D-48`.
 Retoma: la **sonda de ejecución** desde `agentic_code`, con enunciado expreso (resultado
 funcional, uso de tools, t/s, tiempo, declaraciones de compactación) y el riesgo del KV `q4_0`
 a examen.
+
+## § 5 · addendum 2026-08-29 (c) — techo de salida y presupuesto de razonamiento cableados
+
+Hecho, en `agentic_models`: `utils/estimate.py` **nuevo** (port de `estimate.ts`);
+`providers/simple_options.py` con `clamp_max_tokens_to_context`, la firma de A
+`build_base_options(model, context, options, api_key)`, `thinking_budget_param` y
+`supports_thinking_budget` ensanchado **por declaración del modelo**, no por `api`;
+el suelo de 16 tokens en `openai_responses.py` **y** en `azure_openai_responses.py`;
+la emisión del presupuesto por `extra_body` y su reenganche en `stream_simple`;
+`'thinkingBudgetParam': 'thinking_budget_tokens'` en el perfil local; y los **nueve**
+llamantes de `build_base_options` pasando `context`.
+
+Medido en vivo contra `llama-server` + `unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`: `/slots` pasa
+de `n_predict=-1` a `n_predict=4096`; y con el mismo prompt en `xhigh`, presupuesto **32** ⇒
+139 caracteres de razonamiento frente a **4096** ⇒ 11.274. Las dos palancas actúan y no se
+estorban.
+
+Pruebas: `agentic_models` **78 → 96 verdes** (`test_output_ceiling.py` 10 +
+`test_thinking_budget_transport.py` 8), acreditadas por **12 mutaciones revertidas → 12 rojas,
+0 falsos positivos**, con purga de bytecode en cada revert (`D-62`) y `sha256` comprobado.
+`agentic_code` **277 verdes**, sin cambio. Sin procesos supervivientes. Detalle, addendum a
+`D-61` (la guarda `thinking_end_tags` de `server-common.cpp:1360`) y lo que queda abierto, en
+`SEPARACION/DECISIONES.md § D-63`.
+
+Retoma: quedan abiertos y sin tocar la calibración de `counted` contra un proveedor que
+desglose `reasoning_tokens` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor
+real, y `P1` de `PLAN-OPTIMIZACION-TUI.md` con el prototipo B (§ 6-bis).

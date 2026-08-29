@@ -4139,3 +4139,155 @@ su límite, no se descarta en silencio.
 abiertos y no tocados: el techo de salida (`options.max_tokens` es `None` en toda la cadena, luego
 `max_output_tokens` nunca se escribe), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real,
 y el cableado de `thinking_budget_tokens` como control primario.
+
+---
+
+## D-63 · El techo de salida y el presupuesto de razonamiento: dos palancas que existían y no llegaban al cable
+
+**2026-08-29.** Fase `agentic_code` · prueba E2E contra las peculiaridades de gpt-5.x. Cierra los dos
+puntos abiertos en `D-62` §*Abierto, sin cambio*. Addendum a `D-61`.
+
+- **Palabra del usuario**: elección del paso, *«prosigue con 2 y 3 en esta fase…»*; y, tras el
+  anuncio con evidencia plena de ambos puntos, `procede`.
+
+### El enunciado del punto 2 era corto: no era una línea, era una costura
+
+El pendiente decía «`options.max_tokens` es `None` en toda la cadena». Cierto, pero la causa son
+**tres pérdidas distintas**, cada una con su cita:
+
+1. **El respaldo al tope del modelo.** A: `options?.maxTokens ?? model.maxTokens`
+   (`simple-options.ts:29`). B hacía `max_tokens=opts.max_tokens` a secas. De ahí el `None`.
+2. **El recorte contra la ventana.** `clampMaxTokensToContext` (`simple-options.ts:15-19`) no
+   existía en B, **ni su dependencia** `estimateContextTokens` (`utils/estimate.ts`, 111 líneas):
+   `agentic_models/utils/` no tenía `estimate.py`. `D-22`: lo que no está se crea.
+3. **El suelo de 16.** `Math.max(options.maxTokens, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS)`
+   (`openai-responses.ts:29,236-238`; idéntico en `azure-openai-responses.ts:23-24,268-269`). B
+   escribía el valor crudo en las **dos** rutas. Sin él, el recorte del punto (2) puede producir por
+   sí mismo la petición que la API rechaza.
+
+La cita del enunciado (`openai_responses.py:142-143`) estaba desfasada: el sitio era `:165-166`.
+
+### Nueve llamantes, no uno
+
+`build_base_options` se llama desde **nueve** proveedores. Su firma pasa a la de A,
+`(model, context, options, api_key)`, y los nueve pasan `context`. **Se rechazó** hacer `context`
+opcional: habría dejado ocho proveedores sin recortar, que es exactamente la homologación parcial
+que `D-56` prohíbe.
+
+### Punto 3 · la capacidad es del MOTOR, no de la `api`
+
+`supports_thinking_budget` excluía por `api` a toda la familia Responses, y su docstring lo afirmaba
+como hecho: *«has no equivalent field … dropped without a trace»*. Contra fuente de `llama.cpp`
+(`HEAD c060ca9`) eso es falso para el perfil local:
+
+- `server-chat.cpp:15` — `json chatcmpl_body = response_body;`: el cuerpo entero se copia, luego las
+  claves desconocidas **sobreviven** a la traducción Responses→OAI.
+- `server-common.cpp:1354-1355` — `json_value(body, "reasoning_budget_tokens", json_value(body,
+  "thinking_budget_tokens", -1))`: se leen del cuerpo.
+- `server-chat.cpp:586-593` — la propia ruta Anthropic→OAI de `llama.cpp` escribe
+  `oai_body["thinking_budget_tokens"]`: es su nombre de campo, no una invención nuestra.
+
+Ensanchar por `model.api == "openai-responses"` habría sido **falso para OpenAI real**: la misma
+`api` llega a motores que leen el campo y a motores que no. La capacidad se declara **por modelo**,
+en `compat["thinkingBudgetParam"]`, que nombra el campo del cuerpo — el vehículo que ya existía
+(`D-61`) y el sitio donde `D-21` sitúa el conocimiento de proveedor. Donde no está declarado, la
+opción se sigue **rechazando con su razón** en `caller.py:237-251`, no descartándose.
+
+La segunda mitad de la pérdida estaba en `stream_simple`: `build_base_options` devuelve un
+`StreamOptions` pelado, y lo que el proveedor no vuelve a enganchar se pierde sin traza —
+`thinking_budgets` no se reenganchaba. El presupuesto sale ahora de
+`adjust_max_tokens_for_thinking`, espejo de `anthropic.py:755-769`, y viaja por `extra_body`.
+
+### Addendum a `D-61`: hay una guarda que `D-61` no registró
+
+`D-61` daba el sampler por alcanzable desde Responses. Es correcto, pero **incompleto**:
+`server-common.cpp:1360` condiciona el paso al sampler a
+`if (!chat_params.thinking_end_tags.empty())`. El presupuesto sólo llega si la plantilla del chat
+expone etiquetas de fin de pensamiento. No invalida `D-61`; lo acota.
+
+### Lo inyectado
+
+- `agentic_models/utils/estimate.py` — **nuevo**, port de `estimate.ts`: `CHARS_PER_TOKEN=4`,
+  `ESTIMATED_IMAGE_CHARS=4800`, y las siete funciones, incluida la regla de que un bloque de uso
+  reportado **sustituye** a lo estimado antes de él y que un turno `aborted`/`error` no cuenta como
+  uso reportado.
+- `agentic_models/providers/simple_options.py` — `CONTEXT_SAFETY_TOKENS`, `MIN_MAX_TOKENS`,
+  `clamp_max_tokens_to_context`, firma nueva de `build_base_options`, `thinking_budget_param` y
+  `supports_thinking_budget` ensanchado por declaración.
+- `agentic_models/providers/openai_responses.py` — suelo de 16, emisión del presupuesto por
+  `extra_body` bajo el nombre declarado, y reenganche en `stream_simple`.
+- `agentic_models/providers/azure_openai_responses.py` — el mismo suelo de 16 que A tiene y B no
+  tenía.
+- `agentic_models/models/local_catalog.py` — `'thinkingBudgetParam': 'thinking_budget_tokens'`.
+- Los nueve llamantes de `build_base_options`, con `context`.
+
+### Acreditación (`D-12·b`)
+
+18 casos nuevos en `test_output_ceiling.py` (10) y `test_thinking_budget_transport.py` (8), con
+criterio y citas en los docstrings. Verde a la primera ⇒ **doce mutaciones inyectadas y revertidas**
+desde copia propia verificada por `sha256`, con purga de bytecode en cada revert (`D-62`) y hash
+comprobado tras cada una. Doce rojos, cero falsos positivos:
+
+| | mutación | rojas |
+|---|---|---|
+| M1 | sin respaldo al tope del modelo | 1 |
+| M2 | sin recorte contra la ventana | 2 |
+| M3 | ventana no declarada tratada como declarada | 1 |
+| M4 | sin suelo de 16 | 1 |
+| M5 | se ignora el bloque de uso reportado | 1 |
+| M6 | no se cuenta el prefijo sistema+tools | 1 |
+| M7 | un turno abortado cuenta como uso reportado | 1 |
+| M8 | capacidad por `api`, no por declaración del modelo | 2 |
+| M9 | declaración vacía tomada por declaración | 1 |
+| M10 | el presupuesto no llega al cuerpo | 2 |
+| M11 | `stream_simple` no reengancha el presupuesto | 1 |
+| M12 | el perfil local deja de declarar el campo | 1 |
+
+Hashes del estado sano: `utils/estimate.py`
+`b449932794a9ee1a615cb6bbb1bfe72c30ad5213680369a217147baa9f986e4f`,
+`providers/simple_options.py` `0b7cae694501fd87220b796a0d4988c8f84b93de94a4089eac4f3fff07fc6ce6`,
+`providers/openai_responses.py` `f874ce0e89dea8011a03d60a3579f4a0c64897461da5d010a56b31210c5156f2`,
+`providers/azure_openai_responses.py`
+`6d04f8b0978da63929eac52e0f9e596668c1ef2cfabba61438fd95a2082201bc`,
+`models/local_catalog.py` `8e5a6676fec56b735bbf67639d7ccc28553991260017998eca46bbd10fe8f5c0`.
+
+### Medido en vivo, no sólo en el borde
+
+Contra `llama-server` + `unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`, `validacion-por-consumidor-real`:
+
+- **El techo llega al cable.** `max_output_tokens: 4096`, y `/slots` pasa de `n_predict=-1` a
+  `n_predict=4096`. La corrida muerta que originó el pendiente ya no se reproduce.
+- **El presupuesto llega y muerde.** Cuerpo real:
+  `{"thinking_budget_tokens": 256, "chat_template_kwargs": {"preserve_thinking": false}}`. Con el
+  mismo prompt y `xhigh`: presupuesto **32** ⇒ **139** caracteres de razonamiento; presupuesto
+  **4096** ⇒ **11.274**. Dos órdenes de magnitud de diferencia con lo demás idéntico: el sampler de
+  `reasoning-budget.cpp` está actuando. La corrida de 32 además topó en `output_tokens=4096`, o sea
+  que las dos palancas se ven a la vez y no se estorban.
+
+### Suites, `ruff`, `mypy` y procesos
+
+`agentic_models` **78 → 96 passed**; `agentic_code` **277 passed** (sin cambio: la capa integradora
+no se tocó). `ruff` sobre los ficheros tocados: los dos avisos de `openai_responses.py` (`I001`,
+`BLE001`) se comprobaron **idénticos en `HEAD`** ⇒ deuda neta cero por diff; el resto, limpio.
+`mypy` sobre los cuatro ficheros tocados: los dos únicos errores son los preexistentes de
+`_create_client` (`:135`, `:141`), ajenos a este pago. Sin procesos supervivientes. Sintéticas de
+`agentic_runtime` ni corridas ni tocadas (acuerdo de fase).
+
+### Lo que NO deroga
+
+`D-08` intacto: las tres pérdidas y la guarda nueva salen de leer fuente —A y `llama.cpp`—, no de
+deducir. `D-21` intacto y **reforzado**: el presupuesto se rechaza donde no hay campo declarado, y
+lo que cambia es que ahora existe una forma de declararlo en vez de una exclusión por `api` escrita
+a mano. `D-22` aplicado: `estimate.py` y `clamp_max_tokens_to_context` se construyeron. `D-56`
+respetado: la firma cambia en los nueve, no en uno. `D-49` intacto: esto es transporte, no veredicto
+de conducta.
+
+### Abierto
+
+La guarda `thinking_end_tags` (`server-common.cpp:1360`) es una precondición del motor que no
+controlamos: si una plantilla no expone etiquetas de fin, el presupuesto viaja y no actúa, **y nada
+lo reporta**. `P14` sigue en pie: la superficie Responses de `llama.cpp` no emite
+`output_tokens_details` ni señala el corte (`status` fijo en `"completed"`), luego el corte del
+presupuesto sólo se observa por su efecto, como aquí. Siguen abiertos y no tocados: la calibración
+de `counted` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, y `P1` de
+`PLAN-OPTIMIZACION-TUI.md`.
