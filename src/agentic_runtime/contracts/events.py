@@ -1,17 +1,3 @@
-"""Eventos del runtime — T1 invariante (`07·events`, `SEAMS §S5`).
-
-**Decisión de forma vigente (`A3.DB §7.2`, forma de `K4`):** la identidad viaja
-en **campos del `Event` BASE**, *no* en un `EventEnvelope` que envuelva. Razón
-técnica verificada: `EventBus.emit` despacha por `type(event)` y
-`subscribe(TokenEvent, handler)` es la API tipada — un envelope colapsaría todos
-los tipos en uno y rompería el despacho tipado, que es lo mejor que hoy tiene el
-bus. Añadir campos **con default** al base es viable porque los cinco subtipos
-tienen todos sus campos con default.
-
-Los campos de identidad son **opacos y no interpretados** por el runtime: sirven
-para que un sink suscrito por la costura pública pueda atribuir (`ID-6`), que hoy
-es imposible sin recibir el `ToolUseContext` entero.
-"""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -20,21 +6,42 @@ from typing import Any, Protocol, TypeVar
 
 T = TypeVar("T", bound="Event")
 
+THINKING_TOKENS_SOURCE_PROVIDER = "provider"
+THINKING_TOKENS_SOURCE_COUNTED = "counted"
+THINKING_TOKENS_SOURCE_UNAVAILABLE = "unavailable"
+
+_THINKING_TOKENS_SOURCE_TRUST = (
+    THINKING_TOKENS_SOURCE_PROVIDER,
+    THINKING_TOKENS_SOURCE_COUNTED,
+    THINKING_TOKENS_SOURCE_UNAVAILABLE,
+)
+
+
+def _thinking_tokens_source_rank(source: str) -> int:
+    if source in _THINKING_TOKENS_SOURCE_TRUST:
+        return _THINKING_TOKENS_SOURCE_TRUST.index(source)
+    return len(_THINKING_TOKENS_SOURCE_TRUST)
+
+
+def weakest_thinking_tokens_source(current: str, incoming: str) -> str:
+    if not current:
+        return incoming
+    if not incoming:
+        return current
+    if _thinking_tokens_source_rank(incoming) > _thinking_tokens_source_rank(current):
+        return incoming
+    return current
+
 
 @dataclass
 class Usage:
-    """Contabilidad de tokens — **única** (unifica las dos divergentes, `07·E4`).
-
-    Antes existían dos: un dataclass en `events/` con `thinking_tokens` y un
-    `BaseModel` en `execution/session/` sin él. Dos shapes con el mismo nombre
-    para el mismo concepto es un fork del ecosistema esperando a ocurrir.
-    """
 
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    thinking_tokens_source: str = THINKING_TOKENS_SOURCE_UNAVAILABLE
 
     @property
     def context_tokens(self) -> int:
@@ -43,29 +50,6 @@ class Usage:
 
 @dataclass(frozen=True, kw_only=True)
 class Event:
-    """Tipo base de todos los eventos del runtime. Frozen — inmutable post-construcción.
-
-    Los cinco campos de identidad son **atribución opaca** (`ID-6`/`K4`): el
-    runtime los puebla y no los lee; el consumidor filtra por ellos.
-
-    **Dónde se pueblan (`FIND-STREAM-1`).** En un **sumidero único**, `AgentLoop._emit`,
-    espejo de `insertMessageChain` del canónico (`sessionStorage.ts:993-1083`), que
-    decora todo mensaje de salida en un solo choke point en vez de pedirle a cada
-    emisor que recuerde los campos. El sellado es **incondicional**, no «sólo si está
-    vacío»: el comentario portante de `sessionStorage.ts:1049-1056` documenta que
-    sellar condicionalmente reintroduce la identidad cruzada al reemitir.
-
-    **`kw_only` no es cosmético — corrige la forma de `K4`.** `A3.DB §7.2` acreditó
-    la viabilidad de añadir campos con default al base contra *los cinco subtipos
-    propios*, que ya tenían todos sus campos con default. Pero el bus es una
-    **primitiva de extensión**: un consumidor declara sus propios `Event`, y con
-    campos posicionales en el base cualquier subtipo suyo con un campo **sin**
-    default deja de construirse (`non-default argument follows default argument`).
-    Es decir: la forma vigente de `K4`, tal como estaba escrita, imponía «todos tus
-    campos con default» a todo el ecosistema. Con `kw_only=True` los campos de
-    identidad salen del orden posicional y la restricción desaparece.
-    Verificado corriendo: `tests/test_events.py::test_custom_event_type_works`.
-    """
 
     task_id: str = ""
     agent_id: str = ""
@@ -84,24 +68,6 @@ class TokenEvent(Event):
 
 @dataclass(frozen=True)
 class ThinkingEvent(Event):
-    """Razonamiento del modelo — el canal que faltaba en el bus.
-
-    Existe por dos motivos distintos que conviene no confundir:
-
-    1. **Presentación.** El motor emite el resumen de razonamiento mientras
-       piensa; sin este evento el consumidor no tiene por dónde recibirlo y la
-       espera es una pantalla muda.
-    2. **Round-trip.** `signature` es el **item de razonamiento entero**, opaco
-       y serializado por el motor (incluye su `encrypted_content` cuando lo
-       hay). Es lo que hay que devolver en el request siguiente para que el
-       modelo continúe su cadena en vez de re-razonar desde cero. El runtime no
-       lo interpreta: lo transporta y lo persiste.
-
-    `final=False` son los deltas en vivo; `final=True` cierra el bloque y es el
-    único que trae `signature`. `model_id` viaja porque **las firmas están atadas
-    al modelo** que las generó: reproducirlas contra otro modelo es un 400 (el
-    canónico lo resuelve igual, `query.ts:924` → `stripSignatureBlocks`).
-    """
 
     content: str = ""
     signature: str = ""
@@ -136,18 +102,6 @@ class ErrorEvent(Event):
 
 @dataclass(frozen=True)
 class MessageEvent(Event):
-    """Un mensaje añadido a la historia del turno, visible en el stream público.
-
-    Propiedad canónica que reproduce (`#10`): **el stream lleva lo mismo que la
-    historia**. `query.ts` no tiene un canal aparte para anuncios — rinde los mismos
-    `Message` que persiste, y cada anuncio (delta de diferidas, listado de skills,
-    recall, memoria) es un `AttachmentMessage` yieldado al stream (`:1588`, `:1610`,
-    `:1624`). Sin esto un consumidor no ve NADA de lo que el runtime le inyecta al
-    modelo, que es justo donde vive el patrón de fallo dominante del barrido.
-
-    `origin` clasifica la procedencia sin interpretarla: el runtime la rotula, el
-    consumidor filtra por ella.
-    """
 
     role: str = ""
     content: str = ""
@@ -156,14 +110,6 @@ class MessageEvent(Event):
 
 @dataclass(frozen=True)
 class TurnStartEvent(Event):
-    """Frontera de turno y **plan de tools como DATO**.
-
-    Espejo de `{type:'stream_request_start'}` (`query.ts:337`), que A rinde una vez
-    por iteración. Lleva además los nombres anunciados y cuáles iban diferidos: A los
-    contabiliza (`analyzeContext.ts`) y sin ellos el consumidor tendría que
-    re-parsear el texto del anuncio — que es exactamente la enfermedad diagnosticada
-    en `FIND-DEFER-1`, no su remedio.
-    """
 
     turn: int = 0
     tool_names: tuple[str, ...] = ()
@@ -172,41 +118,6 @@ class TurnStartEvent(Event):
 
 @dataclass(frozen=True)
 class CompactionEvent(Event):
-    """Frontera de compactación y **declaración de lo que no se pudo expresar**.
-
-    `A` no tiene evento: rinde la compactación por `logEvent('tengu_compact', …)`
-    a telemetría propia (`compact.ts:650-695`) y por `onCompactProgress` a su TUI.
-    Ninguno de los dos es una costura pública, así que el mecanismo se construye
-    (`D-22`): sin él, un consumidor no ve NI que se compactó NI por qué se dejó de
-    compactar, que es justo el patrón de fallo que el bus existe para eliminar.
-
-    `reasoning_fallback` es el vehículo de `D-21`: si el puente no sabe expresar el
-    apagado de razonamiento (`ThinkingConfig(enabled=False)`, par de
-    `compact.ts:1305`), la compactación se reintenta una vez sin él y el hecho SALE
-    por aquí. Descartar la opción en silencio produciría la misma captura que
-    obedecerla: un resumen generado bajo condiciones distintas de las pedidas, y
-    nadie enterado.
-
-    `ptl_attempt`/`dropped_messages`/`remaining_messages` rinden el reintento por
-    `prompt too long`, que en A viaja por `logEvent('tengu_compact_ptl_retry', …)`
-    (`compact.ts:479-483`) — telemetría propia, no costura. Sin ellos la
-    compactación que sobrevive a un PTL es indistinguible de la que no truncó
-    nada, y lo que se perdió por cabecera queda sin declarar (`D-22`).
-
-    `direction`/`messages_kept`/`messages_summarized` rinden la compactación
-    PARCIAL, que en A viaja por `logEvent('tengu_partial_compact', …)`
-    (`compact.ts:990-1005`) — otra vez telemetría propia, no costura. Sin ellos
-    una parcial es indistinguible de una completa desde fuera: el consumidor ve
-    «se compactó» y no puede saber qué mitad sobrevivió literal ni cuál se
-    resumió, que es justo lo que distingue a las dos.
-
-    `user_context` es el texto libre con el que el humano orientó una parcial. A SÍ
-    lo rinde en pantalla —`CompactSummary.tsx:48`, `Context: “{userContext}”`— y el
-    motor ya lo lleva hasta el marcador de frontera y hasta `summarize_metadata`;
-    faltaba justamente en el evento, es decir en la única costura por la que un
-    consumidor puede pintarlo. Sólo la ruta PARCIAL lo trae: la completa manda ese
-    texto como `custom_instructions`, igual que A.
-    """
 
     trigger: str = ""
     outcome: str = ""
@@ -233,6 +144,9 @@ class EventBusProtocol(Protocol):
 
 
 __all__ = [
+    "THINKING_TOKENS_SOURCE_COUNTED",
+    "THINKING_TOKENS_SOURCE_PROVIDER",
+    "THINKING_TOKENS_SOURCE_UNAVAILABLE",
     "CompactionEvent",
     "DoneEvent",
     "ErrorEvent",
@@ -246,4 +160,5 @@ __all__ = [
     "ToolResultEvent",
     "TurnStartEvent",
     "Usage",
+    "weakest_thinking_tokens_source",
 ]

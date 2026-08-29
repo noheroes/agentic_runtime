@@ -606,7 +606,72 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
-### 2026-08-29 — `auto` deja de suplantar a `off`, y `preserve_thinking` viaja
+### 2026-08-29 (b) — `D-56` DERIVADO: el contador mudo deja de escribir un 0, y dice de dónde viene
+
+Palabra del usuario: `ningun cierre, trabajamos ya y luego que se prueba y se confirma recien se
+cierra` + `de acuerdo`. Paga el segundo de los dos encargos de la entrada `(i)`, que arrastraba el
+rótulo «bloqueado hasta el 2026-09-01 por `D-49`» desde `(j)`, `(k)`, `(l)`, `(m)` y `(a)`. Detalle
+en `SEPARACION/DECISIONES.md § D-62`.
+
+**Error mío en el rótulo, corregido:** lo que esperaba al 2026-09-01 no es el número, es la **barra
+de error**. Que el contador esté mudo se mide hoy contra `llama.cpp` (`P14`), y el tamaño del
+razonamiento se produce hoy contando lo que el motor sí emite; lo que exige un proveedor que
+desglose `reasoning_tokens` es **calibrar** que esa cuenta acierta. Se separaron las dos preguntas y
+sólo la segunda queda con fecha. `D-56` §Orden de ejecución queda **parcialmente derogada** por
+`D-62`: el instrumento se construye ahora.
+
+**Segundo error mío, y también corregido:** había anunciado que «si no hay estimador propio,
+`caracteres/4` no es derivar, es inventar». Es falso: `context/estimation.py:52-53` es el estimador
+homologado del runtime y **ya contempla el bloque `thinking`**. Reutilizarlo no es invención.
+
+**Inyectado (3 fuentes + 1 test):**
+- `contracts/events.py` — `Usage.thinking_tokens_source` con default `unavailable`, las tres
+  constantes de procedencia y `weakest_thinking_tokens_source`, que agrega por el **eslabón más
+  débil**: un total de sesión no puede ser más fiable que su peor turno.
+- `events/event_types.py` — reexporte puro de lo anterior.
+- `models/caller.py` — el puente acumula los `thinking_delta` del turno y, en el `done`, aplica la
+  cascada sin excepciones de `D-56`: contador del proveedor ⇒ `provider`; mudo pero con razonamiento
+  emitido ⇒ `rough_token_count` de lo acumulado y `counted`; ni una cosa ni otra ⇒ `unavailable`.
+  Guarda de doble conteo: el bloque final sólo se suma si el turno **no** vino en deltas.
+- `agentic_code/streaming.py` — `StreamUsage.thinking_tokens_source`, plegado por el mismo
+  eslabón débil en la reducción del `DoneEvent`. `capture.py` **no se toca**: su `asdict` arrastra el
+  campo nuevo a las dos líneas del `.jsonl`.
+
+`agentic_models.Usage.reasoning` queda **intacto** (`D-56:3551`): es capa espejo de A y A no hace
+esto.
+
+**Acreditación (`D-12·b`):** `test_usage_reasoning_bridge.py` **3 → 12 casos**, con el `.jsonl` real
+por medio. **Siete mutaciones inyectadas y revertidas** desde copia propia verificada por `sha256`,
+cada una tumbando exactamente sus casos y ninguno más: procedencia siempre `provider` (2 rojas) ·
+siempre `unavailable` (1) · agregado por último turno en vez de por el más débil (1) · derivación
+ignorada, vuelve el 0 mudo (3) · derivado ganando al contador del proveedor (1) · sin guarda de
+doble conteo (1) · `counted` por encima de `provider` en el orden de confianza (1).
+
+**Corrección de protocolo, del propio paso:** `sha256` acredita el **fichero**, no el **módulo
+cargado**. La mutación M7 era un intercambio de dos líneas **neutro en tamaño**, y el `cp` del revert
+devolvió a `events.py` el mismo `mtime` que el `.pyc` escrito durante la mutación; CPython invalida
+por `(mtime, size)`, así que **el bytecode mutado siguió ejecutándose** y produjo una roja falsa tras
+un revert correcto. Diagnosticado evaluando el símbolo en el intérprete, no releyendo el fichero.
+Regla que se añade al revert: tras reponer, **borrar el `.pyc` del módulo tocado** y recompilar. Es
+la misma familia que el defecto de instrumentación de `D-60`: un instrumento ciego no dice «no sé»,
+dice «no».
+
+**Medido:** `agentic_code` **272 → 277 passed**; `agentic_models` **78 passed**, capa sin tocar;
+`ruff` limpio en `agentic_code` y en `agentic_runtime` los **6** avisos preexistentes, ninguno en
+fichero tocado; `mypy` `Success` en los tres fuentes de `agentic_runtime`; sin procesos
+supervivientes. Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron.
+
+**Lo que esto NO acredita, y sigue dicho:** el valor derivado **no** acredita `FIND-USAGE-REASONING`
+(`D-56` §Límite); el port del parseo del contador del proveedor sigue necesitando un proveedor que lo
+emita. Y la barra de error del `counted` se calibra en la ventana del 2026-09-01.
+
+**Siguen abiertos:** `FIND-GOOGLE-CASING` · el techo de salida (`options.max_tokens` es `None` en
+toda la cadena ⇒ `max_output_tokens` nunca se escribe, `openai_responses.py:142-143`) ·
+`cache_write_1h` sin consumidor real, que gpt-5.x no acreditará nunca · cablear
+`thinking_budget_tokens` como palanca primaria · `P1` de `PLAN-OPTIMIZACION-TUI.md` · el prototipo B
+(§6-bis) · las filas de presupuesto `medium+1024` / `medium+2048`.
+
+### 2026-08-29 (a) — `auto` deja de suplantar a `off`, y `preserve_thinking` viaja
 
 Encargo: subsanar los hallazgos de la corrida E2E muerta y afinar el thinking, con la sospecha del
 usuario —confirmada— de que operábamos Qwen3.8 como si fuera gpt-5.x. Detalle en

@@ -4,8 +4,12 @@ import json
 from collections.abc import AsyncGenerator, Mapping
 from typing import Any
 
+from ..context.estimation import rough_token_count
 from ..contracts.abort import AbortSignal
 from ..events.event_types import (
+    THINKING_TOKENS_SOURCE_COUNTED,
+    THINKING_TOKENS_SOURCE_PROVIDER,
+    THINKING_TOKENS_SOURCE_UNAVAILABLE,
     DoneEvent,
     ErrorEvent,
     ThinkingEvent,
@@ -13,7 +17,7 @@ from ..events.event_types import (
     ToolCallEvent,
     Usage,
 )
-from .protocol import (  # noqa: F401 — ModelCallerProtocol: satisfies Protocol
+from .protocol import (  # noqa: F401
     Effort,
     ModelCallerProtocol,
     OutputFormat,
@@ -67,7 +71,7 @@ def _dict_messages_to_context(
                 raw_args = fn.get("arguments") or "{}"
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception:  # noqa: BLE001 — argumentos de tool-call ilegibles → {}, el turno continúa
+                except Exception:  # noqa: BLE001
                     args = {}
                 parts.append(ToolCall(
                     id=tc.get("id") or "",
@@ -265,6 +269,8 @@ class AgenticModelsCaller:
             else stream(model, context, opts)
         )
 
+        thinking_chunks: list[str] = []
+
         async for event in event_stream:
             t = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
 
@@ -274,6 +280,7 @@ class AgenticModelsCaller:
 
             elif t == "thinking_delta":
                 delta = event["delta"] if isinstance(event, dict) else event.delta
+                thinking_chunks.append(delta)
                 yield ThinkingEvent(content=delta, model_id=model.id)
 
             elif t == "toolcall_end":
@@ -291,9 +298,12 @@ class AgenticModelsCaller:
                 msg = event["message"] if isinstance(event, dict) else event.message
                 reason = event.get("reason") if isinstance(event, dict) else getattr(event, "reason", "stop")
 
+                streamed = bool(thinking_chunks)
                 for block in getattr(msg, "content", None) or []:
                     if getattr(block, "type", None) != "thinking":
                         continue
+                    if not streamed:
+                        thinking_chunks.append(getattr(block, "thinking", "") or "")
                     signature = getattr(block, "thinking_signature", None)
                     if not signature:
                         yield ThinkingEvent(
@@ -309,14 +319,26 @@ class AgenticModelsCaller:
                     )
 
                 u = msg.usage
+                reported = getattr(u, "reasoning", 0) or 0
+                derived = rough_token_count("".join(thinking_chunks))
+                if reported > 0:
+                    thinking_tokens = reported
+                    thinking_source = THINKING_TOKENS_SOURCE_PROVIDER
+                elif derived > 0:
+                    thinking_tokens = derived
+                    thinking_source = THINKING_TOKENS_SOURCE_COUNTED
+                else:
+                    thinking_tokens = 0
+                    thinking_source = THINKING_TOKENS_SOURCE_UNAVAILABLE
                 yield DoneEvent(
                     stop_reason="tool_calls" if reason == "toolUse" else (reason or "stop"),
                     usage=Usage(
                         input_tokens=u.input,
                         output_tokens=u.output,
-                        thinking_tokens=getattr(u, "reasoning", 0) or 0,
+                        thinking_tokens=thinking_tokens,
                         cache_read=u.cache_read,
                         cache_write=u.cache_write,
+                        thinking_tokens_source=thinking_source,
                     ),
                 )
                 return

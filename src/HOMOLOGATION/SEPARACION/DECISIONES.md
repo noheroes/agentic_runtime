@@ -3996,3 +3996,146 @@ El techo de salida sigue sin viajar: `options.max_tokens` es `None` en toda la c
 no reporta ni el corte (`status` fijo en `"completed"`, `server-task.cpp:695` y `:587`, frente a
 `to_json_oaicompat_chat_stream:464` y `to_json_anthropic_stream:800`) ni los tokens de razonamiento
 (sin `output_tokens_details` ⇒ `P14`). Elegir esa superficie es, en sí, un hallazgo. Sin pagar aquí.
+
+---
+
+## D-62 · La derivación de `D-56` se adelanta: lo que esperaba al 2026-09-01 era la barra de error, no el número
+
+**2026-08-29.** Fase `agentic_code` · prueba E2E contra las peculiaridades de gpt-5.x. Deroga
+parcialmente `D-56` §*Orden de ejecución*.
+
+- **Palabra del usuario**, en tres tramos. Elección del paso: `D-56: derivar reasoning`. Sobre mi
+  intento de elevarle dos binarias que el propio expediente ya resolvía: *«me pides que yo te
+  apruebe algo que tu has leido por tanto lo has documentado para tu uso y yo no?»* y, a la
+  segunda, `idem`. Sobre la ambigüedad de mi alcance: *«hace bastante rato me dices que necesitas
+  que el conteo de tokens permita calcular el tamaño de thinking, considerando que estamos teniendo
+  problemas con el modelo local, acepte porque entendi que era necesario para determinar que
+  necesitamos corregir para mitigar el problema, pero me dices que no puedes determinar por la
+  fecha en la cual puedo volver a usar gpt-5.x, en que quedamos?»*. Y el mando de ejecución:
+  *«ningun cierre, trabajamos ya y luego que se prueba y se confirma recien se cierra»*, cerrado
+  con `de acuerdo`.
+
+### Dos errores míos en el enunciado de retoma, hallados antes de mutar
+
+1. **Blanco equivocado.** El enunciado señalaba el `or 0` de
+   `openai_responses_shared.py:363` como la deuda a pagar. `D-56:3551` dice lo contrario con todas
+   sus letras: *«`Usage.reasoning` de `agentic_models` no se toca: sigue siendo lo que dijo el
+   proveedor, porque esa capa es espejo de A. La derivación vive en el puente»*. Esa línea es el
+   espejo de `openai-responses-shared.ts:370` y **no se ha tocado**. El `0` mudo real estaba en
+   `agentic_runtime/models/caller.py`.
+2. **Fecha equivocada, y es la que originó la pregunta del usuario.** Yo estaba usando «derivar»
+   para dos cosas distintas: **saber que el contador está mudo** —medible hoy, sin proveedor
+   frontera— y **cuantificar el razonamiento** —cuyo número también se produce hoy; lo que el
+   proveedor que sí desglosa aporta es la **calibración**, o sea la barra de error—. `D-56`
+   §*Orden de ejecución* aplazaba la implementación entera al 2026-09-01 para no *«validarla contra
+   sí misma»*. El aplazamiento correcto es el de la **acreditación de exactitud**, no el del
+   instrumento: sin instrumento, la ventana del 2026-09-01 llegaría sin nada que calibrar.
+
+### Lo inyectado
+
+- `agentic_runtime/contracts/events.py` — las tres constantes de procedencia y
+  `Usage.thinking_tokens_source`, al **final** del dataclass para no alterar la construcción
+  posicional existente (mismo criterio que `D-55` con `Usage.reasoning`). Más
+  `weakest_thinking_tokens_source`, que ordena `provider < counted < unavailable` y devuelve el
+  eslabón **más débil** de los dos.
+- `agentic_runtime/events/event_types.py` — reexporta lo nuevo por el mismo punto que el resto.
+- `agentic_runtime/models/caller.py` — el puente, donde `D-56` sitúa la derivación. Acumula los
+  `thinking_delta` del turno; si el motor no emite deltas y entrega el razonamiento entero en el
+  mensaje del `done`, lo toma de ahí, con guarda para no sumar dos veces el mismo razonamiento
+  visto por las dos vías. Y las tres reglas de `D-56` en su orden: contador del proveedor →
+  derivado → indisponible.
+- `agentic_code/src/agentic_code/streaming.py` — `StreamUsage` **acumula** turnos y su total va a
+  la línea `result` del `.jsonl`, luego la procedencia del agregado se pliega por el eslabón más
+  débil. Un total sumado de un turno medido y otro indisponible **no es** un total medido:
+  rotularlo `provider` reintroduciría en el agregado justo el 0 mudo que se acaba de matar en el
+  turno.
+- `agentic_code/src/agentic_code/capture.py` — **sin cambios**: `_canonical_message` y `finish`
+  serializan el `Usage` con `asdict`, luego el campo nuevo llega a `runtime_event` y a
+  `message.event.usage` sin tocar nada.
+
+### El método de la derivación, y por qué no es una invención
+
+No hay tokenizador real en ninguno de los venv (`tiktoken`, `transformers`, `tokenizers`,
+`sentencepiece`: los cuatro ausentes). Yo había anunciado que, sin uno, `caracteres/4` sería
+*«inventar»* y el paso quedaría sin pagar. **Esa premisa era falsa y se retira.** El estimador
+`rough_token_count` de `agentic_runtime/context/estimation.py` es el instrumento homologado con el
+que el runtime dimensiona la ventana de contexto, y su `rough_token_count_for_block` **ya
+contempla el bloque `thinking`** (`:52-53`). Derivar con él no introduce método nuevo: reusa el que
+ya está en la casa. Y la etiqueta `counted` es precisamente la que declara que el número es
+derivado y no del proveedor — que es la razón de ser del campo.
+
+Queda dicho para la ventana del 2026-09-01: `counted` **no afirma exactitud**. `D-56:3536-3539`
+midió que en el motor local los deltas son **por token**, y `llama-server` expone `/tokenize` si se
+quisiera exactitud al token. La calibración contra un proveedor que desglose sigue pendiente y es
+lo único que esa fecha aporta aquí.
+
+### Acreditación (`D-12·b`)
+
+Nueve casos nuevos en `agentic_code/tests/test_usage_reasoning_bridge.py` —de 3 a 12—, con el
+criterio y sus citas en cada docstring, sobre el puente **real** y el capturador **real**; lo único
+sustituido es el motor. Verde a la primera ⇒ **siete mutaciones inyectadas y revertidas** desde
+copia propia verificada por `sha256`, cada una enrojeciendo exactamente sus casos y sólo ésos:
+
+| | mutación | rojas |
+|---|---|---|
+| M1 | procedencia siempre `provider` | 2 |
+| M2 | procedencia siempre `unavailable` | 1 |
+| M3 | el agregado se queda con el último turno, no con el más débil | 1 |
+| M4 | se ignora la derivación (vuelve el `0` mudo) | 3 |
+| M5 | el derivado gana al contador del proveedor | 1 |
+| M6 | sin la guarda de duplicado, el bloque final se suma otra vez | 1 |
+| M7 | `counted` pasa por más fiable que `provider` en el agregado | 1 |
+
+Hashes tras revert: `caller.py` `873333bf0df0cb58f89567b22976e717e3b812ba88ed931ce2484e67b1022fc6`,
+`contracts/events.py` `260553479cdfeba528f2aafd40c91a0f2f3c7c2f6f05f4d7b660ea6547e8b871`,
+`streaming.py` `665166740d181f1b8ce22e08a78af1080ac284f26e68d9b5250b1b2d66717b87`.
+
+### Corrección del protocolo de revert: `sha256` acredita el FICHERO, no el MÓDULO CARGADO
+
+M7 pasó su verificación por `sha256` y **aun así el intérprete seguía ejecutando el bytecode
+mutado**. La mutación era un intercambio de dos líneas de tamaño total idéntico, y el `cp` del
+revert dejó el fuente con el **mismo `mtime` al segundo** que el `.pyc` escrito durante la
+mutación. CPython invalida por `(mtime, size)`: ambos coincidían, luego el `.pyc` viejo se dio por
+válido sobre un fuente ya sano. Se manifestó como un rojo en la suite completa que **no** aparecía
+en la aislada, y la lectura ingenua habría sido «el código está mal».
+
+Es de la misma familia que el defecto de instrumentación de `D-60` §*El defecto de instrumentación
+que estuvo a punto de invertir el veredicto*: el instrumento no dice «no sé», dice «no».
+**Consecuencia operativa:** una mutación de tamaño neutro exige purga de bytecode en el revert, y
+la verificación del revert se cierra ejecutando el símbolo, no sólo comparando el hash. Purgado el
+`.pyc` y forzada la recompilación de los dos árboles antes de dar la ronda por buena.
+
+### Suites, `ruff`, `mypy` y procesos
+
+`agentic_code` **272 → 277 passed**; `agentic_models` **78 passed** (capa intacta, no se tocó).
+`ruff`: `agentic_code` **All checks passed**; `agentic_runtime` **6 avisos, los preexistentes** de
+`compact/` y `tests/`, **ninguno en fichero tocado** — deuda neta cero por diff. `mypy` sobre los
+tres ficheros de `agentic_runtime` tocados: `Success: no issues found`. Sin procesos supervivientes.
+Las sintéticas de `agentic_runtime` no se corrieron ni se tocaron (acuerdo de fase).
+
+### Barrido de comentarios
+
+`D-23` / `D-58`: los cuatro ficheros tocados quedan sin comentarios ni docstrings de módulo o
+función, salvo las directivas `# noqa` desnudas —a las dos de `caller.py` se les retiró la prosa
+pegada, que es el caso (1) de `D-58`—. Las citas del canónico y de `D-56` viven en el docstring de
+cada test, única excepción del § 4.
+
+### Lo que NO deroga
+
+`D-56` **intacto en su regla**: las tres reglas se implementan en su orden y sin casos especiales;
+lo que esta entrada deroga es su §*Orden de ejecución*, y sólo en el tramo del instrumento.
+`D-56` §*Límite que la regla NO deroga* **intacto y respetado**: el valor derivado **no acredita**
+`FIND-USAGE-REASONING`; el port del parseo sigue esperando a un proveedor que lo emita, y ningún
+test nuevo lo mide. `D-49` intacto: esto es instrumento, no veredicto de conducta — el 2026-09-01
+sigue siendo la fecha del sujeto real, y ahora además la de la calibración de `counted`. `D-55`
+intacto: su `Usage.reasoning` no se toca. `D-08` intacto: el blanco y el orden salen del fuente, no
+del razonamiento. `D-21` intacto: la ausencia de tokenizador se declara con su método sustituto y
+su límite, no se descarta en silencio.
+
+### Abierto, sin cambio
+
+`P14` sigue siendo un defecto del servidor, no nuestro: `llama.cpp` sigue sin emitir
+`output_tokens_details`. Lo que cambia es que su `.jsonl` deja de mentir por omisión. Siguen
+abiertos y no tocados: el techo de salida (`options.max_tokens` es `None` en toda la cadena, luego
+`max_output_tokens` nunca se escribe), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real,
+y el cableado de `thinking_budget_tokens` como control primario.
