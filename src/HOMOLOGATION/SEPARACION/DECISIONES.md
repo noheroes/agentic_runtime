@@ -3880,3 +3880,119 @@ motivo, y la que sí expresa se transporta en vez de descartarse. `D-56` intacto
 deriva del modelo, no se recorta al mínimo común. `D-49` intacto: esto es transporte y superficie,
 no veredicto de conducta — el `xhigh` de 28 eventos acredita **mecanismo**, y el 1 de septiembre
 sigue siendo la fecha del sujeto real. `D-59` intacto.
+
+---
+
+## D-61 · `auto` no es `off`, y `off: None` no es `off` ausente
+
+**2026-08-29.** Fase `agentic_code` · prueba E2E contra las peculiaridades de gpt-5.x, cableado
+contra `llama-server` + `unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`.
+
+### El motivo: la semántica de razonamiento de Qwen3.8 no es la de gpt-5.x
+
+`reasoning_effort` **no es un presupuesto** en esta plantilla: su efecto entero es una frase
+inyectada en la cabecera del bloque `system`. Medido en la `tokenizer.chat_template` del propio GGUF
+(extraída con parser propio del binario; `gguf-py` no era usable sin `numpy`), líneas 57-71:
+
+| nivel | lo que inyecta |
+|---|---|
+| `xhigh` (**default** si no se manda nada) | *"think carefully… validate key assumptions, consider plausible alternatives…"* |
+| `medium` | **nada**. `reasoning_instructions` queda vacío. Es el nivel **mudo**. |
+| `low` | *"Keep your thinking brief and focused, moving directly to the conclusion…"* |
+
+`high` se reescribe a `xhigh` antes de comprobarse (`:60-62`); `minimal` levanta excepción
+(`:63-65`). Y `<think>` se abre **forzado** salvo `enable_thinking: false` (`:176-183`).
+
+La corrida muerta iba en `medium` (capture: `reasoning={'effort':'medium','summary':'auto'}`), con
+`<think>` abierto y `n_remain=-1` en `/slots`: razonamiento abierto **sin una sola palabra sobre
+hasta dónde**. Programó dentro del pensamiento porque nadie le puso borde. `low` es el único de los
+tres niveles que lo pone.
+
+### Transporte, verificado en fuente de `llama.cpp` (HEAD `c060ca97`)
+
+| eslabón | fichero:línea | qué acredita |
+|---|---|---|
+| el convertidor Responses→chatcmpl **copia el cuerpo entero** | `server-chat.cpp:15` | toda clave que no conoce **sobrevive** |
+| `reasoning.effort` → `reasoning_effort` | `server-chat.cpp:286-293` | el `summary` se descarta en silencio |
+| `max_output_tokens` → `max_tokens` | `server-chat.cpp:281-284` | el techo **sí** se honra |
+| items `reasoning` → `message.reasoning_content` | `server-chat.cpp:217-241` | `preserve_thinking` es real |
+| `reasoning_effort` → kwarg del Jinja; `"none"` ⇒ `enable_thinking=false` | `server-common.cpp:1313-1321` | el nivel llega a la plantilla |
+| `chat_template_kwargs` del cuerpo **se mezclan** sobre los de CLI | `server-common.cpp:1296-1300` | vehículo de `preserve_thinking` |
+| `reasoning_budget_tokens` / `thinking_budget_tokens` **aceptados del cuerpo** | `server-common.cpp:1354-1365` | el sampler de `reasoning-budget.cpp` es alcanzable **desde Responses** |
+
+**Corrección de un finding previo**: era falso que el presupuesto de razonamiento viviera sólo en la
+superficie anthropic. Ésta sólo lo **traduce** (`server-chat.cpp:586-592`); el parser lo acepta
+directo. No se cablea aún: primero `low` + `preserve_thinking:false`, y se mide. Dos palancas a la
+vez impiden saber cuál actuó.
+
+### El error, que resultó ser doble
+
+Verificado contra el canónico (`D-08`) en `pi/packages/ai/src/api/openai-responses.ts:262-266`:
+
+```ts
+} else if (model.provider !== "github-copilot" && model.thinkingLevelMap?.off !== null) {
+    params.reasoning = { effort: (model.thinkingLevelMap?.off ?? "none") };
+}
+```
+
+**El colapso es genuino de A**: no pedir nivel significa **apagar**, y `streamSimple:176` colapsa
+`off` en `undefined` igual que nosotros. No es un fallo de copia. Los dos fallos son otros:
+
+1. **`auto` es invención nuestra con etiqueta falsa.** En A no existe «auto»; nosotros lo ofrecemos
+   en `/effort` y prometemos «default del motor», mientras el transporte emitía
+   `enable_thinking:false`. La etiqueta mentía. `D-22`: el mecanismo que falta **se construye** —
+   `reasoning_off` explícito, puesto sólo por `stream_simple` cuando el nivel pedido es `off`.
+2. **Se perdió la guarda de A al portar.** A distingue `off: null` (*no expresable* ⇒ no manda nada
+   y queda el default del motor) de `off` **ausente**. `tmap.get("off")` devolvía `None` en ambos
+   casos y **borró la distinción**. Es exactamente el riesgo residual declarado y vigilado en
+   `D-60`: aquí se paga.
+
+Añadido además el canal que no existe en A porque A nunca habla con un motor Jinja
+(`D-22`): `compat["templateKwargs"]`, que viaja en **toda** petición. `thinkingOffParams` sólo se
+emite en la rama de apagado, luego no servía de vehículo para `preserve_thinking`.
+
+**`preserve_thinking: false` es menos agresivo de lo que aparenta.** La condición de la plantilla es
+`preserve_thinking … or loop.index0 > ns.last_query_index` (`:119`), y `ns.last_query_index`
+(`:95-105`) ignora los `user` que son puro `<tool_response>`: el razonamiento del **ciclo agentic en
+curso se conserva íntegro** y sólo se poda el de los ciclos ya cerrados. No rompe la cadena del
+turno vivo. Que el runtime sea la memoria, no el historial de pensamiento del modelo.
+
+### Payload real del perfil local, tras el corte
+
+| mando | `reasoning` | `extra_body` |
+|---|---|---|
+| `auto` | — | `{'chat_template_kwargs': {'preserve_thinking': False}}` |
+| `low` | `{'effort':'low','summary':'auto'}` | idem |
+| `medium` | `{'effort':'medium','summary':'auto'}` | idem |
+| `xhigh` | `{'effort':'xhigh','summary':'auto'}` | idem |
+| `off` | — | `{'chat_template_kwargs': {'enable_thinking': False, 'preserve_thinking': False}}` |
+
+### Pruebas
+
+`test_thinking_off_transport.py` **4 → 8 casos**, escritos contra el criterio
+(`no-debilitar-la-prueba`): `auto` **no** manda apagado; `off: None` declarado no expresable manda
+**nada**; los `templateKwargs` viajan **con nivel activo**; off-params y `templateKwargs` **se
+mezclan** en vez de pisarse. `test_auto_returns_the_turn_to_the_engine_default` medía sólo el borde
+del caller mientras el transporte hacía lo contrario: su docstring ahora **cita dónde se mide la
+otra mitad**, en vez de prometer lo que no toca.
+
+**Suites**: `agentic_models` **74 → 78 passed**, `agentic_code` **267 passed**, sin procesos
+supervivientes. Sintéticas de `agentic_runtime` ni corridas ni tocadas (acuerdo de fase).
+
+### Lo que NO deroga
+
+`D-08` intacto: el colapso de A se leyó en fuente **antes** de tocar, y no se «arregló» lo genuino —
+se construyó lo que A no tiene y se restauró lo que A sí tenía. `D-21` intacto y aplicado: `off`
+sigue siendo un nivel que viaja, y ahora `auto` deja de suplantarlo. `D-49` intacto: esto es
+transporte y semántica de plantilla, **no veredicto de conducta**; el efecto de `low` sobre el
+razonamiento se mide en la corrida siguiente, con marcador antes/después. `D-56`, `D-59`, `D-60`
+intactos.
+
+### Abierto
+
+El techo de salida sigue sin viajar: `options.max_tokens` es `None` en toda la cadena, luego
+`max_output_tokens` nunca se escribe (`openai_responses.py:142-143`) — acreditado en capture, y
+`n_remain=-1` en `/slots`. Y la superficie Responses de `llama.cpp` es **la única de las tres** que
+no reporta ni el corte (`status` fijo en `"completed"`, `server-task.cpp:695` y `:587`, frente a
+`to_json_oaicompat_chat_stream:464` y `to_json_anthropic_stream:800`) ni los tokens de razonamiento
+(sin `output_tokens_details` ⇒ `P14`). Elegir esa superficie es, en sí, un hallazgo. Sin pagar aquí.

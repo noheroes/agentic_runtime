@@ -606,6 +606,66 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-29 — `auto` deja de suplantar a `off`, y `preserve_thinking` viaja
+
+Encargo: subsanar los hallazgos de la corrida E2E muerta y afinar el thinking, con la sospecha del
+usuario —confirmada— de que operábamos Qwen3.8 como si fuera gpt-5.x. Detalle en
+`SEPARACION/DECISIONES.md § D-61`.
+
+**La semántica de Qwen3.8 no es la de gpt-5.x.** `reasoning_effort` **no es presupuesto**: su efecto
+entero es una frase inyectada en la cabecera del `system`. Medido en la `tokenizer.chat_template`
+del GGUF (extraída con parser propio del binario; `gguf-py` inservible sin `numpy`), `:57-71`:
+`xhigh` (**el default**) pide validar supuestos y alternativas · `medium` **no inyecta nada**, es el
+nivel mudo · `low` pide razonamiento breve y ir directo a la conclusión. Y `<think>` se abre
+**forzado** salvo `enable_thinking:false` (`:176-183`). La corrida muerta iba en `medium`, con
+`n_remain=-1`: razonamiento abierto y **ni una palabra sobre hasta dónde**. Por eso programó dentro
+del pensamiento. `low` es el único de los tres que pone borde.
+
+**El error, doble, verificado contra el canónico antes de tocar** (`openai-responses.ts:262-266`):
+el colapso «no pedir nivel ⇒ apagar» **es genuino de A**, no fallo de copia. Los fallos son (1)
+`auto` es invención nuestra con etiqueta falsa —prometía «default del motor» y emitía
+`enable_thinking:false`—, y (2) se perdió la guarda de A al portar: A distingue `off: null` (*no
+expresable* ⇒ no manda nada) de `off` **ausente**, y `tmap.get("off")` devolvía `None` en los dos
+casos. Es el riesgo residual que `D-60` dejó vigilado; aquí se paga.
+
+**Inyectado** (`D-22`, lo que no está se crea): `reasoning_off` explícito, que sólo pone
+`stream_simple` cuando el nivel pedido es `off` · `_declared_off_level`, que restaura la guarda de A
+· `compat["templateKwargs"]`, canal que viaja en **toda** petición porque `thinkingOffParams` sólo
+se emite en la rama de apagado y no servía de vehículo · `local_catalog` declarando
+`preserve_thinking: False`.
+
+**Payload real del perfil local:** `auto` → nada (queda el `xhigh` del motor) · `low`/`medium`/
+`xhigh` → su `effort` · `off` → `enable_thinking:false`. Los cinco llevan `preserve_thinking:false`.
+
+**Por qué `preserve_thinking:false` no es agresivo:** la condición es
+`preserve_thinking … or loop.index0 > ns.last_query_index` (`:119`), y `ns.last_query_index`
+(`:95-105`) ignora los `user` que son puro `<tool_response>` ⇒ el razonamiento del **ciclo agentic
+en curso se conserva íntegro**; sólo se poda el de ciclos cerrados. El runtime es la memoria.
+
+**Transporte verificado en fuente de `llama.cpp`** (HEAD `c060ca97`): el convertidor
+Responses→chatcmpl **copia el cuerpo entero** (`server-chat.cpp:15`) ⇒ toda clave desconocida
+sobrevive, y por eso `chat_template_kwargs` llega al Jinja (`server-common.cpp:1296-1300`). Con eso
+queda **corregido un finding previo**: `reasoning_budget_tokens` se acepta **del cuerpo**
+(`server-common.cpp:1354-1365`), luego el sampler de `reasoning-budget.cpp` **es alcanzable desde
+Responses**; la superficie anthropic sólo lo traduce. No se cablea aún: dos palancas a la vez
+impedirían saber cuál actuó.
+
+**Acreditación:** `test_thinking_off_transport.py` **4 → 8 casos** (que `auto` no manda apagado; que
+`off: None` manda nada; que los `templateKwargs` viajan **con nivel activo**; que off-params y
+`templateKwargs` se **mezclan**). `test_auto_returns_the_turn_to_the_engine_default` medía sólo el
+borde del caller mientras el transporte hacía lo contrario: su docstring ahora cita dónde se mide la
+otra mitad. `agentic_models` **74 → 78 passed**, `agentic_code` **267 passed**, sin supervivientes.
+Sintéticas de `agentic_runtime` ni corridas ni tocadas.
+
+**Corrección de cita:** la entrada `2026-08-28 (m)` dice `server-task.cpp:696`; **es `:695`** (y
+`:587` en la variante no-stream). Verificado en fuente.
+
+**Siguen abiertos:** `FIND-GOOGLE-CASING` · el techo de salida (`options.max_tokens` es `None` en
+toda la cadena ⇒ `max_output_tokens` nunca se escribe, `openai_responses.py:142-143`) y la omisión
+de la superficie Responses de `llama.cpp`, **la única de las tres** que no reporta ni el corte
+(`status` fijo en `"completed"`) ni los tokens de razonamiento (`P14`) · el contador derivado
+(`D-56`), bloqueado hasta el 2026-09-01 por `D-49`.
+
 ### 2026-08-28 (m) — `/effort` PAGADO: el catálogo lo declara el modelo, y `off` ya viaja
 
 Segundo de los dos pendientes que autorizó `En esta ventana 1 y 2`; el encargo literal es el de la
