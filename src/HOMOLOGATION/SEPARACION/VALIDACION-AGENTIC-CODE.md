@@ -901,3 +901,98 @@ superficie sin conducta, y se cablearán cuando haya quien las mueva. `tool_choi
 `D-21`. **Criterio de cierre pendiente:** `D-15` — un `.jsonl` de sesión real con
 `--capture-payloads` que muestre el `reasoning` que salió y `reasoning_items_sent > 0` en el
 segundo request de un turno con tool calls.
+
+## 2 septies · Observación E2E en vivo contra el modelo local (2026-08-29/30) — cinco cortes
+
+**Método.** Sesión real de `agentic_code` contra `llama-server` + `unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`,
+`--provider local --capture-payloads`, encargo de escritura de módulos sobre `../prueba_agentic_code`.
+Evidencia primaria: la captura de la sesión, 11,3 MB, en
+`~/.local/state/agentic-code/streams/project-164ebd47edba77e91b212706/session-8b30548d-a246-442a-b609-5d06ffcbe2cf/20260829T210441-fde2e05cb186.jsonl`
+— 17.124 registros, `{ThinkingEvent: 15866, TokenEvent: 860, ToolCallEvent: 67, ToolResultEvent: 67,
+MessageEvent: 56, TurnStartEvent: 50, DoneEvent: 50, CompactionEvent: 2}`.
+
+La captura escribe con `os.open`/`os.write`/`os.close` **por registro** (`capture.py:111-135`): nada
+se bufferiza, luego un `kill -9` no pierde evidencia. Esto queda dicho porque en la ventana anterior
+yo había advertido lo contrario.
+
+---
+
+### `FIND-RT-MAXTURNS-1` — el tope de vueltas para en seco, calla, y se registra como éxito ❌ ABIERTO · **primero de la cola**
+
+**Síntoma que reportó el usuario:** la sesión «se rompió» tras la segunda compactación, con el
+indicador de trabajo colgado. El último texto del modelo fue coherente y anunciaba su siguiente
+acción: *«scheduler.py was never created. Let me read the existing modules to get exact APIs before
+writing the remaining pieces»*, tras leer cuatro ficheros dos veces.
+
+**No hubo cuelgue.** El turno terminó. Terminó mintiendo.
+
+Cadena, entera en fuente:
+
+1. `agent_loop.py:373` — `for _turn in range(self._max_turns)` agota las 50 vueltas. La captura lo
+   confirma con **50 `TurnStartEvent` y 50 `DoneEvent`** exactos.
+2. `agent_loop.py:601-604` — sale por el `else` del `for`: `reason = LoopEndReason.MAX_TURNS`,
+   `detail = "50"`, y **un `logger.warning`**, invisible en una TUI.
+3. `execution/local/runtime.py:384` — `await loop.run(prompt, ctx)`: **el `LoopOutcome` se descarta**.
+   Ni se asigna a una variable.
+4. `runtime.py:407` — `self._task_registry.complete(...)` sin condición ⇒ `TaskStatus.COMPLETED`.
+5. `runtime.py:403` + `:42-46` — `_last_assistant_text` devuelve `""`: el último mensaje de asistente
+   sólo llevaba `tool_calls`.
+6. `capture.py:90` — `subtype = "success"`. Y así está escrito en el registro `result` de la captura:
+   `subtype=success status=completed stop=tool_calls anomalies=[]`.
+
+Que ese registro exista **prueba que `driver.py:92-93` se ejecutó**: el turno se cerró de verdad y
+`finish_turn` se pintó. El indicador colgado es un pie de página rancio, no un turno vivo. El daño
+real es el otro: el agente se detuvo a mitad del trabajo, con cuatro resultados de herramienta
+recién en la mano, sin decir nada.
+
+**Contraste con A (`D-08`), `query.ts:1704-1712`:**
+
+```ts
+if (maxTurns && nextTurnCount > maxTurns) {
+  yield createAttachmentMessage({ type: 'max_turns_reached', maxTurns, turnCount: nextTurnCount })
+  return { reason: 'max_turns', turnCount: nextTurnCount }
+}
+```
+
+Dos divergencias, y las dos condenan:
+
+- **A avisa.** `yield` al mismo stream por el que viaja todo lo demás; el consumidor lo pinta. Lo
+  repite en la rama de aborto (`:1506-1514`). B escribe a un logger que nadie lee.
+- **A no impone tope.** `maxTurns?: number` (`:191`) y toda comprobación guardada por
+  `if (maxTurns && …)`: sin valor, sin límite. B fuerza 50 siempre que `max_turns is None`, que es el
+  defecto en toda la cadena: `agentic_code/settings.py:37` → `driver.py:61-68` →
+  `contracts/runtime.py:23` → `agent_loop.py:153` (`else _MAX_TURNS`, `:74` = 50).
+
+**Es la quinta vez que aparece la misma forma:** la capa de abajo calcula el material y no cruza al
+consumidor. Aquí es literal — existe `loop/outcome.py` con el código `MAX_TURNS = "max_turns"`
+anotado `# query.ts:1711`, un `detail`, y un docstring que dice que esa información «es la que
+permite al integrador decidir si reintenta, si avisa, o si cierra». La línea que la recibe la tira.
+
+**Inyección acordada con el usuario (aceptada, sin ejecutar todavía):**
+
+| | dónde | qué |
+|---|---|---|
+| a | `execution/local/runtime.py:384` | recoger el `LoopOutcome` y transportarlo: el `TaskRecord` gana la razón, que hoy muere ahí |
+| b | `agent_loop.py:601-604` | emitir el aviso **al bus** antes de retornar, como A hace con `max_turns_reached`; mismo canal que el resto de eventos, para que la TUI lo pinte sin cableado nuevo |
+| c | `agent_loop.py:74`/`:153` | homologar la semántica del tope: `None` = sin límite, como en A. Quien quiera techo lo pide con `--max-turns` |
+| d | registro | decidir si `MAX_TURNS` sigue siendo `COMPLETED`. En A es un terminal distinto de `completed`, y decide el consumidor |
+
+---
+
+### La cola detrás, por orden (síntomas verificados en vivo; **citas por reverificar al abordarlas**)
+
+- **`FIND-CODE-ESC-1`** — cancelación por ESC. Inyección de 5 puntos ya anunciada en ventana anterior.
+- **`FIND-RT-COMPACT-EVT-1`** — la compactación no tiene evento de INICIO: la captura trae dos
+  `CompactionEvent`, ambos de cierre. Durante la compactación la interfaz no dice nada, y ese silencio
+  es lo que el usuario leyó como rotura.
+- **`FIND-RT-TOOLINPUT-1`** — el input de herramienta no llega en stream. `caller.py:278-299` traduce
+  `text_delta`/`thinking_delta`/`toolcall_end`/`done`/`error` y **descarta `toolcall_start` y
+  `toolcall_delta`**. Consecuencia visible arriba: `streaming.py:166` fija `StreamMode.TOOL_INPUT`
+  sólo al recibir la llamada **ya completa**, luego ese modo no describe nunca lo que nombra. La
+  evidencia está asegurada: 67 `ToolCallEvent` en la captura y **cero** eventos de input parcial.
+- **`FIND-CODE-TODO-1`** — TodoWrite. Antes de tocar su punto (c), **verificar si
+  `RuntimeContextForker` comparte `app_state`**.
+
+**Pendiente instrumental no resuelto:** `py-spy dump --pid <tui>` sigue sin poder ejecutarse
+(`ptrace_scope=1`, `sudo` pide contraseña). Era lo único que explicaría del todo el pie de página
+persistente; con la cadena de arriba probada, ha dejado de ser bloqueante.
