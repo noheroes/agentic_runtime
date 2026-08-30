@@ -4285,9 +4285,148 @@ de conducta.
 ### Abierto
 
 La guarda `thinking_end_tags` (`server-common.cpp:1360`) es una precondición del motor que no
-controlamos: si una plantilla no expone etiquetas de fin, el presupuesto viaja y no actúa, **y nada
-lo reporta**. `P14` sigue en pie: la superficie Responses de `llama.cpp` no emite
+controlamos: si una plantilla no expone etiquetas de fin, el presupuesto viaja y no actúa. Que
+**nada lo reportase** sí era nuestro, y se paga en `D-64`, en esta misma ventana: el turno rinde
+ahora `Usage.thinking_budget_honored`. `P14` sigue en pie: la superficie Responses de `llama.cpp` no emite
 `output_tokens_details` ni señala el corte (`status` fijo en `"completed"`), luego el corte del
 presupuesto sólo se observa por su efecto, como aquí. Siguen abiertos y no tocados: la calibración
 de `counted` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, y `P1` de
 `PLAN-OPTIMIZACION-TUI.md`.
+
+---
+
+## D-64 · El presupuesto de razonamiento deja de poder fallar en silencio
+
+**2026-08-29.** Fase `agentic_code` · prueba E2E. Cierra el §*Abierto* de `D-63` en la misma ventana
+que lo produjo.
+
+- **Palabra del usuario**: *«si has identificado un riesgo que afecta a lo acordado en esta ventana,
+  debería resolverse, no arrastrarse»*; y, tras el anuncio con evidencia plena, *«procede»*.
+
+### Por qué no valía dejarlo abierto
+
+`D-63` cerró el cableado del presupuesto y anotó como precondición ajena la guarda
+`server-common.cpp:1360`. Es ajena, pero **el riesgo lo produce lo que acabábamos de cablear**: un
+turno que pide techo de razonamiento, no lo obtiene y se presenta al consumidor como un turno
+normal. Eso es la misma mudez que `D-56` prohíbe sobre el contador, sólo que sobre la palanca. Una
+precondición del motor no exime de reportar que no se cumplió.
+
+### Lo que dice la fuente (`llama.cpp` `HEAD c060ca974`), leída 1→EOF
+
+- **La guarda, literal** (`tools/server/server-common.cpp:1352-1367`): el presupuesto se lee del
+  cuerpo, y sólo pasa a `llama_params["reasoning_budget_tokens"]` si
+  `!chat_params.thinking_end_tags.empty()`. La copia genérica del cuerpo (`:1383-1388`) es
+  **posterior** y conserva el nombre crudo, que la capa de muestreo no lee. Cerrada la guarda, la
+  clave viaja y no llega: silencio total.
+- **De dónde salen las etiquetas** (`common/chat.cpp:3726-3733`): la ruta del autoparser las deriva
+  de la plantilla y **sólo si la derivada no está vacía**; los handlers especializados las fijan a
+  mano junto a `supports_thinking` (`ministral_3:1076-1078`, `qwen3_coder:1180-1186` —condicionado a
+  que `<think>` aparezca en el fuente de la plantilla—, `gpt_oss:1377-1378`, `gemma4:1522-1524`,
+  `kimi_k2:1798-1799`, `kimi_k3:2411-2412`, `lfm2:1932-1933`, `deepseek_v3_2:2197-2198`,
+  `cohere2moe:2587-2588`, `minimax_m3:2703-2704`, `minicpm5:3195-3196`).
+- **«El modelo razona» NO implica que la guarda abra** (`common/chat.cpp:3332`):
+  `common_chat_params_init_muse_glimmer` declara `supports_thinking = true` y **jamás** fija las
+  etiquetas. El contraejemplo existe en el propio motor, luego la inferencia estaba descartada.
+- **No es observable a priori**: `/props` publica `chat_template_caps`, y `jinja::caps`
+  (`common/jinja/caps.h`, vía `common_chat_templates_get_caps`, `chat.cpp:3900-3908`) no lleva
+  ninguna capacidad de etiquetas de pensamiento.
+
+Luego ni detección por `/props` ni inferencia por «hay razonamiento» pueden decidirlo. **Se rechazó**
+además que `compat["thinkingBudgetParam"]` se autocertificase: eso sólo renombra una afirmación no
+verificada, y `D-21` sitúa el conocimiento en el proveedor, no una promesa en el catálogo.
+
+### El criterio, derivado del sampler
+
+`common/reasoning-budget.cpp:117-131` descuenta un token por token dentro del bloque; al agotarse
+pasa a `FORCING`, donde `common_reasoning_budget_apply` (`:166-186`) anula todos los logits salvo el
+de la secuencia de fin. **Si el presupuesto actuó, el razonamiento no puede exceder
+`presupuesto + |secuencia de fin|`.** Un exceso grande prueba que no actuó.
+
+El umbral es **grueso a propósito**: `presupuesto × 2 + 64`. El contador bajo `counted` es
+`rough_token_count` —estimación por caracteres, no el tokenizador del modelo—, así que un `>` desnudo
+convertiría el error del estimador en acusación falsa. El `×2` absorbe ese error; el `+64`, la
+secuencia forzada y el `reasoning_budget_message` del servidor, cuyo peso fijo domina en presupuestos
+pequeños. **Esto detecta el fallo mudo; no mide el presupuesto**, y así está escrito en el docstring
+de la suite.
+
+### Lo inyectado
+
+- `agentic_runtime/contracts/events.py` — `THINKING_BUDGET_OVERSHOOT_FACTOR`,
+  `THINKING_BUDGET_OVERSHOOT_SLACK`, `derive_thinking_budget_honored`,
+  `weakest_thinking_budget_honored`, y dos campos en `Usage`: `thinking_budget_tokens` y
+  `thinking_budget_honored`.
+- `agentic_runtime/events/event_types.py` — reexporte (el shim es la puerta real de los consumidores).
+- `agentic_runtime/models/caller.py` — recuerda el presupuesto pedido y emite el veredicto en el
+  `done`, junto a la derivación `D-56` que ya estaba.
+- `agentic_code/src/agentic_code/streaming.py` — `StreamUsage` los porta y `_reduce` los agrega
+  (`cablear-en-agentic-code-al-cerrar`).
+
+`agentic_models` **no cambia**: el núcleo sólo contrasta *lo pedido* contra *lo vuelto*, sin
+conocimiento de motor. El dogma queda intacto.
+
+**`None` nunca se falsea a `True`.** Sin presupuesto pedido, y con `thinking_tokens_source ==
+unavailable`, el veredicto es `None`: `0 <= techo` es cierto y no significa nada, y rotularlo `True`
+fabricaría el dictamen justo donde no hay evidencia. En el agregado de sesión gana el peor turno,
+igual que `thinking_tokens_source`.
+
+### Acreditación (`D-12·b`)
+
+9 casos en `agentic_code/tests/test_thinking_budget_verdict.py`, con criterio y citas de `llama.cpp`
+en el docstring. Verde a la primera ⇒ **once mutaciones inyectadas y revertidas** desde copia propia
+verificada por `sha256`, con purga de bytecode en cada revert (`D-62`). Once rojos, cero falsos
+positivos:
+
+| | mutación | |
+|---|---|---|
+| M1 | factor `2 → 1` | rojo |
+| M2 | margen `64 → 0` | rojo |
+| M3 | factor `2 → 100` (umbral inerte) | rojo |
+| M4 | `unavailable` deja de vetar el veredicto | rojo |
+| M5 | presupuesto `<= 0` deja de vetar | rojo |
+| M6 | agregado: `False` deja de ganar | rojo |
+| M7 | agregado: `True` deja de sobrevivir a `None` | rojo |
+| M8 | `caller` no recuerda el presupuesto pedido | rojo |
+| M9 | `caller` no emite el veredicto | rojo |
+| M10 | `streaming` no agrega el veredicto | rojo |
+| M11 | la cifra pedida no persiste entre turnos | rojo |
+
+Hashes del estado sano: `contracts/events.py`
+`dd5e51509feb5dbc2a74d433f1ef5ad62b1b80efe9719a3416f101f0ffbad3d4`, `events/event_types.py`
+`4dd00e546a1ce3290bf3b629285cd8344586f6167433e6dfcef020ecb42357ea`, `models/caller.py`
+`dcdcbff4236f5a97a6e1e23e50c60165dae71a604d7937cd763313c35e3af6cd`,
+`agentic_code/src/agentic_code/streaming.py`
+`9996e7f8ba323eee4e665693bd59325cd851ca7168ec82ec24a0c8adb850518e`,
+`agentic_code/tests/test_thinking_budget_verdict.py`
+`cd6b891a8e5142099018627f2a69fa17cd4e4736d3c026e23aa8c1069e5793c2`.
+
+### Medido en vivo, con control negativo
+
+Contra `llama-server` + `unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS` (`validacion-por-consumidor-real`),
+mismo prompt y `xhigh`:
+
+| caso | `thinking_tokens` | `budget` | `honored` |
+|---|---|---|---|
+| presupuesto 64 | 63 | 64 | `True` |
+| sin presupuesto | 1424 | `None` | `None` |
+| **control negativo** — presupuesto bajo un nombre que el motor no lee | 1884 | 64 | **`False`** |
+
+El control negativo reproduce la forma observable **exacta** de la guarda cerrada —la clave viaja en
+el cuerpo y nadie la lee— sin necesidad de una plantilla sin etiquetas. El detector dispara. Y la
+primera fila acredita además, en positivo, que **la plantilla del perfil local sí abre la guarda**:
+lo que `D-63` midió por su efecto queda ahora rotulado turno a turno.
+
+### Suites, `ruff`, `mypy` y procesos
+
+`agentic_code` **277 → 286 passed**; `agentic_models` **96 passed** (sin cambio: la capa de proveedor
+no se tocó). `ruff` sobre los ficheros tocados: limpio salvo un `E501` en `caller.py:303`,
+**comprobado idéntico en `HEAD`** sobre una línea que este pago no toca ⇒ deuda neta cero por diff.
+`mypy` limpio en los cuatro. Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni corridas
+ni tocadas.
+
+### Lo que NO deroga
+
+`D-08` intacto: el criterio sale del sampler leído, no de un umbral elegido. `D-21` intacto: no se
+añade promesa al catálogo. `D-56` **aplicado por extensión**: la regla «derivar o marcar
+indisponible, nunca un mudo» se aplica ahora también a la palanca, no sólo al contador. `D-49`
+intacto: esto reporta si el motor cumplió lo pedido, no juzga conducta del modelo. `D-63` §*Abierto*
+queda cerrado en su primer punto; los demás siguen abiertos y no tocados.

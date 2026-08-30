@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from ..contracts.events import (
+    THINKING_BUDGET_OVERSHOOT_FACTOR,
+    THINKING_BUDGET_OVERSHOOT_SLACK,
     THINKING_TOKENS_SOURCE_COUNTED,
     THINKING_TOKENS_SOURCE_PROVIDER,
     THINKING_TOKENS_SOURCE_UNAVAILABLE,
@@ -14,10 +16,14 @@ from ..contracts.events import (
     ToolResultEvent,
     TurnStartEvent,
     Usage,
+    derive_thinking_budget_honored,
+    weakest_thinking_budget_honored,
     weakest_thinking_tokens_source,
 )
 
 __all__ = [
+    "THINKING_BUDGET_OVERSHOOT_FACTOR",
+    "THINKING_BUDGET_OVERSHOOT_SLACK",
     "THINKING_TOKENS_SOURCE_COUNTED",
     "THINKING_TOKENS_SOURCE_PROVIDER",
     "THINKING_TOKENS_SOURCE_UNAVAILABLE",
@@ -31,5 +37,7 @@ __all__ = [
     "ToolResultEvent",
     "TurnStartEvent",
     "Usage",
+    "derive_thinking_budget_honored",
+    "weakest_thinking_budget_honored",
     "weakest_thinking_tokens_source",
 ]

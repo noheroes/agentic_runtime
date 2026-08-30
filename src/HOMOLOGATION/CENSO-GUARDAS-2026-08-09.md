@@ -2360,6 +2360,32 @@ Pruebas: `agentic_models` **78 → 96 verdes** (`test_output_ceiling.py` 10 +
 `D-61` (la guarda `thinking_end_tags` de `server-common.cpp:1360`) y lo que queda abierto, en
 `SEPARACION/DECISIONES.md § D-63`.
 
+## § 5 · addendum 2026-08-29 (d) — el presupuesto ya no puede fallar en silencio
+
+El riesgo que el addendum (c) dejaba anotado se paga en la misma ventana que lo produjo, por
+palabra del usuario: la guarda `thinking_end_tags` es del motor, pero que nadie reportase su
+incumplimiento era nuestro.
+
+Contra fuente de `llama.cpp` (`HEAD c060ca974`, leída 1→EOF) queda establecido que la guarda **no
+es observable a priori** —`/props` y `jinja::caps` no llevan las etiquetas— y que **no equivale a
+«el modelo razona»**: `common_chat_params_init_muse_glimmer` (`chat.cpp:3332`) declara
+`supports_thinking = true` sin fijarlas. El veredicto sólo puede salir de contrastar lo pedido
+contra lo vuelto, con el criterio del sampler (`reasoning-budget.cpp:117-131`, `:166-186`): si el
+presupuesto actuó, el razonamiento no excede `presupuesto + |secuencia de fin|`.
+
+Hecho: `Usage` gana `thinking_budget_tokens` y `thinking_budget_honored` en
+`agentic_runtime/contracts/events.py`, con umbral grueso `×2 + 64` —detecta el fallo mudo, **no
+mide** el presupuesto— y `None` allí donde no hay evidencia; `caller.py` los emite en el `done` y
+`agentic_code/streaming.py` los porta y los agrega al peor turno. `agentic_models` no se toca: el
+núcleo no adquiere conocimiento de motor.
+
+Pruebas: `agentic_code` **277 → 286 verdes** (`test_thinking_budget_verdict.py`, 9 casos),
+acreditadas por **11 mutaciones revertidas → 11 rojas, 0 falsos positivos**, con purga de bytecode
+(`D-62`) y `sha256` comprobado. En vivo: presupuesto 64 ⇒ 63 tokens, `honored=True`; sin
+presupuesto ⇒ 1424, `None`; y control negativo con el presupuesto bajo un nombre que el motor no
+lee ⇒ 1884, **`honored=False`**. Sin procesos supervivientes. Detalle en
+`SEPARACION/DECISIONES.md § D-64`.
+
 Retoma: quedan abiertos y sin tocar la calibración de `counted` contra un proveedor que
 desglose `reasoning_tokens` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor
 real, y `P1` de `PLAN-OPTIMIZACION-TUI.md` con el prototipo B (§ 6-bis).

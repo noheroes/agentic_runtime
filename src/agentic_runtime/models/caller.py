@@ -16,6 +16,7 @@ from ..events.event_types import (
     TokenEvent,
     ToolCallEvent,
     Usage,
+    derive_thinking_budget_honored,
 )
 from .protocol import (  # noqa: F401
     Effort,
@@ -250,6 +251,8 @@ class AgenticModelsCaller:
                     "presupuesto suelto se perdería. Pásese también `effort`."
                 )
 
+        requested_budget: int | None = None
+
         if reasoning is not None:
             from agentic_models.model_types import ThinkingBudgets
 
@@ -261,6 +264,7 @@ class AgenticModelsCaller:
             if thinking is not None and thinking.budget_tokens is not None:
                 b = thinking.budget_tokens
                 budgets = ThinkingBudgets(minimal=b, low=b, medium=b, high=b)
+                requested_budget = b
             opts = replace(opts, reasoning=reasoning, thinking_budgets=budgets)
 
         event_stream = (
@@ -339,6 +343,10 @@ class AgenticModelsCaller:
                         cache_read=u.cache_read,
                         cache_write=u.cache_write,
                         thinking_tokens_source=thinking_source,
+                        thinking_budget_tokens=requested_budget,
+                        thinking_budget_honored=derive_thinking_budget_honored(
+                            requested_budget, thinking_tokens, thinking_source
+                        ),
                     ),
                 )
                 return
