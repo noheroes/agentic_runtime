@@ -164,6 +164,13 @@ class CompactionEvent(Event):
     remaining_messages: int = 0
 
 
+@dataclass(frozen=True)
+class MaxTurnsEvent(Event):
+
+    max_turns: int = 0
+    turn_count: int = 0
+
+
 class EventBusProtocol(Protocol):
     def subscribe(self, event_type: type[T], handler: Callable[[T], Awaitable[None]]) -> None: ...
     def subscribe_all(self, handler: EventHandler) -> None: ...
@@ -182,6 +189,7 @@ __all__ = [
     "Event",
     "EventBusProtocol",
     "EventHandler",
+    "MaxTurnsEvent",
     "MessageEvent",
     "ThinkingEvent",
     "TokenEvent",

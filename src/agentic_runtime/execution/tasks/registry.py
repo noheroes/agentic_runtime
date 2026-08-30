@@ -1,10 +1,3 @@
-"""
-`S19` · `TaskRegistryProtocol` — el repo genérico id-opaco de tasks.
-
-**`C7` retiró el global `set_registry`/`get_registry`.** La costura se inyecta al
-`LocalAgentRuntime` por constructor y éste la threadea al `ctx`, que es de donde la leen
-las tools `Task*`. El global creaba un segundo camino que en producción nadie poblaba.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -18,18 +11,16 @@ from .status import TaskStatus
 class TaskRecord:
     task_id: str
     description: str
-    # Lista a la que pertenece la tarea (espejo de `getTaskListId()` → `getSessionId()`).
-    # Cada sesión sólo ve su propia lista; `None` = legacy/sin escopar.
     owner_session_id: str | None = None
     status: TaskStatus = TaskStatus.PENDING
-    # Eje "background" (= isBackgrounded del canónico): MUTABLE, relativo al observador.
-    # Lo flipea el consumidor vía el registry. NO afecta el toolset (eso es por kind, B3).
     is_backgrounded: bool = False
     result: str | None = None
     session: Any = None
     error: str | None = None
     duration_ms: int = 0
     turn_count: int = 0
+    end_reason: str | None = None
+    end_detail: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -57,15 +48,12 @@ class TaskRegistryProtocol(Protocol):
         turn_count: int = 0,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        end_reason: str | None = None,
+        end_detail: str | None = None,
     ) -> None: ...
 
 
 class InMemoryTaskRegistry:
-    """Implementación concreta nativa de TaskRegistryProtocol, en-proceso.
-
-    Default del runtime para ser ejecutable por sí solo. Un consumidor puede inyectar
-    la suya vía `RuntimeConfig.task_registry`.
-    """
 
     def __init__(self) -> None:
         self._tasks: dict[str, TaskRecord] = {}
@@ -87,8 +75,6 @@ class InMemoryTaskRegistry:
             rec.asyncio_task = asyncio_task
 
     def arm_watchdog(self, task_id: str, timeout_seconds: float) -> None:
-        # En-proceso: el watchdog real lo arma el consumidor si lo necesita.
-        # Aquí solo se registra el intento; mantener simple y sin efectos colaterales.
         pass
 
     def get(self, task_id: str) -> TaskRecord | None:
@@ -98,11 +84,6 @@ class InMemoryTaskRegistry:
         return list(self._tasks.values())
 
     def list_for(self, session_id: str | None) -> list[TaskRecord]:
-        """Tareas de UNA lista (espejo del tasks-dir per-sesión del canónico).
-
-        Sólo devuelve las tareas cuyo `owner_session_id` coincide con `session_id`.
-        Una sesión no ve las tareas de otra. `session_id=None` (sin sesión activa)
-        devuelve sólo las tareas legacy sin owner."""
         return [r for r in self._tasks.values() if r.owner_session_id == session_id]
 
     def set_backgrounded(self, task_id: str, value: bool) -> None:
@@ -140,6 +121,8 @@ class InMemoryTaskRegistry:
         turn_count: int = 0,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        end_reason: str | None = None,
+        end_detail: str | None = None,
     ) -> None:
         rec = self._tasks.get(task_id)
         if rec is not None:
@@ -149,6 +132,8 @@ class InMemoryTaskRegistry:
             rec.turn_count = turn_count
             rec.input_tokens = input_tokens
             rec.output_tokens = output_tokens
+            rec.end_reason = end_reason
+            rec.end_detail = end_detail
 
 
 __all__ = ["InMemoryTaskRegistry", "TaskRecord", "TaskRegistryProtocol"]

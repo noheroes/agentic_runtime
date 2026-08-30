@@ -4430,3 +4430,153 @@ añade promesa al catálogo. `D-56` **aplicado por extensión**: la regla «deri
 indisponible, nunca un mudo» se aplica ahora también a la palanca, no sólo al contador. `D-49`
 intacto: esto reporta si el motor cumplió lo pedido, no juzga conducta del modelo. `D-63` §*Abierto*
 queda cerrado en su primer punto; los demás siguen abiertos y no tocados.
+
+---
+
+## D-65 · `FIND-RT-MAXTURNS-1`: un tope inventado, alcanzado en silencio y rotulado como éxito
+
+**2026-08-30.** Fase `agentic_code` · estabilización. Paga el primero de los cinco cortes que
+`VALIDACION-AGENTIC-CODE.md § 2 septies` dejó en cola.
+
+- **Palabra del usuario**: el enunciado de retoma, que fija el orden (a)→(d) y cierra el
+  diagnóstico —*«El diagnóstico está cerrado y la inyección aceptada; no rediagnostiques»*—; y,
+  sobre el anuncio con evidencia plena, `procede`.
+
+### Los cuatro defectos, y por qué son uno solo visto desde cuatro capas
+
+El tope de vueltas del bucle existía, pero **ninguna de sus cuatro costuras llegaba al consumidor**:
+
+1. **(a) El terminal se descartaba en la línea.** `execution/local/runtime.py:384` hacía
+   `await loop.run(prompt, ctx)` sin recoger el `LoopOutcome`. El bucle ya sabía por qué había
+   terminado y el registro no se enteraba nunca: `TaskRecord` no tenía dónde guardarlo.
+2. **(b) El aviso vivía en un `logger.warning`.** `loop/agent_loop.py:601-604` escribía
+   *«alcanzado límite de %d turnos»* en el log del proceso. En A ese aviso **se rinde al stream
+   público**: `query.ts:1704-1712` hace `yield {type:'max_turns_reached', maxTurns, turnCount}` y
+   retorna `{reason:'max_turns'}`. Un log no es una costura: no llega al `.jsonl`, ni al transcript,
+   ni a la pantalla.
+3. **(c) El techo era inventado.** `_MAX_TURNS = 50` y `self._max_turns = max_turns if max_turns is
+   not None else _MAX_TURNS` (`:74`/`:153`). En A el tope es **opcional** —`maxTurns?: number`
+   (`query.ts:191`)— y todas sus guardas son `if (maxTurns && …)`: **sin techo pedido no hay
+   techo**. B imponía 50 vueltas a todo consumidor que no pidiera nada, y como (b) era mudo, el
+   corte era indistinguible de un turno que terminó por su cuenta.
+4. **(d) `MAX_TURNS` se rotulaba `COMPLETED`** sin matiz alguno en el registro y en el `.jsonl`.
+
+### La decisión de (d): el ciclo de vida no cambia; el terminal viaja como DATO
+
+`TaskStatus.COMPLETED` **se conserva**. La tarea no falló: se cortó en un terminal distinto de
+«acabó de hablar». Añadir un miembro de estado habría cambiado `is_terminal()` bajo consumidores
+que no lo pidieron, y A **no tiene** tal estado de ciclo de vida — lo que tiene son dos ramas de la
+misma unión de resultado, `SDKResultSuccessSchema` (`subtype:'success'`) y `SDKResultErrorSchema`
+(`subtype:'error_max_turns'`), `entrypoints/sdk/coreSchemas.ts:1407-1451`. **Quien las distingue es
+el consumidor.**
+
+Luego el terminal viaja como dato en dos vehículos y el rótulo lo pone el integrador:
+
+- `TaskRecord.end_reason` / `end_detail` (nuevos), poblados desde el `LoopOutcome` que (a) recoge;
+- `MaxTurnsEvent(max_turns, turn_count)` en el bus, que es lo que (b) emite;
+- y `agentic_code` rotula su línea `result` como `error_max_turns` con `status: "completed"`, que
+  es exactamente el reparto de A.
+
+El `turn_count` que viaja es el `nextTurnCount` del canónico: **la vuelta que ya no se hará**.
+
+### Lo inyectado
+
+- `agentic_runtime/contracts/events.py` — `MaxTurnsEvent(max_turns, turn_count)` y su `__all__`.
+- `agentic_runtime/events/event_types.py` — reexporte por el shim, que es la puerta real de los
+  consumidores.
+- `agentic_runtime/loop/agent_loop.py` — muere `_MAX_TURNS`; `self._max_turns = max_turns` a secas;
+  el `for _turn in range(...)` pasa a `while True` con la guarda `if self._max_turns is not None
+  and ctx.turn_count >= self._max_turns`, que **emite al bus antes** de fijar el terminal y romper.
+- `agentic_runtime/execution/tasks/registry.py` — `TaskRecord.end_reason` / `end_detail`, y los dos
+  `complete(...)` (protocolo e implementación) que los reciben.
+- `agentic_runtime/execution/local/runtime.py` — `:384` recoge el `LoopOutcome` y lo transporta al
+  `complete(...)`.
+- `agentic_code/src/agentic_code/streaming.py` — `StreamSnapshot.end_reason` / `max_turns` /
+  `turn_count`, y su rama en `_reduce`.
+- `agentic_code/src/agentic_code/capture.py` — el adjunto canónico
+  `{type:'max_turns_reached', maxTurns, turnCount}` (`utils/attachments.ts:656-660`) en
+  `_canonical_message`, y el `subtype` de `finish()` en tres ramas: fallo → `error_<status>`,
+  terminal distinto → `error_<end_reason>`, y sólo si no hay ninguno → `success`.
+- `agentic_code/src/agentic_code/transcript.py` — `MaxTurnsBlock` y `_apply_max_turns`, espejo de
+  `_apply_compaction`: cierra lo que estuviera en vuelo y **jamás fabrica un turno**.
+- `agentic_code/src/agentic_code/rendering.py` y `tui.py` — la fila se pinta, por `stderr` en el
+  renderer de texto y como widget propio en la TUI (`cablear-en-agentic-code-al-cerrar`).
+
+El techo se pide con `--max-turns`, que ya existía en `Settings` con default `None` y validación
+`>= 1`: no hace falta superficie nueva, hacía falta que `None` significara lo que dice.
+
+### Divergencias declaradas (`D-21`)
+
+1. **Aquí el aviso SE PINTA; en A no.** `max_turns_reached` está en `NULL_RENDERING_TYPES`
+   (`components/messages/nullRenderingAttachments.ts:38`) y `AttachmentMessage` lo devuelve `null`.
+   Se diverge a propósito: un turno que se corta sin decir por qué es indistinguible de uno que
+   terminó, que es justo el defecto que esta entrada paga. Consecuencia: **no hay literal canónico**
+   para el usuario, luego el núcleo emite datos y `agentic_code` pone las palabras — los literales
+   `max_turns_reached`/`maxTurns`/`turnCount` viven sólo en `capture._canonical_message`, que sí es
+   espejo del `.jsonl` de A.
+2. **No se porta el segundo `yield` de la rama de aborto** (`query.ts:1506-1514`). Nuestra rama de
+   aborto (`LoopEndReason.ABORTED_TOOLS`) es anterior a la guarda del techo y no pasa por ella.
+   Queda medido y declarado, no descartado en silencio.
+
+### Acreditación (`D-12·b`)
+
+`agentic_code/tests/test_max_turns_wire.py`, **7 casos**, con criterio y citas del canónico en el
+docstring de módulo (única excepción del § 4). Miden el bus, el registro, la captura, el transcript,
+el renderer y el viaje de ida y vuelta del `.jsonl`. **Cuatro mutaciones inyectadas y revertidas**,
+con purga de `__pycache__` en cada revert (`D-62`) ⇒ **cuatro rojas, cero falsos positivos**:
+
+| | mutación | rojas |
+|---|---|---|
+| INY-a | `runtime.py:384` vuelve a descartar el `LoopOutcome` | 1 |
+| INY-b | el aviso vuelve al `logger.warning` en vez del bus | 3 (bus, captura, render) |
+| INY-c | `self._max_turns = max_turns if max_turns is not None else 50` | 1 (`assert 50 == 58`) |
+| INY-d | `finish()` vuelve a rotular `success` todo `COMPLETED` | 1 |
+
+INY-b enrojeciendo **tres** casos y no uno es lo que acredita que las capas están cableadas de
+verdad y no medidas tres veces en el mismo sitio; INY-c es la única que enrojece el caso «sin techo
+pedido», o sea que ese caso mide el default y no otra cosa.
+
+Hashes del estado sano: `contracts/events.py`
+`06835903f5aa595f1a82f0626b9463fcb357472dd61087d3c826bce8d150f610`, `events/event_types.py`
+`1bc895bf7827c1fa2d346469e90c8b1f43e3d4ddd12ff9114a0af4f09e095683`, `loop/agent_loop.py`
+`42a7d08e9985952b97c3e7f2bb752040e063aa8933e78b2b8aacd7ee67acb1f0`,
+`execution/tasks/registry.py` `37faf9873536b6a47b5e4a7238dae0abb4cb221ddbfcbb0eb291574a06073532`,
+`execution/local/runtime.py` `655331aa4d7740fe668e73357f02ddf6c1d7b92e32b9dc7132ccd32d32bc33ad`,
+`agentic_code/src/agentic_code/streaming.py`
+`ade4da0c265cac66dd45084c5955d9f107711b67a0ac5bd683324b01030dd811`, `capture.py`
+`93a103acc71d98aef4769ae32e505373d89acd0121d274359e0a51425ef9e1a9`, `transcript.py`
+`37cc87b2a9c80b254442de441bc009855c65490e97dc5b0c52d24d36746b606e`, `rendering.py`
+`360b062f25779f2e9f84d3b01acbc1cf874028541a146e49ab2274452c4fd0e4`, `tui.py`
+`98144f18ab7c41b02c9dcc9edef5b5ed4ac8e98cca8e951eacf87a04289a4180`,
+`tests/test_max_turns_wire.py` `220eac30f16dba09016db45c4117435161ad298851206a73b05a33a99c98458c`.
+
+### Suites, `ruff`, `mypy` y procesos
+
+`agentic_code` **286 → 293 passed**, sin regresión por el cambio de semántica de `None` ni por los
+campos nuevos de `TaskRecord` y `StreamSnapshot`. `ruff` sobre los once ficheros tocados: **All
+checks passed**. `mypy` sobre los cinco de `agentic_runtime`: **un** error, el de
+`agent_loop.py:235` (`collect_compaction_context`), **comprobado idéntico en `HEAD`** —copia de
+`HEAD` en `mktemp -d`, donde es `:236`— sobre una línea que este pago no toca ⇒ deuda neta cero por
+diff. Sin procesos supervivientes de las rondas. Las sintéticas de `agentic_runtime` no se
+corrieron ni se tocaron (acuerdo de fase).
+
+### Barrido de comentarios
+
+`D-23` / `D-58`: `registry.py` entra en el barrido completo —quedan fuera sus docstrings de módulo,
+clase y método— y el resto de ficheros tocados no gana comentario alguno. Las citas del canónico
+viven en el docstring de la suite.
+
+### Lo que NO deroga
+
+`D-08` intacto: la opcionalidad del tope, el `nextTurnCount`, el sitio del `yield` y el reparto
+`success`/`error_max_turns` salen del fuente de A, no de deducir cómo «debería» ser. `D-21` intacto
+y aplicado dos veces: la divergencia de pintado y el `yield` no portado se **declaran**. `D-49`
+intacto: esto es costura de terminal, no contabilidad. `D-56` intacto en su espíritu: el terminal
+no se recorta al mínimo que el estado sabía decir; se transporta entero por el vehículo que hizo
+falta crear (`D-22`). `D-62`, `D-63` y `D-64` intactos.
+
+### Abierto
+
+Quedan los otros cuatro cortes de `VALIDACION-AGENTIC-CODE.md § 2 septies`, no tocados. Siguen
+abiertos y sin cambio: la calibración de `counted` (2026-09-01), `FIND-GOOGLE-CASING`,
+`cache_write_1h` sin consumidor real, y `P1` de `PLAN-OPTIMIZACION-TUI.md`.

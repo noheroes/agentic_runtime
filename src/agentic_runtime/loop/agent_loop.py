@@ -32,6 +32,7 @@ from ..events.event_types import (
     DoneEvent,
     ErrorEvent,
     Event,
+    MaxTurnsEvent,
     MessageEvent,
     ThinkingEvent,
     TokenEvent,
@@ -70,8 +71,6 @@ if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
-
-_MAX_TURNS = 50
 
 
 def _vacio(valor: Any) -> bool:
@@ -150,7 +149,7 @@ class AgentLoop:
         self._event_seq = 0
         self._input_processor: UserInputProcessor = input_processor or NoopUserInputProcessor()
         self._notification_sink = notification_sink
-        self._max_turns = max_turns if max_turns is not None else _MAX_TURNS
+        self._max_turns = max_turns
         self._agent_resolver = agent_resolver
         self._context_budget = context_budget
         self._usage_anchor: UsageAnchor | None = None
@@ -370,9 +369,21 @@ class AgentLoop:
         async def _compaction_emit(event: Event) -> None:
             await self._emit(event, ctx)
 
-        for _turn in range(self._max_turns):
+        while True:
             if _aborted(ctx):
                 reason = LoopEndReason.ABORTED_TOOLS
+                break
+
+            if self._max_turns is not None and ctx.turn_count >= self._max_turns:
+                await self._emit(
+                    MaxTurnsEvent(
+                        max_turns=self._max_turns,
+                        turn_count=ctx.turn_count + 1,
+                    ),
+                    ctx,
+                )
+                reason = LoopEndReason.MAX_TURNS
+                detail = str(self._max_turns)
                 break
 
             ctx.turn_count += 1
@@ -597,10 +608,5 @@ class AgentLoop:
             if _ends_turn or done is None or done.stop_reason != "tool_calls":
                 reason = LoopEndReason.ENDS_TURN if _ends_turn else LoopEndReason.COMPLETED
                 break
-
-        else:
-            logger.warning("AgentLoop: alcanzado límite de %d turnos", self._max_turns)
-            reason = LoopEndReason.MAX_TURNS
-            detail = str(self._max_turns)
 
         return LoopOutcome(reason, ctx.turn_count, detail)

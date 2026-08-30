@@ -18,6 +18,7 @@ from ...events.event_types import DoneEvent, TokenEvent, ToolCallEvent, ToolResu
 from ...events.protocol import Event, EventHandler
 from ...hooks import HookEvent, HookRunner
 from ...loop.agent_loop import AgentLoop
+from ...loop.outcome import LoopOutcome
 from ...models.protocol import ModelOptions
 from ...storage.protocol import StorageKeys, StorageProtocol
 from ..agents import resolve_subagent_model
@@ -321,6 +322,7 @@ class LocalAgentRuntime:
         ctx: ToolUseContext | None = None
         parent_session_id: str | None = None
         session: Session | None = None
+        outcome: LoopOutcome | None = None
         try:
             ctx, parent_session_id, subagent_depth = self._build_child(task, parent_snapshot)
             ctx.is_subagent = parent_snapshot is not None
@@ -381,7 +383,7 @@ class LocalAgentRuntime:
 
             prompt = await self._resolve_prompt(task, ctx)
 
-            await loop.run(prompt, ctx)
+            outcome = await loop.run(prompt, ctx)
         except asyncio.CancelledError:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.kill(task_id)
@@ -390,7 +392,7 @@ class LocalAgentRuntime:
                          task, task_id, "killed",
                          "Agent was killed (timeout or manual cancel)", "")
             raise
-        except Exception as exc:  # noqa: BLE001 — la tarea falla y se REPORTA como failed; el runtime sigue vivo
+        except Exception as exc:  # noqa: BLE001
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._task_registry.fail(task_id, str(exc), duration_ms=duration_ms)
             await self._fire_stop(task_id, task, "failed", None, duration_ms)
@@ -399,7 +401,7 @@ class LocalAgentRuntime:
             logger.warning("agent %s failed: %s", task_id, exc)
             return
 
-        assert ctx is not None and session is not None
+        assert ctx is not None and session is not None and outcome is not None
         final_text = _last_assistant_text(ctx.messages)
         session.messages = list(ctx.messages)
         session.turn_count = ctx.turn_count
@@ -409,6 +411,8 @@ class LocalAgentRuntime:
             turn_count=session.turn_count,
             input_tokens=session.usage.input_tokens,
             output_tokens=session.usage.output_tokens,
+            end_reason=outcome.reason.value,
+            end_detail=outcome.detail,
         )
         await self._fire_stop(task_id, task, "completed", final_text, duration_ms)
 
@@ -441,7 +445,7 @@ class LocalAgentRuntime:
         key = StorageKeys.transcript_key(ctx.scope, ctx.session_id, agent_id)
         try:
             await self._storage.upload(key, session.model_dump_json().encode(), "application/json")
-        except Exception as exc:  # noqa: BLE001 — persistir es best-effort: no puede tumbar el turno ya servido
+        except Exception as exc:  # noqa: BLE001
             logger.warning("persist failed for %s: %s", key, exc)
 
 

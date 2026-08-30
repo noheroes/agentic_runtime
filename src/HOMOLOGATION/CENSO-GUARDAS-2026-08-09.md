@@ -2389,3 +2389,36 @@ lee ⇒ 1884, **`honored=False`**. Sin procesos supervivientes. Detalle en
 Retoma: quedan abiertos y sin tocar la calibración de `counted` contra un proveedor que
 desglose `reasoning_tokens` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor
 real, y `P1` de `PLAN-OPTIMIZACION-TUI.md` con el prototipo B (§ 6-bis).
+
+## § 5 · addendum 2026-08-30 — `FIND-RT-MAXTURNS-1` pagado (primero de los cinco cortes E2E)
+
+Hecho, en `agentic_runtime`: `MaxTurnsEvent(max_turns, turn_count)` en `contracts/events.py` y su
+reexporte por el shim; `_MAX_TURNS = 50` **borrado** y `self._max_turns = max_turns` a secas ⇒
+`None` = sin límite, como A (`maxTurns?: number`, `query.ts:191`); el `for … in range()` del bucle
+pasa a `while True` con guarda que **emite al bus** antes de romper, en lugar del `logger.warning`
+que nadie leía (`query.ts:1704-1712`); `TaskRecord` gana `end_reason`/`end_detail`; y
+`execution/local/runtime.py:384` recoge el `LoopOutcome` que descartaba.
+
+En `agentic_code` (`cablear-en-agentic-code-al-cerrar`): `StreamSnapshot` porta el terminal, la
+captura emite el adjunto `max_turns_reached` y rotula su línea `result` como `error_max_turns`
+—homólogo de `SDKResultErrorSchema`— con `status: "completed"`, y el aviso se pinta como fila de
+transcript (`MaxTurnsBlock`), por `stderr` en el renderer de texto y con widget propio en la TUI.
+El techo se pide con `--max-turns`, que ya existía.
+
+Decisión (d): `TaskStatus.COMPLETED` **se conserva** —la tarea no falló— y el terminal viaja como
+DATO; lo rotula el consumidor, como en A.
+
+Pruebas: `agentic_code` **286 → 293 verdes** (`tests/test_max_turns_wire.py`, 7 casos), acreditadas
+por **4 mutaciones revertidas → 4 rojas, 0 falsos positivos**, con purga de `__pycache__` en cada
+revert (`D-62`). `ruff` limpio en los once ficheros tocados; `mypy` con su único error preexistente,
+comprobado idéntico en `HEAD`. Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni
+corridas ni tocadas. Detalle en `SEPARACION/DECISIONES.md § D-65` y en
+`SEPARACION/VALIDACION-AGENTIC-CODE.md § 2 septies` / `§ 4 quinquies`.
+
+Retoma: los cuatro cortes restantes de la observación E2E, por orden — `FIND-CODE-ESC-1`
+(cancelación por ESC, inyección de 5 puntos ya anunciada), `FIND-RT-COMPACT-EVT-1` (la compactación
+no tiene evento de INICIO), `FIND-RT-TOOLINPUT-1` (`caller.py:278-299` descarta `toolcall_start` y
+`toolcall_delta`, luego `StreamMode.TOOL_INPUT` no describe nunca lo que nombra) y
+`FIND-CODE-TODO-1` (verificar antes si `RuntimeContextForker` comparte `app_state`). Siguen abiertos
+y sin tocar: la calibración de `counted` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin
+consumidor real, y `P1` de `PLAN-OPTIMIZACION-TUI.md`.

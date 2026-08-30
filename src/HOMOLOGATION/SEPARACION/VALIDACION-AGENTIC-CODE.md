@@ -902,6 +902,24 @@ superficie sin conducta, y se cablearán cuando haya quien las mueva. `tool_choi
 `--capture-payloads` que muestre el `reasoning` que salió y `reasoning_items_sent > 0` en el
 segundo request de un turno con tool calls.
 
+### § 4 quinquies · El terminal del bucle, cableado en `agentic_code` (`D-65`, 2026-08-30)
+
+`cablear-en-agentic-code-al-cerrar`: `FIND-RT-MAXTURNS-1` no se declara cerrado en el runtime sin
+que el consumidor lo vea. Lo que se pobló, capa a capa:
+
+| capa | fichero | qué consume |
+|---|---|---|
+| stream | `streaming.py` | `StreamSnapshot.end_reason` / `max_turns` / `turn_count`, reducidos desde `MaxTurnsEvent` |
+| captura | `capture.py` | el adjunto canónico `{type:'max_turns_reached', maxTurns, turnCount}` y el `subtype` `error_max_turns` de la línea `result`, con `status: "completed"` |
+| transcript | `transcript.py` | `MaxTurnsBlock`, espejo de `CompactionBlock`: cierra lo que estuviera en vuelo y no fabrica turno |
+| render | `rendering.py` | la fila por `stderr`, nunca por `stdout` (lo que se canaliza es la respuesta) |
+| TUI | `tui.py` | `MaxTurnsBlockWidget`, con el color de aviso del tema |
+
+**El techo no necesitó superficie nueva:** `--max-turns` ya existía en `Settings` con default `None`
+y validación `>= 1`; lo que faltaba era que `None` significara lo que dice.
+
+---
+
 ## 2 septies · Observación E2E en vivo contra el modelo local (2026-08-29/30) — cinco cortes
 
 **Método.** Sesión real de `agentic_code` contra `llama-server` + `unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`,
@@ -917,7 +935,7 @@ yo había advertido lo contrario.
 
 ---
 
-### `FIND-RT-MAXTURNS-1` — el tope de vueltas para en seco, calla, y se registra como éxito ❌ ABIERTO · **primero de la cola**
+### `FIND-RT-MAXTURNS-1` — el tope de vueltas para en seco, calla, y se registra como éxito ✅ **PAGADO** (`D-65`, 2026-08-30)
 
 **Síntoma que reportó el usuario:** la sesión «se rompió» tras la segunda compactación, con el
 indicador de trabajo colgado. El último texto del modelo fue coherente y anunciaba su siguiente
@@ -968,14 +986,19 @@ consumidor. Aquí es literal — existe `loop/outcome.py` con el código `MAX_TU
 anotado `# query.ts:1711`, un `detail`, y un docstring que dice que esa información «es la que
 permite al integrador decidir si reintenta, si avisa, o si cierra». La línea que la recibe la tira.
 
-**Inyección acordada con el usuario (aceptada, sin ejecutar todavía):**
+**Inyección ejecutada (`D-65`), los cuatro puntos:**
 
-| | dónde | qué |
+| | dónde | qué se hizo |
 |---|---|---|
-| a | `execution/local/runtime.py:384` | recoger el `LoopOutcome` y transportarlo: el `TaskRecord` gana la razón, que hoy muere ahí |
-| b | `agent_loop.py:601-604` | emitir el aviso **al bus** antes de retornar, como A hace con `max_turns_reached`; mismo canal que el resto de eventos, para que la TUI lo pinte sin cableado nuevo |
-| c | `agent_loop.py:74`/`:153` | homologar la semántica del tope: `None` = sin límite, como en A. Quien quiera techo lo pide con `--max-turns` |
-| d | registro | decidir si `MAX_TURNS` sigue siendo `COMPLETED`. En A es un terminal distinto de `completed`, y decide el consumidor |
+| a | `execution/local/runtime.py:384` | el `LoopOutcome` se recoge y viaja al `TaskRecord`, que gana `end_reason` / `end_detail` |
+| b | `agent_loop.py` | el `logger.warning` muere; la guarda del tope **emite `MaxTurnsEvent(max_turns, turn_count)` al bus** antes de romper, y el aviso llega hasta la TUI |
+| c | `agent_loop.py:74`/`:153` | `_MAX_TURNS = 50` borrado; `self._max_turns = max_turns` a secas ⇒ `None` = sin límite, como A. El techo se pide con `--max-turns`, que ya existía en `Settings` |
+| d | registro | **`TaskStatus.COMPLETED` se conserva**: el ciclo de vida no cambia porque la tarea no falló. El terminal viaja como DATO (`end_reason`, `MaxTurnsEvent`) y lo rotula el consumidor — `agentic_code` marca su línea `result` como `error_max_turns`, homólogo de `SDKResultErrorSchema` |
+
+**Acreditación:** 7 casos en `agentic_code/tests/test_max_turns_wire.py`; 4 inyecciones → 4 rojas, 0
+falsos positivos (INY-b enrojece **tres** capas, que es lo que acredita el cableado). `agentic_code`
+286 → **293 passed**. Detalle completo en `DECISIONES.md · D-65`, con las dos divergencias declaradas
+—aquí el aviso se pinta y en A es `NULL_RENDERING`; el `yield` de la rama de aborto no se porta—.
 
 ---
 
