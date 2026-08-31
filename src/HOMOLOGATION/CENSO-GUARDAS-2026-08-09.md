@@ -2505,5 +2505,22 @@ con el hallazgo `LoopEndReason.MODEL_ERROR` rotulado `subtype: "success"` con `e
 porque los dos nacen del mismo sitio: `capture.py:82-112`, donde `finish()` deriva el `subtype` de
 `status`/`snapshot.end_reason` y **no tiene rama** para un turno que muere sin snapshot terminal.
 
+**Re-medido contra modelo real sobre el árbol de hoy** (`llama-server` vivo, `D-15`), porque el
+cierre no puede descansar en la corrida de otra ventana: **cinco turnos**, cuatro abortados y uno
+que terminó solo. Los cuatro abortados dan el mismo terminal —`subtype: "error_aborted"`,
+`status: "completed"`, `end_reason: "aborted"`, `abort_reason: "turn_cancelled"`— con el
+`{type:'system', subtype:'abort'}` y el `[Request interrupted by user]` presentes en los cuatro.
+
+**Corrección de método dentro de la propia medición:** los tres primeros tiros cortaban con un
+`sleep` a ojo y **dos de tres cayeron en pleno razonamiento** (1512, 1384 y 1140 `ThinkingEvent`,
+ninguno final, cero texto), o sea no ejercitaban la rama del parcial; el cuarto ni siquiera abortó
+porque el turno acabó antes. El corte pasó a **colgar del bus** —ESC 3 s después del primer
+`TokenEvent`— y con eso la rama queda medida: **81 tokens emitidos, `result` con el texto parcial
+conservado** en vez del `""` del defecto, y el assistant parcial en la captura.
+
+Y esas mismas corridas **confirman H1 en vivo por el otro lado**: los 1140–1512 `ThinkingEvent` del
+turno abortado **están en el `.jsonl`**, que es exactamente lo que decía el cierre — el razonamiento
+en vuelo no se pierde, se graba como deltas.
+
 Retoma: sin cambio respecto del addendum (a) —`FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`,
 `FIND-CODE-TODO-1`— con `FIND-CODE-ABORT-TERM-1` añadido a la cola.
