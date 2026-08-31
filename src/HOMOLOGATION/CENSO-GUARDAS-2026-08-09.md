@@ -2470,3 +2470,40 @@ evento de INICIO; anotado de paso: `events/event_types.py` **no** reexporta `Com
 y el umbral de 350 ms del ESC en `tui.py` es conducta de producto no homologada. Siguen abiertos:
 la calibración de `counted` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor
 real, y `P1` de `PLAN-OPTIMIZACION-TUI.md`.
+
+## § 5 · addendum 2026-08-31 (b) — las dos hipótesis que dejó abiertas el ESC, resueltas contra el canónico
+
+Ventana de **lectura**: cero mutaciones de fuente. Leídos 1→EOF `claude-code/src/query.ts` (1730, en
+dos páginas por el techo de 25k tokens) y `claude-code/src/services/api/claude.ts` (3419, en cuatro),
+más `agentic_code/capture.py` (361) y `driver.py` (144).
+
+**Corrección de un error mío, del propio corte.** Sostuve en el cierre anterior que un ESC en pleno
+streaming aterriza en `{ reason: 'model_error' }`. Es **falso**, y salió de leer el canónico por
+tramos en vez de hasta EOF: `claude.ts:2794-2799` —y su gemelo de la rama de repliegue por 404,
+`:2738-2741`— hace `if (error instanceof APIUserAbortError) { releaseStreamResources(); return }`, o
+sea el generador **vuelve limpio sin emitir nada**; el `for await` de `query.ts` termina normal y el
+terminal es `aborted_streaming` (`query.ts:1015-1051`). El `catch` externo de `query.ts:955-997`
+**no se alcanza** por ESC. Lo que B emite ya era eso, así que la conducta homologada no cambia; lo
+que se retira es la afirmación.
+
+**H1 — «el razonamiento en vuelo se pierde al abortar» (1588 `ThinkingEvent`, ninguno `final`):
+CERRADA, no es hallazgo.** A no materializa jamás un bloque de pensamiento sin cerrar: el
+`AssistantMessage` se construye y se emite **sólo** dentro de `case 'content_block_stop'`
+(`claude.ts:2171-2211`); un stream que acaba sin ningún bloque completo se trata como fallo de proxy
+y no como contenido recuperable (`:2350`); y cuando A sí retiene un parcial con firma inválida, lo
+**destruye** —tombstone con su motivo escrito (`query.ts:712-725`) y `stripSignatureBlocks` antes de
+reintentar (`:924-929`)—. Nuestra captura, además, **ya registra todos los deltas**: `capture.py:73-80`
+graba cada evento del bus sin filtrar y `:161-183` proyecta el `ThinkingEvent` no final como
+`content_block_delta`/`thinking_delta`, que es la misma forma que A emite en `:2299-2303`. Lo único
+ausente sería un `content_block_stop` sintético con `signature: ""`, que es exactamente lo que la
+remediación del ecosistema prohíbe escribir. **Retirada mi propuesta H1-b**, y con ella su
+justificación «por auditabilidad», que era invención mía y no criterio del canónico.
+
+**H2 — el terminal del kill duro invisible en el `.jsonl`: sale como CORTE PROPIO,
+`FIND-CODE-ABORT-TERM-1`.** No engorda `FIND-CODE-ESC-1`, que queda cerrado como está. Va emparejado
+con el hallazgo `LoopEndReason.MODEL_ERROR` rotulado `subtype: "success"` con `end_reason: null`,
+porque los dos nacen del mismo sitio: `capture.py:82-112`, donde `finish()` deriva el `subtype` de
+`status`/`snapshot.end_reason` y **no tiene rama** para un turno que muere sin snapshot terminal.
+
+Retoma: sin cambio respecto del addendum (a) —`FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`,
+`FIND-CODE-TODO-1`— con `FIND-CODE-ABORT-TERM-1` añadido a la cola.
