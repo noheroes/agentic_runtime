@@ -21,28 +21,16 @@ from enum import Enum
 
 
 class LoopEndReason(str, Enum):
-    # --- espejo literal del canónico ---
-    COMPLETED = "completed"                    # query.ts:1264/1357
-    MAX_TURNS = "max_turns"                    # query.ts:1711
-    MODEL_ERROR = "model_error"                # query.ts:996
-    ABORTED_STREAMING = "aborted_streaming"    # query.ts:1051 — corte a mitad de stream
-    ABORTED_TOOLS = "aborted_tools"            # query.ts:1515 — corte en la frontera de vuelta
+    COMPLETED = "completed"
+    MAX_TURNS = "max_turns"
+    MODEL_ERROR = "model_error"
+    ABORTED_STREAMING = "aborted_streaming"
+    ABORTED_TOOLS = "aborted_tools"
 
-    # --- propios del runtime, declarados como tales ---
-    #: la señal ya estaba activa antes de empezar: no llegó a haber turno.
     ABORTED_PRE_RUN = "aborted_pre_run"
-    #: el turno murió por cancelación de la tarea host, sin llegar a ninguna de las
-    #: fronteras cooperativas. En el canónico no puede ocurrir —allí la interrupción
-    #: **es** la señal y `query()` siempre sale por una de sus dos ramas de aborto—,
-    #: así que se declara como propio en vez de reetiquetar una salida de A.
     ABORTED_HARD = "aborted_hard"
-    #: `S11` resolvió la entrada sin modelo (espejo de `shouldQuery === false`,
-    #: que en el canónico se decide *antes* de entrar al loop).
     SHORT_CIRCUIT = "short_circuit"
-    #: una tool pidió cerrar el turno (HITL multivuelta: `ToolResult.ends_turn`).
     ENDS_TURN = "ends_turn"
-    #: el loop se compuso sin `S1`. Es un fallo de cableado, y tiene código propio
-    #: para que una prueba pueda aseverarlo en vez de leer un log.
     NO_MODEL_CALLER = "no_model_caller"
 
 
@@ -52,7 +40,6 @@ class LoopOutcome:
 
     reason: LoopEndReason
     turn_count: int = 0
-    #: detalle libre del motivo (mensaje de error del modelo, razón del abort).
     detail: str | None = None
 
     @property
