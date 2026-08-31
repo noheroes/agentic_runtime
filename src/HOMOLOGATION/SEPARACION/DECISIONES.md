@@ -4699,3 +4699,133 @@ Hashes del estado sano: `contracts/abort.py`
 
 `D-08`, `D-12·b`, `D-15`, `D-21`, `D-22`, `D-23`/`D-58`, `D-49`, `D-56`, `D-62`, `D-63`, `D-64` y
 `D-65` intactos. Siguen abiertos y sin cambio los tres cortes restantes del `§ 2 septies`.
+
+## `D-67` — `FIND-CODE-ESC-2`: la señal de aborto corta la petición en vuelo
+
+**Fecha**: 2026-08-31. **Corte**: `FIND-CODE-ESC-2` (tercero de los cinco cortes E2E).
+
+### El defecto, en dos piezas
+
+1. **`contracts/abort.py` sólo sabía consultarse.** `aborted` era propiedad y no había canal por el
+   que despertar a un `await` bloqueado. El homólogo JS es sondeable *y* esperable (`signal.aborted`
+   + `addEventListener("abort")`); portamos media pieza. Nada podía sacar al consumidor del
+   `await self._queue.get()` de `EventStream.__aiter__`.
+2. **Ningún proveedor entregaba la señal a la capa HTTP** y el productor salía **desprendido** por
+   `asyncio.ensure_future`: cerrar el consumidor dejaba la petición viva. El bucle sólo se enteraba
+   del aborto cuando llegase un evento, y en un prefill de ~20 s no llega ninguno ⇒ la gracia de 5 s
+   de `cancel(...)` expiraba esperando a nadie y caía al `kill` duro.
+
+### La forma del pago
+
+`AbortSignal` gana `async def wait()` en el Protocol; `AbortController` lo implementa con un
+`asyncio.Event` **perezoso** (creado al primer `wait`, para no exigir bucle en construcción) que
+`abort()` levanta. En `agentic_models/utils/abort_signals.py`, la pieza genérica que evita nueve
+copias: `watch_abort(signal)` —usa `wait()` si el objeto lo tiene y si no cae a sondeo de 50 ms, o
+sea la señal se acepta **por pato** y la capa de modelos no importa del núcleo— y
+`launch_with_abort(coro, options)`, que sustituye al `ensure_future` crudo, vigila la señal en
+paralelo y **cancela la Task**. Cancelar la Task interrumpe el `await` de httpx/SDK y cierra la
+conexión: es el equivalente Python del `signal` que en A rinde `APIUserAbortError`
+(`claude.ts:2434-2451`, `:2794-2799`).
+
+`asyncio.CancelledError` **no es** `Exception`: el `except Exception` terminal de cada proveedor no
+lo vería y el stream quedaría sin cerrar. Por eso los nueve reciben una rama
+`except asyncio.CancelledError` **delante** de la suya, con su propio barrido de parciales,
+`stop_reason = "aborted"`, `push({"type":"error"})`, `end()` y `raise` —la cancelación se
+repropaga, no se traga—.
+
+**La gracia sigue en 5 s.** `caller.py`, `agent_loop.py` y `stream.py` no se tocan. `stream.py`
+tampoco podía ser la costura: el asa de la Task no existe ahí, y un envoltorio en ese punto habría
+desbloqueado al consumidor dejando la petición en vuelo. Corrección de diseño propia, anunciada
+antes de mutar.
+
+### Barrido de los nueve: siete estaban pagados, tres no
+
+Inyectar el helper no basta si el proveedor no tiene dónde suspenderse.
+
+- **`google.py`, MUERTO, no «existe-roto» — corrige nota mía.** `config["abortSignal"] = signal` con
+  forma JS: `GenerateContentConfig` es pydantic con `extra=forbid` y devuelve
+  `ValidationError: Extra inputs are not permitted [extra_forbidden]`. Como el runtime **siempre**
+  pasa `ctx.stop`, toda llamada a Google reventaba en `_build_params` y el `except Exception` la
+  disfrazaba de error de modelo. Pagado: la línea sale, queda la pre-guarda `if signal.aborted`.
+  Medido de paso: el camelCase **sí** lo acepta el SDK por alias ⇒ `FIND-GOOGLE-CASING` no se
+  dispara por esta vía.
+- **`google_vertex.py`, cliente síncrono en corrutina.** `client.models.generate_content_stream`
+  devuelve `Iterator`; `client.aio.models.…` es corrutina y devuelve `AsyncIterator`. El fichero
+  hacía `async for` sobre el síncrono: no ha podido funcionar nunca, y aun funcionando no tendría un
+  solo punto de suspensión. Pagado: `await client.aio.models.generate_content_stream` más la
+  pre-guarda que faltaba.
+- **`amazon_bedrock.py`: `DEUDA-BEDROCK-ABORT-1`, aplazada por palabra del usuario.** Ver abajo.
+- Pagados ya y comprobados uno a uno: `anthropic`, `openai_responses`, `azure_openai_responses`,
+  `openai_completions`, `mistral`, `openai_codex_responses`. `faux.py` no está en
+  `providers/__init__.py`. `providers/images` no es streaming y su `except Exception` no atrapa
+  `CancelledError` ⇒ la cancelación ya propaga limpia.
+
+### `DEUDA-BEDROCK-ABORT-1` — declarada y medida, NO pagada
+
+boto3 es síncrono de arriba abajo: `client.converse_stream(**command_input)` bloquea y
+`for item in response.get("stream", [])` itera bloqueando. **Cero `await` en el bucle de
+streaming** ⇒ `Task.cancel()` no tiene dónde actuar: el aborto es sordo, y mientras el modelo emite
+el turno bloquea el event loop entero (bus y TUI incluidos).
+
+Forma del pago, diseñada y **no** aplicada: `await asyncio.to_thread(client.converse_stream, ...)`
+y tirar del `EventStream` chunk a chunk con `await asyncio.to_thread(next, it, _FIN)` —un punto de
+suspensión por chunk— más el cierre del stream en la rama `CancelledError`. Unas diez líneas.
+Aplazada porque Bedrock no está en uso previsible y el corte de cabecera pesa más. **No se rotula
+como pagada** (`declarar-no-es-pagar`). Aunque se aplicase hoy quedaría sin acreditación en vivo:
+no hay credenciales AWS en esta máquina (`D-56`). Se paga cuando Bedrock entre en uso, o antes si
+aparece consumidor.
+
+### Acreditación (`D-15`)
+
+Contra modelo real, `llama-server` en `:8080`, harness colgado del primer `ToolCallEvent`: ESC a
+2,0 s corta en la **vuelta 2** y a 6,0 s en la **vuelta 3**, los dos con `subtype: "error_aborted"`,
+`status: "completed"`, `end_reason: "aborted"`, `abort_reason: "turn_cancelled"` y el
+`{type:'system', subtype:'abort'}` presente. El tiro a 12,0 s no abortó porque el turno acabó antes:
+se declara **inconcluyente**, no se cuenta. `error_killed` / `status: killed` / `end_reason: null`
+no reaparecen en ninguna corrida. Re-corrida tras el pago de Google/Vertex: sin regresión. Los
+`config` de Google y Vertex validan contra el SDK real y las dos pre-guardas disparan
+`Request aborted`. Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni corridas ni
+tocadas.
+
+**Queda declarado y no pagado aquí**: el `result: ""` del turno abortado en fase de tools. No es de
+este corte —es `capture.finish` derivando el terminal sin rama para ese parcial— y es exactamente
+`FIND-CODE-ABORT-TERM-1`, que pasa al frente.
+
+### Corrección: `ruff` sí está instalado
+
+`D-66` afirma que **`ruff` no se pudo correr, no está instalado en ninguno de los dos entornos**.
+Está rancio: `ruff 0.16.1` vive en el venv de `agentic_code`. Corrido ahora y medido contra los
+blobs de `HEAD` fichero a fichero: los 43 hallazgos de `providers/` son **todos preexistentes**,
+cero añadidos por este diff. Los **dos** que sí eran míos —`typing.Coroutine` deprecado en
+`abort_signals.py` (`UP035`) y `__slots__` sin ordenar en `contracts/abort.py` (`RUF023`)— quedan
+pagados, no rotulados.
+
+### Riesgo aceptado
+
+Añadir `wait` al Protocol `@runtime_checkable` cambia el veredicto de un
+`isinstance(..., AbortSignal)` para objetos sin ese método. Verificado por el camino real (E2E), no
+por censo: `grep` está prohibido en esta fase.
+
+### Hashes del estado sano
+
+`agentic_runtime/contracts/abort.py`
+`2677c15ce099965d9505aeb82ae812ee1d427dcec803b3db0a0874905dd0c817`;
+`agentic_models/utils/abort_signals.py`
+`980fdc250e8b52a7cde50ff47f134a80b7e57daaca974c16faf3450f2b07057b`;
+`providers/anthropic.py` `562533cd7285df83bdb3a7319ccfe1cc051fbc794815a0886afcbabd0473fee5`;
+`providers/google.py` `d9aaec30f4fb5eef9b39e0c49afe92c1dc217c2e76e751415c24145b2fc185b7`;
+`providers/google_vertex.py` `83e12155c1054f4f11a17c44545f0652e459be772b66b78316682f38e2052df9`;
+`providers/mistral.py` `f4c6774026b5aa3cd62d44a95d81edac1239ee1a813b3c5b470872341d8a3efc`;
+`providers/openai_responses.py` `70f8c50229da0fdea96450a12ac6d59c78725040b2b7fc9231e1c0b8f24acb9f`;
+`providers/azure_openai_responses.py`
+`15e46e1dfb4c9e4b12e2affed735a0c71adae0ffbf914a542beb4b2f3f396812`;
+`providers/openai_completions.py` `7a55e86b55c1b07eacc336128585c0157bcd519b128b749b33fdde415d869de8`;
+`providers/openai_codex_responses.py`
+`fd818aca7eeb2de8253f985bd6e3305047ba85c158196806671df9243d328d33`;
+`providers/amazon_bedrock.py` `9b39afff54f1811c70b0d8f5f03c40bc46fd86aee84ad66fc49dc9b0391b1d8d`.
+
+### Lo que NO deroga
+
+`D-08`, `D-12·b`, `D-15`, `D-21`, `D-22`, `D-49`, `D-56`, `D-62`, `D-63`, `D-64`, `D-65` y `D-66`
+intactos, salvo la corrección sobre `ruff` de arriba. Siguen abiertos `FIND-CODE-ABORT-TERM-1`,
+`FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `FIND-CODE-TODO-1` y `DEUDA-BEDROCK-ABORT-1`.

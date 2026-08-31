@@ -2544,3 +2544,123 @@ subiendo la gracia: un temporizador mayor tapa la medida sin arreglar la conduct
 Retoma: **`FIND-CODE-ESC-2` pasa al frente de la cola**, por delante de `FIND-RT-COMPACT-EVT-1`,
 `FIND-RT-TOOLINPUT-1` y `FIND-CODE-TODO-1`, con `FIND-CODE-ABORT-TERM-1` detrás — su terminal mudo
 es la otra cara de este mismo kill.
+
+## § 5 · addendum 2026-08-31 (c) — `FIND-CODE-ESC-2` pagado: la señal ya corta la petición en vuelo
+
+La hipótesis del addendum (b) queda **confirmada en fuente**, y el defecto era de dos piezas, no de
+una. (1) `contracts/abort.py` sólo sabía **consultarse**: `aborted` era una propiedad y no había
+ningún canal por el que despertar a un `await` bloqueado —el homólogo JS es sondeable *y* esperable
+(`signal.aborted` + `addEventListener("abort")`)—, así que nada podía sacar al consumidor de
+`EventStream.__aiter__`. (2) Ningún proveedor entregaba la señal a la capa HTTP y el productor salía
+**desprendido** por `asyncio.ensure_future`, luego cerrar el consumidor dejaba la petición viva: el
+bucle sólo podía enterarse del aborto cuando llegara un evento, y en un prefill de ~20 s no llega
+ninguno. La gracia de 5 s expiraba esperando a nadie.
+
+Hecho, en `agentic_runtime`: `AbortSignal` gana `async def wait()` en el Protocol y `AbortController`
+lo implementa con un `asyncio.Event` **perezoso** (se crea al primer `wait`, para no exigir bucle en
+construcción); `abort()` lo levanta. Nada más cambia: literales, `AbortReason` y `__all__` intactos.
+
+En `agentic_models`, la pieza genérica que evita nueve copias: `utils/abort_signals.py` suma
+`watch_abort(signal)` —usa `wait()` si el objeto lo tiene, y si no cae a sondeo de 50 ms, de forma
+que la señal se acepta por **pato** y la capa de modelos no importa del núcleo— y
+`launch_with_abort(coro, options)`, que sustituye al `ensure_future` crudo: lanza la corrutina,
+vigila la señal en paralelo y **cancela la Task** cuando se levanta. Cancelar la Task interrumpe el
+`await` de httpx/SDK y cierra la conexión: es el equivalente Python del `signal` que en A rinde
+`APIUserAbortError` (`claude.ts:2434-2451`, `:2794-2799`).
+
+La trampa que obliga a tocar los nueve proveedores: `asyncio.CancelledError` **no es** `Exception`,
+así que el `except Exception` terminal de cada fichero no lo vería y el stream quedaría sin cerrar.
+Cada proveedor recibe por eso una rama `except asyncio.CancelledError` **delante** de la suya, con
+su propio barrido de parciales, `stop_reason = "aborted"`, `push({"type":"error"})`, `end()` y
+`raise` —la cancelación se repropaga, no se traga—. Tres ediciones por fichero, misma forma en
+`anthropic`, `google`, `google_vertex`, `openai_responses`, `azure_openai_responses`,
+`openai_completions`, `mistral`, `openai_codex_responses` y `amazon_bedrock`.
+
+**La gracia sigue en 5 s.** `caller.py` y `agent_loop.py` no se tocan. `stream.py` tampoco: el asa de
+la Task no existe ahí, y un envoltorio en ese punto habría desbloqueado al consumidor dejando la
+petición en vuelo —corrección de diseño propia, anunciada antes de mutar—.
+
+Acreditación contra modelo real (`D-15`), `llama-server` en `:8080`, mismo prompt y mismo harness
+colgado del primer `ToolCallEvent`: ESC a 2,0 s corta en la **vuelta 2** y ESC a 6,0 s en la
+**vuelta 3**, los dos con `subtype: "error_aborted"`, `status: "completed"`,
+`end_reason: "aborted"`, `abort_reason: "turn_cancelled"`; el tiro a 12,0 s no abortó porque el
+turno acabó antes, y se declara inconcluyente en vez de contarlo. **`error_killed` / `status:
+killed` / `end_reason: null` no reaparecen en ninguna corrida.** Estática: `compileall` OK en los
+once ficheros tocados. Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni corridas ni
+tocadas.
+
+Queda declarado y **no** pagado aquí: el `result: ""` del turno abortado en fase de tools sigue
+vacío. No es de este corte —es `capture.finish` derivando el terminal sin rama para el parcial de
+tools—, y es exactamente `FIND-CODE-ABORT-TERM-1`, que pasa al frente.
+
+Riesgo aceptado y verificado por E2E: añadir `wait` al Protocol `@runtime_checkable` cambia el
+veredicto de un `isinstance(..., AbortSignal)` para objetos sin ese método; el camino real pasa.
+Los dos `# TODO(port)` de `amazon_bedrock.py` (`BotoConfig` no llega a `session.client()`,
+`use_bearer` sin cablear) se **conservan** pese al barrido de comentarios, por ser deuda de port
+declarada y medida: borrarlos sería esconderla.
+
+### Barrido de los nueve: siete estaban pagados, tres no
+
+Inyectar el helper no basta si el proveedor no tiene dónde suspenderse. Barridos uno a uno contra
+los SDK instalados:
+
+**`google.py` — no era «existe-roto», estaba MUERTO, y corrige mi propia nota.** Sostuve que el SDK
+Python «previsiblemente ignora» `config["abortSignal"]`. Medido:
+`GenerateContentConfig` es pydantic con `extra=forbid` y devuelve
+`ValidationError: Extra inputs are not permitted [extra_forbidden]`. Como el runtime **siempre**
+pasa `ctx.stop`, toda llamada a Google reventaba en `_build_params` y el `except Exception` la
+disfrazaba de error de modelo. Pagado: la línea sale y queda sólo la pre-guarda
+`if signal.aborted: raise` —el aborto viaja por cancelación de Task, que es el mecanismo
+homologado—. De paso queda medido que el camelCase **sí** lo acepta el SDK por alias
+(`maxOutputTokens` → `max_output_tokens`): `FIND-GOOGLE-CASING` no se dispara por esta vía.
+
+**`google_vertex.py` — cliente síncrono dentro de una corrutina.**
+`client.models.generate_content_stream` devuelve `Iterator`; `client.aio.models.…` es corrutina y
+devuelve `AsyncIterator` (comprobado por introspección del paquete). El fichero hacía `async for`
+sobre el **síncrono**: no ha podido funcionar nunca, y aun funcionando no tendría un solo punto de
+suspensión, luego el `cancel` sería sordo. Pagado: `await client.aio.models.generate_content_stream`
+más la pre-guarda que le faltaba, por simetría con Google.
+
+Verificado contra el SDK real: los dos `config` validan y las dos pre-guardas disparan
+`Request aborted` con la señal levantada.
+
+**Pagados ya, comprobados uno a uno:** `anthropic` (`with_streaming_response` + `async for`),
+`openai_responses`, `azure_openai_responses`, `openai_completions` (`AsyncOpenAI`), `mistral`
+(`await mistral.chat.stream` + `async for`) y `openai_codex_responses` (`httpx.AsyncClient`).
+`faux.py` no está en `providers/__init__.py` y no se toca. La rama `providers/images` no es
+streaming —se consume con un `await` directo y su `except Exception` no atrapa `CancelledError`—,
+así que la cancelación ya propaga limpia y no necesita nada.
+
+### `DEUDA-BEDROCK-ABORT-1` — declarada, medida y APLAZADA por palabra del usuario
+
+`amazon_bedrock.py` es el único proveedor que queda **sordo al aborto**, y no por olvido: boto3 es
+síncrono de arriba abajo. `client.converse_stream(**command_input)` (`:431`) bloquea, y
+`for item in response.get("stream", [])` (`:445`) itera bloqueando. **Cero `await` en todo el bucle
+de streaming.** Como `Task.cancel()` sólo actúa en un punto de suspensión, el `launch_with_abort`
+no puede interrumpirlo; y mientras el modelo emite, el turno bloquea el event loop entero —bus y
+TUI incluidos—.
+
+Forma del pago, ya diseñada y **no** aplicada: `await asyncio.to_thread(client.converse_stream,
+**command_input)` para la llamada, y tirar del `EventStream` chunk a chunk con
+`await asyncio.to_thread(next, it, _FIN)` —un punto de suspensión por chunk, el loop libre— más el
+cierre del stream en la rama `CancelledError`. Unas diez líneas.
+
+Aplazada por decisión del usuario (2026-08-31): Bedrock no está en uso previsible a corto plazo y
+el corte de cabecera pesa más. **No se rotula como pagada.** Y aunque se aplicase hoy, quedaría sin
+acreditación en vivo: no hay credenciales AWS en esta máquina, así que sólo podría declararse
+cableada en forma y **no medida contra proveedor real** (`D-56`). Se paga cuando Bedrock entre en
+uso, o antes si aparece consumidor.
+
+### Corrección: `ruff` sí está instalado
+
+El addendum `2026-08-31` afirma que **`ruff` no se pudo correr, no está instalado en ninguno de los
+dos entornos**. Está rancio: `ruff 0.16.1` vive en el venv de `agentic_code`. Corrido ahora, y
+medido contra los blobs de `HEAD` fichero a fichero: los 43 hallazgos de `providers/` son **todos
+preexistentes**, cero añadidos por este diff. Los **dos** que sí eran míos —`typing.Coroutine`
+deprecado en `abort_signals.py` y `__slots__` sin ordenar en `contracts/abort.py`— quedan pagados,
+no rotulados.
+
+Retoma: `FIND-CODE-ABORT-TERM-1` al frente, y detrás `FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`
+y `FIND-CODE-TODO-1`. Siguen abiertos: `DEUDA-BEDROCK-ABORT-1` (arriba), la calibración de `counted`
+(2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, y `P1` de
+`PLAN-OPTIMIZACION-TUI.md`.
