@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from ...contracts.abort import AbortReason
+from ...loop.outcome import LoopEndReason
 from .status import TaskStatus
 
 
@@ -25,19 +27,28 @@ class TaskRecord:
     output_tokens: int = 0
     events: list[dict[str, Any]] = field(default_factory=list)
     asyncio_task: Any = None
+    stop: Any = None
 
 
 @runtime_checkable
 class TaskRegistryProtocol(Protocol):
     def register(self, *, description: str, session_id: str | None = None) -> TaskRecord: ...
     def start(self, task_id: str, *, asyncio_task: asyncio.Task[Any] | None) -> None: ...
+    def set_stop(self, task_id: str, stop: Any) -> None: ...
     def arm_watchdog(self, task_id: str, timeout_seconds: float) -> None: ...
     def get(self, task_id: str) -> TaskRecord | None: ...
     def list_all(self) -> list[TaskRecord]: ...
     def list_for(self, session_id: str | None) -> list[TaskRecord]: ...
     def set_backgrounded(self, task_id: str, value: bool) -> None: ...
     def push_event(self, task_id: str, event: dict[str, Any]) -> None: ...
-    def kill(self, task_id: str) -> bool: ...
+    def kill(
+        self,
+        task_id: str,
+        *,
+        result: str | None = None,
+        end_reason: str | None = None,
+        end_detail: str | None = None,
+    ) -> bool: ...
     def fail(self, task_id: str, error: str, *, duration_ms: int = 0) -> None: ...
     def complete(
         self,
@@ -74,6 +85,11 @@ class InMemoryTaskRegistry:
             rec.status = TaskStatus.RUNNING
             rec.asyncio_task = asyncio_task
 
+    def set_stop(self, task_id: str, stop: Any) -> None:
+        rec = self._tasks.get(task_id)
+        if rec is not None:
+            rec.stop = stop
+
     def arm_watchdog(self, task_id: str, timeout_seconds: float) -> None:
         pass
 
@@ -96,13 +112,30 @@ class InMemoryTaskRegistry:
         if rec is not None:
             rec.events.append(event)
 
-    def kill(self, task_id: str) -> bool:
+    def kill(
+        self,
+        task_id: str,
+        *,
+        result: str | None = None,
+        end_reason: str | None = None,
+        end_detail: str | None = None,
+    ) -> bool:
         rec = self._tasks.get(task_id)
         if rec is None:
             return False
+        stop = rec.stop
+        abort = getattr(stop, "abort", None)
+        if abort is not None and not stop.aborted:
+            abort(AbortReason.AGENT_KILLED)
         if rec.asyncio_task is not None and not rec.asyncio_task.done():
             rec.asyncio_task.cancel()
         rec.status = TaskStatus.KILLED
+        if result is not None:
+            rec.result = result
+        rec.end_reason = end_reason or LoopEndReason.ABORTED_HARD.value
+        señal = getattr(stop, "reason", None)
+        motivo = señal() if señal is not None else None
+        rec.end_detail = end_detail or getattr(motivo, "value", None)
         return True
 
     def fail(self, task_id: str, error: str, *, duration_ms: int = 0) -> None:

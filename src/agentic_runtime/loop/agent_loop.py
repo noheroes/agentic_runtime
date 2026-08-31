@@ -23,12 +23,18 @@ from ..context.compact import (
 from ..context.estimation import UsageAnchor
 from ..context.tool_use import ToolUseContext
 from ..context.window import ContextBudget
+from ..contracts.abort import (
+    INTERRUPT_MESSAGE,
+    INTERRUPT_MESSAGE_FOR_TOOL_USE,
+    TOOL_RESULT_INTERRUPTED,
+)
 from ..contracts.agents import enumerate_agent_definitions
 from ..contracts.compaction import collect_compaction_context
 from ..contracts.notifications import NotificationSink, apply_notification
 from ..contracts.user_input import NoopUserInputProcessor, UserInputProcessor
 from ..events.bus import EventBus
 from ..events.event_types import (
+    AbortEvent,
     DoneEvent,
     ErrorEvent,
     Event,
@@ -104,6 +110,31 @@ def _with_effort(options: ModelOptions, level: str) -> ModelOptions:
         effort=chosen,
         thinking=ThinkingConfig(enabled=True, budget_tokens=budget),
     )
+
+
+def _assistant_message(
+    token_buffer: list[str],
+    thinking_blocks: list[dict[str, str]],
+    tool_calls: list[ToolCallEvent],
+) -> dict[str, Any] | None:
+    content = "".join(token_buffer)
+    if not content and not tool_calls:
+        return None
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if thinking_blocks:
+        message["thinking_blocks"] = thinking_blocks
+    if tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": tc.call_id,
+                "function": {
+                    "name": tc.tool_name,
+                    "arguments": json.dumps(tc.tool_input),
+                },
+            }
+            for tc in tool_calls
+        ]
+    return message
 
 
 def _as_reminder(content: str) -> str:
@@ -318,6 +349,24 @@ class AgentLoop:
         )
 
 
+    async def _announce_abort(self, ctx: ToolUseContext, *, tool_use: bool) -> str:
+        motivo = ctx.stop.reason() if ctx.stop is not None else None
+        detail = str(getattr(motivo, "value", motivo) or "")
+        await self._append(
+            ctx,
+            {
+                "role": "user",
+                "content": (
+                    INTERRUPT_MESSAGE_FOR_TOOL_USE if tool_use else INTERRUPT_MESSAGE
+                ),
+            },
+            origin="interrupt",
+        )
+        await self._emit(
+            AbortEvent(reason=detail, turn=ctx.turn_count, tool_use=tool_use), ctx
+        )
+        return detail
+
     def register_turn_start_hook(self, hook: Callable[[], Coroutine[Any, Any, None]]) -> None:
         self._turn_start_hooks.append(hook)
 
@@ -339,7 +388,12 @@ class AgentLoop:
 
     async def run(self, prompt: str, ctx: ToolUseContext) -> LoopOutcome:
         if _aborted(ctx):
-            return LoopOutcome(LoopEndReason.ABORTED_PRE_RUN, ctx.turn_count)
+            motivo = ctx.stop.reason() if ctx.stop is not None else None
+            detalle = str(getattr(motivo, "value", motivo) or "")
+            await self._emit(
+                AbortEvent(reason=detalle, turn=ctx.turn_count, tool_use=False), ctx
+            )
+            return LoopOutcome(LoopEndReason.ABORTED_PRE_RUN, ctx.turn_count, detalle or None)
 
         await self._run_turn_start_hooks()
 
@@ -371,6 +425,15 @@ class AgentLoop:
 
         while True:
             if _aborted(ctx):
+                detail = await self._announce_abort(ctx, tool_use=True) or None
+                if self._max_turns is not None and ctx.turn_count + 1 > self._max_turns:
+                    await self._emit(
+                        MaxTurnsEvent(
+                            max_turns=self._max_turns,
+                            turn_count=ctx.turn_count + 1,
+                        ),
+                        ctx,
+                    )
                 reason = LoopEndReason.ABORTED_TOOLS
                 break
 
@@ -506,11 +569,27 @@ class AgentLoop:
                 aclose = getattr(stream, "aclose", None)
                 if callable(aclose):
                     await aclose()
-                abort_reason = ctx.stop.reason() if ctx.stop is not None else None
+                parcial = _assistant_message(token_buffer, thinking_blocks, tool_calls)
+                if parcial is not None:
+                    await self._append(ctx, parcial, origin="assistant")
+                for tc in tool_calls:
+                    ctx.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.call_id,
+                        "content": TOOL_RESULT_INTERRUPTED,
+                    })
+                    await self._emit(
+                        ToolResultEvent(
+                            call_id=tc.call_id,
+                            result=TOOL_RESULT_INTERRUPTED,
+                            is_error=True,
+                        ),
+                        ctx,
+                    )
+                detail = await self._announce_abort(ctx, tool_use=False) or None
                 logger.info("AgentLoop turno %d: abortado a mitad de stream (%s)",
-                            ctx.turn_count, getattr(abort_reason, "value", abort_reason))
+                            ctx.turn_count, detail)
                 reason = LoopEndReason.ABORTED_STREAMING
-                detail = str(getattr(abort_reason, "value", abort_reason) or "")
                 break
 
             logger.debug(
@@ -530,16 +609,8 @@ class AgentLoop:
                 detail = error.message
                 break
 
-            assistant_content = "".join(token_buffer)
-            if assistant_content or tool_calls:
-                msg: dict[str, Any] = {"role": "assistant", "content": assistant_content}
-                if thinking_blocks:
-                    msg["thinking_blocks"] = thinking_blocks
-                if tool_calls:
-                    msg["tool_calls"] = [
-                        {"id": tc.call_id, "function": {"name": tc.tool_name, "arguments": json.dumps(tc.tool_input)}}
-                        for tc in tool_calls
-                    ]
+            msg = _assistant_message(token_buffer, thinking_blocks, tool_calls)
+            if msg is not None:
                 await self._append(ctx, msg, origin="assistant")
 
             _ends_turn = False
@@ -582,7 +653,11 @@ class AgentLoop:
                     ToolResultEvent(
                         call_id=tc.call_id,
                         result=result.output,
-                        is_error=getattr(result, "is_error", False),
+                        is_error=bool(
+                            getattr(result, "is_error", False)
+                            or getattr(result, "is_aborted", False)
+                            or getattr(result, "is_timeout", False)
+                        ),
                     ),
                     ctx,
                 )

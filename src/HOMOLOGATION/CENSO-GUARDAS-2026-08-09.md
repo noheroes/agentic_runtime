@@ -2422,3 +2422,51 @@ no tiene evento de INICIO), `FIND-RT-TOOLINPUT-1` (`caller.py:278-299` descarta 
 `FIND-CODE-TODO-1` (verificar antes si `RuntimeContextForker` comparte `app_state`). Siguen abiertos
 y sin tocar: la calibración de `counted` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin
 consumidor real, y `P1` de `PLAN-OPTIMIZACION-TUI.md`.
+
+## § 5 · addendum 2026-08-31 — `FIND-CODE-ESC-1` pagado (segundo de los cinco cortes E2E)
+
+El cable del aborto estaba tendido y **sin corriente**: `AbortSignal` existía, `ctx.stop` viajaba
+hasta el proveedor y el bucle lo consultaba en sus tres guardas, pero `LocalAgentRuntime.cancel`
+iba directo al `kill` sin levantarlo nunca. El ESC mataba la corrutina desde fuera y el turno salía
+`error_killed` / `end_reason: null` / `result: ""`, con el texto parcial perdido y los `tool_use`
+**huérfanos** envenenando la sesión siguiente. En A el aborto es cooperativo y sale por la rama de
+éxito (`query.ts:1005-1052`), cerrando antes los pendientes con `'Interrupted by user'`
+(`query.ts:123-149`).
+
+Hecho, en `agentic_runtime`: los tres literales canónicos en `contracts/abort.py`; `AbortEvent`
+(homólogo del `UserInterruptionMessage`) en `contracts/events.py` y su reexporte por el shim;
+`ABORTED_HARD` en `loop/outcome.py`; `TaskRecord.stop` + `set_stop` y un `kill(...)` que acepta
+`result`/`end_reason`/`end_detail`; `cancel(...)` **con gracia** (5 s por defecto,
+`wait_for(shield(task))`) que levanta la señal y deja al bucle cerrar en orden, cayendo al kill duro
+sólo si la gracia expira; la rama `CancelledError` de `_run_loop` que ahora **vuelca sesión y
+persiste** igual que la ruta feliz; y, en `agent_loop.py`, `_announce_abort(...)` en las tres
+salidas más el volcado del assistant parcial y el **cierre de los huérfanos** con `is_error=True`.
+
+En `agentic_code` (`cablear-en-agentic-code-al-cerrar`): `StreamSnapshot.abort_reason`/
+`abort_tool_use`, el mapeo `{type:'system', subtype:'abort', …}` en la captura, y un `driver` que
+**deja de fabricar** `KILLED`/`""`: lee el terminal de quien abortó.
+
+Acreditación (`D-12·b`): copia propia sellada de los 10 fuentes, `PRE`/`POST` verificados por
+`sha256sum -c`, purga de `__pycache__` en cada paso (`D-62`). Con `pre` el defecto reaparece entero;
+con `post`, el `.jsonl` da `subtype: "error_aborted"` / `status: "completed"` /
+`abort_reason: "turn_cancelled"`, el `tool_result` del huérfano y los 40 tokens parciales
+conservados. Harness 4/4: `aborted_streaming`, `aborted_tools`, huérfano cerrado y `aborted_hard`
+contra un modelo sordo. `agentic_code` **293 verdes**;
+`test_repl_cancels_active_turn_and_returns_to_prompt` **reescrito con el criterio nuevo, no
+ablandado**. `mypy` con su único error preexistente (`agent_loop.py:266`); **`ruff` no se pudo
+correr: no está instalado** en ninguno de los dos entornos, la estática fue `compileall` + `mypy`.
+Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni corridas ni tocadas. Detalle en
+`SEPARACION/DECISIONES.md § D-66`.
+
+Deroga la divergencia 2 de `D-65`: el segundo `yield` de la rama de aborto (`query.ts:1506-1514`)
+**queda portado**.
+
+Retoma: los tres cortes restantes, por orden — `FIND-RT-COMPACT-EVT-1` (la compactación no tiene
+evento de INICIO; anotado de paso: `events/event_types.py` **no** reexporta `CompactionEvent`),
+`FIND-RT-TOOLINPUT-1` (`caller.py:278-299` descarta `toolcall_start`/`toolcall_delta`;
+`streaming.py:166`) y `FIND-CODE-TODO-1` (verificar antes si `RuntimeContextForker` comparte
+`app_state`). Hallazgos nuevos anotados y **no** tocados: `LoopEndReason.MODEL_ERROR` sale rotulado
+`subtype: "success"` con `end_reason: null` —`capture.finish` lee el snapshot, no el `TaskRecord`—,
+y el umbral de 350 ms del ESC en `tui.py` es conducta de producto no homologada. Siguen abiertos:
+la calibración de `counted` (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor
+real, y `P1` de `PLAN-OPTIMIZACION-TUI.md`.

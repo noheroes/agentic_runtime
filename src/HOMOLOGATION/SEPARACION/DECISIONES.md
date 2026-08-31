@@ -4580,3 +4580,122 @@ falta crear (`D-22`). `D-62`, `D-63` y `D-64` intactos.
 Quedan los otros cuatro cortes de `VALIDACION-AGENTIC-CODE.md § 2 septies`, no tocados. Siguen
 abiertos y sin cambio: la calibración de `counted` (2026-09-01), `FIND-GOOGLE-CASING`,
 `cache_write_1h` sin consumidor real, y `P1` de `PLAN-OPTIMIZACION-TUI.md`.
+
+---
+
+## D-66 · `FIND-CODE-ESC-1`: el cable del aborto tendido y sin corriente
+
+**2026-08-31.** Fase `agentic_code` · estabilización. Paga el segundo de los cinco cortes en cola de
+`VALIDACION-AGENTIC-CODE.md § 2 septies`.
+
+- **Palabra del usuario**: el enunciado de retoma, que enumera los cinco puntos y cierra el
+  diagnóstico; y, sobre el anuncio con evidencia plena, `procede`.
+
+### El defecto
+
+`AbortSignal` existía, `ctx.stop` viajaba hasta el proveedor y el bucle lo consultaba en sus tres
+guardas. **Nadie lo encendía nunca.** `LocalAgentRuntime.cancel` iba directo a
+`task_registry.kill(task_id)`: mataba la corrutina de fuera, sin dar al bucle ni una vuelta para
+enterarse. Consecuencia en cadena, medida en el `.jsonl` real del integrador:
+
+- el turno abortado se rotulaba `error_killed` / `status: "killed"` / `end_reason: null`;
+- el **texto parcial se perdía** (`result: ""`), aunque el modelo hubiera hablado 40 tokens;
+- los `tool_use` ya anunciados quedaban **huérfanos**, sin su `tool_result`, envenenando el
+  historial de la sesión siguiente;
+- no había constancia alguna de que el corte fuera del usuario ni de por qué.
+
+En A el aborto es cooperativo y **sale por la rama de éxito**: `query.ts:1005-1052` cierra los
+`tool_use` pendientes con `yieldMissingToolResultBlocks(…, 'Interrupted by user')`
+(`query.ts:123-149`), rinde el `UserInterruptionMessage` y retorna `{reason:'aborted_streaming'}`.
+
+### La decisión: el aborto es una salida ordenada; el kill es el plan B
+
+`cancel(task_id, *, reason=AbortReason.TURN_CANCELLED)` levanta la señal y **espera con gracia**
+(`asyncio.wait_for(asyncio.shield(task), cancel_grace)`, 5 s por defecto). El bucle ve la señal en
+su siguiente guarda, cierra en orden y termina `COMPLETED` con `end_reason`
+`aborted_streaming` / `aborted_tools`. Sólo si la gracia expira —modelo sordo— se cae al kill duro,
+y entonces el terminal es `aborted_hard` con `TaskStatus.KILLED`. `D-65` intacto y reusado: el
+terminal viaja como dato y el rótulo lo pone el integrador.
+
+### Lo inyectado
+
+- `contracts/abort.py` — los tres literales canónicos: `INTERRUPT_MESSAGE`,
+  `INTERRUPT_MESSAGE_FOR_TOOL_USE`, `TOOL_RESULT_INTERRUPTED`.
+- `contracts/events.py` + `events/event_types.py` — `AbortEvent(reason, turn, tool_use)`, homólogo
+  del `UserInterruptionMessage` de A, y su reexporte por el shim.
+- `loop/outcome.py` — código propio `ABORTED_HARD`, incluido en la propiedad `aborted`.
+- `execution/tasks/registry.py` — `TaskRecord.stop` y `set_stop(...)`, para que el registro pueda
+  levantar la señal; `kill(...)` acepta `result` / `end_reason` / `end_detail` y, si nadie abortó,
+  levanta `AbortReason.AGENT_KILLED` antes de matar.
+- `execution/local/runtime.py` — `cancel(...)` con gracia; `set_stop` al armar el contexto; y la
+  rama `CancelledError` de `_run_loop`, que ahora **vuelca `ctx.messages`/`turn_count` a la sesión
+  y persiste igual que la ruta feliz**, con un helper `_shielded` para que el cierre sobreviva a la
+  cancelación que lo provocó.
+- `loop/agent_loop.py` — `_announce_abort(...)` (mensaje de interrupción + `AbortEvent`) en las tres
+  salidas; y, en el corte de stream, el volcado del assistant parcial (`_assistant_message`) y el
+  **cierre de los `tool_use` huérfanos** con `TOOL_RESULT_INTERRUPTED` e `is_error=True`.
+- `agentic_code/streaming.py`, `capture.py`, `driver.py` — `StreamSnapshot.abort_reason` /
+  `abort_tool_use`, el mapeo canónico `{type:'system', subtype:'abort', …}`, y un `driver` que
+  **deja de fabricar** `KILLED`/`""` en su rama `CancelledError`: lee el terminal de quien abortó.
+
+### Divergencia declarada (`D-21`)
+
+**El `AbortEvent` se emite siempre.** A lo suprime cuando `signal.reason === 'interrupt'`, porque su
+TUI ya pintó la interrupción por su cuenta. Aquí el evento es el único vehículo del motivo hasta el
+`.jsonl`, y callarlo reproduciría el defecto que esta entrada paga. Se declara, no se descarta en
+silencio.
+
+### Lo que deroga
+
+La divergencia **2** de `D-65` (*«no se porta el segundo `yield` de la rama de aborto»*,
+`query.ts:1506-1514`) **queda pagada**: la frontera de vuelta emite ahora el `MaxTurnsEvent` cuando
+el aborto coincide con el techo alcanzado.
+
+### Acreditación (`D-12·b`)
+
+Inyección/revert por copia propia sellada de los 10 fuentes (`PRE.sha256` / `POST.sha256`, ambos
+`sha256sum -c` OK), con purga de `__pycache__` en cada paso (`D-62`). Con `pre` el defecto
+**reaparece entero**: `subtype: "error_killed"`, `end_reason: null`, `result: ""`, sin `AbortEvent`,
+sin mensaje de interrupción y sin `tool_result` para el huérfano. Con `post`, verde:
+`subtype: "error_aborted"`, `status: "completed"`, `end_reason: "aborted"`,
+`abort_reason: "turn_cancelled"`, el `tool_result` `('call-1', 'Interrupted by user', is_error)` y
+los 40 tokens parciales conservados en `result`. Las cuatro ramas del harness dan
+`aborted_streaming`, `aborted_tools`, huérfano cerrado y `aborted_hard` con gracia de 0,3 s contra
+un modelo sordo.
+
+`agentic_code` **293 passed**. `test_repl_cancels_active_turn_and_returns_to_prompt` se **reescribió
+con el criterio nuevo** —no se ablandó—: su stub declara `COMPLETED` y anuncia el aborto por el bus,
+y el caso comprueba el par `completed` + `error_aborted` en el `.jsonl`, es decir que el driver ya
+no inventa el terminal. `mypy` sobre los siete de `agentic_runtime`: **un** error, el preexistente
+de `agent_loop.py:266` (`collect_compaction_context`), sobre línea que este pago no toca ⇒ deuda
+neta cero por diff. `ruff` **no se pudo correr: no está instalado** en ninguno de los dos entornos;
+la verificación estática fue `compileall` + `mypy`. Sin procesos supervivientes.
+
+Hashes del estado sano: `contracts/abort.py`
+`93a3d9ede096d57a7e4637560c680122df7898b2ffadf84a4c7c408969dab5db`, `contracts/events.py`
+`95e1a948341a61869903c744cd17d581b52bd21a9056c1cec68e9ab35f3ced7b`, `events/event_types.py`
+`d2373845e0ff58ae27343195f2fef526208b5f7cdcfdb1ed5ef74f2690b1d518`, `loop/outcome.py`
+`1c4dcce016567094f7d9acab0f0dcd747f38d65f6ad747f108929d29a04d276f`, `loop/agent_loop.py`
+`5f79656483418ccf05bb5fa69add44beb56711b4c2d286bb97f5c18fd831c0d0`,
+`execution/tasks/registry.py` `14c69eea906ecbff664e66114c1a56a24d64be8767ce08b4e9ae9d457996b8f2`,
+`execution/local/runtime.py` `c70fc3e3755bf95b2338a2a0f2c73cf7616d2a03a117f6146581a47ed849da49`,
+`agentic_code/streaming.py` `15b9e9d62680a3c7e920db915c23dda62f2d16a947e273d69a3f6abce0ddad6b`,
+`capture.py` `4fde71a7ae2bdb7beb8343752ef4fe5ce1ea9d0d21d287a0ccc58ef3b7082621`, `driver.py`
+`429cbee20b81373e10fff1db04cf301527f89747369c510f475aa341905b176e`, `tests/test_repl.py`
+`d11c09909ef6f970883be32a8b92f7d85244111aeb742d1bd5e0e072fb2f8767`.
+
+### Hallazgos de paso, no tocados
+
+1. **`events/event_types.py` no reexporta `CompactionEvent`** — pertenece a
+   `FIND-RT-COMPACT-EVT-1`, siguiente en la cola.
+2. **`LoopEndReason.MODEL_ERROR` sale rotulado `subtype: "success"` con `end_reason: null`** en el
+   `.jsonl`, porque `capture.finish` lee el `end_reason` del *snapshot* (que viene de eventos) y no
+   el del `TaskRecord`. Es el mismo patrón que `D-65` pagó para el techo, en otro terminal. Queda
+   anotado como hallazgo abierto.
+3. **El ESC de la TUI tiene un umbral de 350 ms** (`tui.py`): conducta de producto propia, no
+   homologada contra A. No se toca en este corte.
+
+### Lo que NO deroga
+
+`D-08`, `D-12·b`, `D-15`, `D-21`, `D-22`, `D-23`/`D-58`, `D-49`, `D-56`, `D-62`, `D-63`, `D-64` y
+`D-65` intactos. Siguen abiertos y sin cambio los tres cortes restantes del `§ 2 septies`.

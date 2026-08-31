@@ -171,6 +171,14 @@ class MaxTurnsEvent(Event):
     turn_count: int = 0
 
 
+@dataclass(frozen=True)
+class AbortEvent(Event):
+
+    reason: str = ""
+    turn: int = 0
+    tool_use: bool = False
+
+
 class EventBusProtocol(Protocol):
     def subscribe(self, event_type: type[T], handler: Callable[[T], Awaitable[None]]) -> None: ...
     def subscribe_all(self, handler: EventHandler) -> None: ...
@@ -183,6 +191,7 @@ __all__ = [
     "THINKING_TOKENS_SOURCE_COUNTED",
     "THINKING_TOKENS_SOURCE_PROVIDER",
     "THINKING_TOKENS_SOURCE_UNAVAILABLE",
+    "AbortEvent",
     "CompactionEvent",
     "DoneEvent",
     "ErrorEvent",

@@ -31,6 +31,11 @@ class LoopEndReason(str, Enum):
     # --- propios del runtime, declarados como tales ---
     #: la señal ya estaba activa antes de empezar: no llegó a haber turno.
     ABORTED_PRE_RUN = "aborted_pre_run"
+    #: el turno murió por cancelación de la tarea host, sin llegar a ninguna de las
+    #: fronteras cooperativas. En el canónico no puede ocurrir —allí la interrupción
+    #: **es** la señal y `query()` siempre sale por una de sus dos ramas de aborto—,
+    #: así que se declara como propio en vez de reetiquetar una salida de A.
+    ABORTED_HARD = "aborted_hard"
     #: `S11` resolvió la entrada sin modelo (espejo de `shouldQuery === false`,
     #: que en el canónico se decide *antes* de entrar al loop).
     SHORT_CIRCUIT = "short_circuit"
@@ -54,6 +59,7 @@ class LoopOutcome:
     def aborted(self) -> bool:
         return self.reason in (
             LoopEndReason.ABORTED_PRE_RUN,
+            LoopEndReason.ABORTED_HARD,
             LoopEndReason.ABORTED_STREAMING,
             LoopEndReason.ABORTED_TOOLS,
         )

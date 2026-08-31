@@ -12,6 +12,11 @@ from enum import Enum
 from typing import Protocol, runtime_checkable
 
 
+INTERRUPT_MESSAGE = "[Request interrupted by user]"
+INTERRUPT_MESSAGE_FOR_TOOL_USE = "[Request interrupted by user for tool use]"
+TOOL_RESULT_INTERRUPTED = "Interrupted by user"
+
+
 class AbortReason(str, Enum):
     """Por qué se abortó. Separa abort de turno y abort de agente (`05·E36`/`08·SIG13`)."""
 
@@ -66,4 +71,11 @@ class AbortController:
             self._reason = reason
 
 
-__all__ = ["AbortController", "AbortReason", "AbortSignal"]
+__all__ = [
+    "INTERRUPT_MESSAGE",
+    "INTERRUPT_MESSAGE_FOR_TOOL_USE",
+    "TOOL_RESULT_INTERRUPTED",
+    "AbortController",
+    "AbortReason",
+    "AbortSignal",
+]

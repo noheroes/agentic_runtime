@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from ...context.presentation import IdentityPresentation
 from ...context.tool_use import ToolUseContext
 from ...context.window import ContextBudget
-from ...contracts.abort import AbortController
+from ...contracts.abort import AbortController, AbortReason
 from ...contracts.errors import RuntimeIdentityError
 from ...contracts.identity import Scope, SessionId, SessionRepo
 from ...events.bus import EventBus
@@ -18,7 +18,7 @@ from ...events.event_types import DoneEvent, TokenEvent, ToolCallEvent, ToolResu
 from ...events.protocol import Event, EventHandler
 from ...hooks import HookEvent, HookRunner
 from ...loop.agent_loop import AgentLoop
-from ...loop.outcome import LoopOutcome
+from ...loop.outcome import LoopEndReason, LoopOutcome
 from ...models.protocol import ModelOptions
 from ...storage.protocol import StorageKeys, StorageProtocol
 from ..agents import resolve_subagent_model
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300.0
+_DEFAULT_CANCEL_GRACE = 5.0
 
 
 def _last_assistant_text(messages: list[Any]) -> str:
@@ -82,6 +83,7 @@ class LocalAgentRuntime:
         session_repo: SessionRepo[Any] | None = None,
         context_budget: ContextBudget | None = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
+        cancel_grace: float = _DEFAULT_CANCEL_GRACE,
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -114,6 +116,7 @@ class LocalAgentRuntime:
         self._session_repo = session_repo
         self._context_budget = context_budget
         self._default_timeout = default_timeout
+        self._cancel_grace = cancel_grace
 
     @property
     def runtime_id(self) -> str:
@@ -192,8 +195,30 @@ class LocalAgentRuntime:
         rec = self._task_registry.get(task_id)
         return rec.status if rec else None
 
-    async def cancel(self, task_id: str) -> bool:
-        return self._task_registry.kill(task_id)
+    async def cancel(
+        self, task_id: str, *, reason: AbortReason = AbortReason.TURN_CANCELLED
+    ) -> bool:
+        rec = self._task_registry.get(task_id)
+        if rec is None:
+            return False
+        stop = rec.stop
+        abort = getattr(stop, "abort", None)
+        asyncio_task = rec.asyncio_task
+        if abort is None or asyncio_task is None or asyncio_task.done():
+            return self._task_registry.kill(task_id)
+        if not stop.aborted:
+            abort(reason)
+        try:
+            await asyncio.wait_for(asyncio.shield(asyncio_task), self._cancel_grace)
+        except (TimeoutError, asyncio.TimeoutError):
+            return self._task_registry.kill(task_id)
+        except asyncio.CancelledError:
+            if asyncio_task.cancelled():
+                return True
+            raise
+        except Exception:  # noqa: BLE001
+            return True
+        return True
 
     def result(self, task_id: str) -> str | None:
         rec = self._task_registry.get(task_id)
@@ -333,6 +358,7 @@ class LocalAgentRuntime:
             ctx.git_credentials = self._git_credentials
             ctx.runner = self._runner
             ctx.task_registry = self._task_registry
+            self._task_registry.set_stop(task_id, ctx.stop)
             if self._fs is not None:
                 ctx.fs = self._fs
             if self._storage_contract is not None:
@@ -386,11 +412,29 @@ class LocalAgentRuntime:
             outcome = await loop.run(prompt, ctx)
         except asyncio.CancelledError:
             duration_ms = int((time.monotonic() - t0) * 1000)
-            self._task_registry.kill(task_id)
-            await self._fire_stop(task_id, task, "killed", None, duration_ms)
+            final_text = ""
+            detail = None
+            if ctx is not None:
+                final_text = _last_assistant_text(ctx.messages)
+                if ctx.stop is not None:
+                    detail = getattr(ctx.stop.reason(), "value", None)
+                if session is not None:
+                    session.messages = list(ctx.messages)
+                    session.turn_count = ctx.turn_count
+            self._task_registry.kill(
+                task_id,
+                result=final_text,
+                end_reason=LoopEndReason.ABORTED_HARD.value,
+                end_detail=detail,
+            )
+            await self._shielded(
+                self._fire_stop(task_id, task, "killed", final_text, duration_ms)
+            )
             self._notify(ctx.scope if ctx is not None else None, parent_session_id,
                          task, task_id, "killed",
-                         "Agent was killed (timeout or manual cancel)", "")
+                         "Agent was killed (timeout or manual cancel)", final_text)
+            if ctx is not None and session is not None:
+                await self._shielded(self._persist(task, ctx, session))
             raise
         except Exception as exc:  # noqa: BLE001
             duration_ms = int((time.monotonic() - t0) * 1000)
@@ -425,6 +469,20 @@ class LocalAgentRuntime:
                          notification_text, final_text)
 
         await self._persist(task, ctx, session)
+
+    @staticmethod
+    async def _shielded(coro: Any) -> None:
+        fut = asyncio.ensure_future(coro)
+        while True:
+            try:
+                await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                if fut.done():
+                    return
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cierre tras cancelación falló: %s", exc)
+            return
 
     def _open_session(self, session_id: str) -> Session:
         if self._session_repo is None:
