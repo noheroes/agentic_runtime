@@ -2522,5 +2522,25 @@ Y esas mismas corridas **confirman H1 en vivo por el otro lado**: los 1140–151
 turno abortado **están en el `.jsonl`**, que es exactamente lo que decía el cierre — el razonamiento
 en vuelo no se pierde, se graba como deltas.
 
-Retoma: sin cambio respecto del addendum (a) —`FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`,
-`FIND-CODE-TODO-1`— con `FIND-CODE-ABORT-TERM-1` añadido a la cola.
+**`FIND-CODE-ESC-2`, ABIERTO — y corrige el alcance de lo que el addendum (a) daba por cerrado.**
+La rama de aborto **durante la fase de tools** no estaba medida contra modelo real: los cinco turnos
+de arriba salieron con `tool_use: false`. Medida ahora, con el corte colgado del primer
+`ToolCallEvent`, **dos de tres caen al kill duro**: `subtype: "error_killed"`, `status: "killed"`,
+`end_reason: null`, `result: ""` — el patrón exacto del defecto que este corte decía cerrar.
+
+Localizado, no supuesto. En los dos turnos matados el último evento de la captura es
+`TurnStartEvent`: la tool **ya devolvió** su resultado y el bucle abrió la vuelta siguiente, así que
+el ESC cae **durante el prefill de la segunda llamada al modelo**. El hueco entre ese último evento
+y la línea `result` es de **5,21 s** y **9,01 s** contra los **0,00 s** del turno que sí abortó
+limpio (ése estaba emitiendo texto). O sea: la gracia de 5 s de `cancel(...)` expira esperando a un
+modelo cuyo prefill son ~20 s, y el camino cae al `kill` duro con el terminal mudo.
+
+Hipótesis a verificar en el corte, **no dada por buena aquí**: que la señal llegue al proveedor no
+basta si la petición HTTP en vuelo no se cancela con ella, y el bucle sólo la consulta entre pasos.
+En A el aborto es inmediato porque el `signal` va al SDK y rinde `APIUserAbortError`
+(`claude.ts:2434-2451`, `:2794-2799`). Se resuelve leyendo el camino del proveedor 1→EOF, no
+subiendo la gracia: un temporizador mayor tapa la medida sin arreglar la conducta.
+
+Retoma: **`FIND-CODE-ESC-2` pasa al frente de la cola**, por delante de `FIND-RT-COMPACT-EVT-1`,
+`FIND-RT-TOOLINPUT-1` y `FIND-CODE-TODO-1`, con `FIND-CODE-ABORT-TERM-1` detrás — su terminal mudo
+es la otra cara de este mismo kill.
