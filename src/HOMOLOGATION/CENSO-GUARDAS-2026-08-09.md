@@ -606,6 +606,43 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-09-01 (f) · FIND-CODE-ABORT-TERM-1 · CERRADO, y `M2` reacreditada en rojo
+
+Cumplidos los cuatro puntos que `(d)` dejó a pagar, en su orden. Detalle en
+`SEPARACION/DECISIONES.md § D-68`.
+
+1. **`_classify` invertido.** El tope va **primero**, antes incluso del `status`: en A el `return`
+   del adjunto `max_turns_reached` (`QueryEngine.ts:842-874`) precede a toda otra salida, incluido
+   el `isResultSuccessful` de `:1082`.
+2. **La guarda de `streaming.py:274` se SEPARA, no se retira.** Protegía dos cosas y sólo una es
+   legítima: `_end_reason` es lo que hace que `finalize()` rinda `CANCELLED`, y el aborto debe
+   seguir ganando **ese** campo. La clasificación cuelga ahora de `StreamSnapshot.max_turns_reached`,
+   flag nuevo e **incondicional**, homólogo del adjunto. Retirarla del todo habría borrado el motivo
+   del corte del usuario (`end_reason: "aborted"`, `abort_reason`), que es lo que `D-66` pagó.
+3. **El test reescrito con el criterio, no ablandado.**
+   `test_max_turns_only_wins_when_the_tail_is_successful` →
+   `test_the_max_turns_attachment_outranks_the_transcript_tail`: afirma lo contrario de lo que
+   afirmaba, y el caso `tope_abortado` comprueba a la vez `error_max_turns`, los `errors[]` de A,
+   `end_reason: "aborted"` y `abort_reason: "turn_cancelled"`.
+4. **`M2` deja de ser falso negativo**, medido: con el orden invertido rinde
+   `error_during_execution` donde el canónico rinde `error_max_turns`. Cuatro mutaciones, cuatro
+   rojas —`M2` orden de ramas · `M3` guarda reimpuesta sobre el flag · `M4` `errors[]` del tope
+   vueltos a `_diagnostics` · `M5` flag nunca armado—, revert por copia propia `sha256` con purga
+   de `.pyc` en cada pasada (`D-62`) y hash comprobado tras cada revert.
+
+**Hallazgo de paso, pagado aquí:** A no pone `[ede_diagnostic]` en el tope. Sus `errors[]` son
+`Reached maximum number of turns (N)` (`QueryEngine.ts:869-871`); el prefijo es **exclusivo** de
+`error_during_execution` (`:1106-1115`). `_classify` le estaba pasando `_diagnostics(snapshot)`:
+invención, retirada.
+
+`agentic_code` **296 passed** (misma base: la reescritura no añade ni quita casos), `ruff` **All
+checks passed** y `mypy` **Success** sobre los tres ficheros tocados. Sin procesos supervivientes.
+`agentic_runtime` no se toca en este pago. Hashes sanos: `capture.py` `c97928db…7051b150`,
+`streaming.py` `5e9a9871…27a4efcccf`, `tests/test_capture.py` `83a7b1ae…5d43f07fb9`.
+
+**Al frente de la cola pasa `FIND-CODE-ABORT-TOOLS-1`** (entrada `(e)`), cuyo siguiente movimiento
+es **leer A antes de proponer forma** (`D-08`). `5.b` sigue sin pagar y sin cambio.
+
 ### 2026-08-31 (e) · E2E de fase de TOOLS · PAGADO, y abre `FIND-CODE-ABORT-TOOLS-1`
 
 Restaurada la GPU (`wsl --shutdown`; `llama-server` en `:8080`, RTX 5080), se rehace el E2E
@@ -646,7 +683,7 @@ reproduce hoy**: `localhost` resuelve sólo a `127.0.0.1` y `llama-server` respo
 ese nombre, así que el arnés corrió con el `base_url` del repo, sin rodeo. La declaración se
 mantiene —depende del entorno, no del código— pero deja de estar sorteada.
 
-### 2026-08-31 (d) · FIND-CODE-ABORT-TERM-1 · pagado en parte, forma REABIERTA
+### 2026-08-31 (d) · FIND-CODE-ABORT-TERM-1 · pagado en parte, forma REABIERTA — ~~REABIERTA~~ **CERRADA el 2026-09-01, ver `(f)`**
 
 **Pagado y en el árbol** (`agentic_code`, sin commitear al abrir esta entrada):
 `capture.py` clasifica por la cola de la transcripción y no por el Terminal del bucle:

@@ -4829,3 +4829,122 @@ por censo: `grep` está prohibido en esta fase.
 `D-08`, `D-12·b`, `D-15`, `D-21`, `D-22`, `D-49`, `D-56`, `D-62`, `D-63`, `D-64`, `D-65` y `D-66`
 intactos, salvo la corrección sobre `ruff` de arriba. Siguen abiertos `FIND-CODE-ABORT-TERM-1`,
 `FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `FIND-CODE-TODO-1` y `DEUDA-BEDROCK-ABORT-1`.
+
+---
+
+## D-68 · `FIND-CODE-ABORT-TERM-1`: el tope GANA a la cola, y sus `errors[]` no son los del diagnóstico
+
+**2026-08-31/09-01.** Fase `agentic_code` · estabilización. Cierra `FIND-CODE-ABORT-TERM-1`, que
+`D-67` §*Queda declarado y no pagado aquí* puso al frente de la cola. Corrige la mitad de forma de
+lo que el censo `(d)` había dado por pagado.
+
+- **Palabra del usuario**: el enunciado de retoma, que fija el paso en cinco tramos —*«anunciar la
+  inyección, invertir el orden en `capture.py:_classify`, retirar o separar la guarda
+  `if self._end_reason != "aborted"` de `streaming.py:274`, reescribir `tests/test_capture.py:145`
+  con el criterio canónico, reacreditar `M2` por `D-12·b`, y sólo entonces escribir `D-68`»*— y que
+  cierra el diagnóstico.
+
+### El defecto: mi criterio, no el mutador
+
+El censo `(d)` publicó `M2` —orden de ramas en `_classify`— como **falso negativo**: la única de seis
+mutaciones que salió verde. No lo era. Era el criterio el que estaba invertido, y el mutador el que
+tenía razón. Contrastado contra A, leído 1→EOF:
+
+1. **`error_max_turns` no lo decide la cola.** `QueryEngine.ts:842-874` lo rinde al ver el adjunto
+   `max_turns_reached` **dentro del bucle de mensajes**, con `return` inmediato (`:873`), o sea
+   **antes** del `isResultSuccessful` de `:1082`, que es de donde sale `error_during_execution`.
+2. **El adjunto se emite también en la rama de aborto en tools.** `query.ts:1508-1514`: tras la
+   interrupción (`:1501-1505`) y antes del `return {reason:'aborted_tools'}` de `:1515`. Orden que
+   `agent_loop.py:427-438` ya reproducía. Luego en A un turno abortado que cruza el tope sale
+   `error_max_turns`, y en B salía `error_during_execution`.
+
+### Hallazgo de paso, pagado en la misma inyección
+
+A **no pone `[ede_diagnostic]` en el tope**: sus `errors[]` son
+`Reached maximum number of turns (${maxTurns})` (`QueryEngine.ts:869-871`), y el prefijo
+`[ede_diagnostic]` es **exclusivo** de `error_during_execution` (`:1106-1115`). `_classify` estaba
+pasando `_diagnostics(snapshot)` también al tope: invención, retirada.
+
+### La guarda se SEPARA, no se retira
+
+El enunciado admitía las dos formas. Se separa, porque
+`if self._end_reason != "aborted"` (`streaming.py:274`) protegía **dos cosas a la vez** y sólo una es
+legítima: `_end_reason` es lo que hace que `finalize()` rinda `CANCELLED` (`streaming.py:166-168`), y
+el aborto debe seguir ganando **ese** campo — el registro conserva `end_reason: "aborted"` y
+`abort_reason: "turn_cancelled"`, que es lo que `D-66` pagó. Lo que no puede es decidir la
+clasificación. Retirarla del todo habría hecho que un tope tras aborto rindiera
+`end_reason: "max_turns"`, borrando el motivo del corte del usuario.
+
+Así que la clasificación cuelga de un vehículo nuevo e **incondicional**,
+`StreamSnapshot.max_turns_reached`, homólogo del adjunto de A: el adjunto llegó, y eso es un hecho
+del stream, no una consecuencia del terminal. `D-65` queda **íntegro**: la cola sigue decidiendo
+entre `success` y `error_during_execution`; lo que no puede es adelantar al adjunto.
+
+### Lo inyectado
+
+- `agentic_code/src/agentic_code/streaming.py` — `StreamSnapshot.max_turns_reached` (al final de los
+  campos con default, sin alterar construcción posicional), `self._max_turns_reached` en `__init__`,
+  su paso por la propiedad `snapshot`, y la rama `MaxTurnsEvent` de `_reduce` armando el flag
+  **antes** de la guarda, que se conserva sólo sobre `_end_reason`.
+- `agentic_code/src/agentic_code/capture.py` — `_classify` con el tope **primero**, antes incluso del
+  `status`, porque en A el `return` del adjunto precede a toda otra salida; y los `errors[]`
+  literales de A en vez de `_diagnostics(snapshot)`.
+- `agentic_code/tests/test_capture.py` — `test_max_turns_only_wins_when_the_tail_is_successful` pasa
+  a `test_the_max_turns_attachment_outranks_the_transcript_tail`, **reescrito con el criterio
+  canónico y sus citas**, no ablandado (`no-debilitar-la-prueba`): afirma ahora lo contrario de lo
+  que afirmaba, con el caso `tope_abortado` comprobando a la vez `subtype: error_max_turns`,
+  `errors[]` de A, `end_reason: "aborted"` y `abort_reason: "turn_cancelled"`.
+
+### Acreditación (`D-12·b`) — `M2` reacreditada
+
+Copia propia de los dos fuentes en `mktemp -d`, verificada por `sha256` idéntico al repo antes de
+mutar; revert desde esa copia con **purga de `.pyc`** en cada pasada (`D-62`) y hash comprobado tras
+cada revert. Cuatro mutaciones, cuatro rojas, cero falsos positivos:
+
+| | mutación | rojo |
+|---|---|---|
+| M2 | orden de ramas en `_classify` (**el falso negativo del censo `(d)`**) | `'error_during_execution' == 'error_max_turns'` |
+| M3 | reimponer la guarda `!= "aborted"` sobre el flag nuevo | idem |
+| M4 | los `errors[]` del tope vuelven a `_diagnostics(snapshot)` | `'[ede_diagnostic] …' != 'Reached maximum number of turns (2)'` |
+| M5 | el flag nunca se arma | `'success' == 'error_max_turns'` |
+
+`M2` en rojo es el cierre del hallazgo: la mutación que antes pasaba ahora no pasa, y lo que cambió
+no fue el mutador.
+
+Hashes del estado sano: `capture.py`
+`c97928db15bc37f1e86e30a6c493bd34785c274d9aca4c5fa6ac546c7051b150`, `streaming.py`
+`5e9a9871fdfb63b475c5ef57585689e3df621d416959419c58528527a4efcccf`, `tests/test_capture.py`
+`83a7b1ae12068a7a5cde446c71c05ebee2a92ee168e14f5dd458915d43f07fb9`.
+
+### Suites, `ruff`, `mypy` y procesos
+
+`agentic_code` **296 passed** (base `296` de la entrada `(d)`: la reescritura del caso no añade ni
+quita casos, cambia lo que afirma). `ruff` sobre los tres ficheros tocados: **All checks passed**.
+`mypy` sobre los dos fuentes: **Success: no issues found in 2 source files**. `agentic_runtime` no se
+toca en este pago. Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni corridas ni
+tocadas (acuerdo de fase).
+
+### Barrido de comentarios
+
+`D-23` / `D-58`: los tres ficheros quedan sin comentarios. Las citas del canónico viven en el
+docstring del test reescrito, única excepción del § 4.
+
+### Lo que NO deroga
+
+`D-08` intacto y aplicado dos veces: el orden y los `errors[]` salen del fuente de A leído entero, no
+de deducir. `D-65` intacto: el catálogo cerrado de `subtype` y el reparto cola→`success`/
+`error_during_execution` siguen en pie; lo que se corrige es la precedencia del adjunto. `D-66`
+intacto: `end_reason: "aborted"` y `abort_reason` sobreviven al tope, que es lo que hace que el corte
+del usuario siga siendo legible. `D-12·b`, `D-15`, `D-21`, `D-22`, `D-49`, `D-56`, `D-62`, `D-63`,
+`D-64`, `D-67` intactos.
+
+### Abierto
+
+`FIND-CODE-ABORT-TOOLS-1` pasa al frente (censo `(e)`): el ESC en fase de tools que agota la gracia
+cae al `kill` duro sin `AbortEvent`, y el siguiente movimiento ahí es **leer A antes de proponer
+forma**. Detrás, `FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `FIND-CODE-TODO-1`. Sin cambio:
+`5.b` del censo (carencias del registro `result`: `num_turns`, `duration_ms`/`duration_api_ms`,
+`total_cost_usd`, `permission_denials`, `modelUsage`, `error_max_budget_usd`,
+`error_max_structured_output_retries`), `DEUDA-BEDROCK-ABORT-1`, la calibración de `counted`
+(2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, y `P1` de
+`PLAN-OPTIMIZACION-TUI.md`.
