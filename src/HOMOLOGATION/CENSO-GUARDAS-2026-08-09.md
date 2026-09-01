@@ -606,6 +606,57 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-31 (d) · FIND-CODE-ABORT-TERM-1 · pagado en parte, forma REABIERTA
+
+**Pagado y en el árbol** (`agentic_code`, sin commitear al abrir esta entrada):
+`capture.py` clasifica por la cola de la transcripción y no por el Terminal del bucle:
+`_classify(status, snapshot)` rinde `error_during_execution` con `errors[]` y **sin clave
+`result`**, `error_max_turns`, o `success` con `is_error = (tail_origin == "model_error")`.
+`streaming.py` gana `tail` / `tail_origin` y `result_successful`, homólogos de
+`isResultSuccessful` (`utils/queryHelpers.ts:56-94`). Los `subtype` inventados
+`error_aborted` / `error_failed` / `error_killed` desaparecen: el catálogo cerrado es
+`success`, `error_during_execution`, `error_max_turns`, `error_max_budget_usd`,
+`error_max_structured_output_retries` (`entrypoints/sdk/coreSchemas.ts:1407-1451`).
+Suite `296 passed` (base `293`), `ruff` limpio y `mypy` `Success` sobre los cuatro ficheros.
+E2E contra modelo local en fase de STREAMING verificado: cierra
+`{"subtype":"error_during_execution","is_error":true,"end_reason":"aborted",
+"errors":["[ede_diagnostic] tail=user_text tail_origin=interrupt …"]}` sin clave `result`.
+
+**Acreditación `D-12·b`**: 6 inyecciones → 5 rojas, 1 verde (`M2`, orden de ramas en
+`_classify`). Publicado como falso negativo; ver abajo por qué no lo era.
+
+**REABIERTO — el orden de `_classify` está invertido respecto al canónico.**
+`error_max_turns` no lo decide la cola: se emite en `QueryEngine.ts:842-874` al recibir el
+adjunto `max_turns_reached` **dentro del bucle de mensajes**, con `return` inmediato, o sea
+ANTES del `isResultSuccessful` de `QueryEngine.ts:1082`. Y `query.ts:1508-1514` emite ese
+adjunto **también en la rama de aborto en tools**, que retorna `{reason:'aborted_tools'}`
+(`query.ts:1515`). Luego en A un turno abortado que cruza el tope sale `error_max_turns`.
+Consecuencias a pagar en el paso siguiente:
+1. En `_classify`, la rama `end_reason == "max_turns"` va ANTES del rechazo por cola.
+2. La guarda `if self._end_reason != "aborted"` de `streaming.py:274` suprime un `max_turns`
+   que el canónico sí honra; se retira o se separa del `end_reason`.
+3. `test_max_turns_only_wins_when_the_tail_is_successful` (`tests/test_capture.py:145`)
+   afirma el criterio contrario en el caso `tope_abortado`: se REESCRIBE con el criterio
+   canónico, no se ablanda.
+4. `M2` deja de ser falso negativo: era mi criterio el equivocado, no el mutador.
+
+**5.b · Carencias reales, no pagadas aquí y registradas en NINGÚN otro sitio** (verificado
+contra este censo, `VALIDACION-AGENTIC-CODE.md` y `SEPARACION/DECISIONES.md`): el registro
+`result` de `agentic_code` no lleva `num_turns`, `duration_ms`, `duration_api_ms`,
+`total_cost_usd`, `permission_denials` ni `modelUsage`, y no existen los `subtype`
+`error_max_budget_usd` (`QueryEngine.ts:981-1001`) ni
+`error_max_structured_output_retries` (`QueryEngine.ts:1024-1046`). `is_error` sí queda
+pagado en este paso.
+
+**Pendiente bloqueado**: la evidencia E2E de la fase de TOOLS (`abort.tool_use: true`,
+`ABORTED_TOOLS`) se canceló y no se puede rehacer hasta restaurar la GPU. El overlay
+`/usr/lib/wsl/lib` quedó con las libs de usuario 610.57.01 mientras Windows pasó a 616.56;
+`llama-server` cayó a CPU. Se arregla con `wsl --shutdown`, que mata la sesión.
+
+**Declarado**: `local_catalog.py` fija `base_url` con `localhost`, que no resuelve contra un
+`llama-server` sólo-IPv4; sorteado únicamente en el arnés de scratch, NO parcheado en el repo.
+
+
 ### 2026-08-29 (b) — `D-56` DERIVADO: el contador mudo deja de escribir un 0, y dice de dónde viene
 
 Palabra del usuario: `ningun cierre, trabajamos ya y luego que se prueba y se confirma recien se
