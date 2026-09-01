@@ -606,6 +606,46 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-08-31 (e) · E2E de fase de TOOLS · PAGADO, y abre `FIND-CODE-ABORT-TOOLS-1`
+
+Restaurada la GPU (`wsl --shutdown`; `llama-server` en `:8080`, RTX 5080), se rehace el E2E
+que quedó bloqueado en `(d)`. Arnés de scratch `esc1_e2e_tools.py` (`STATE`, `TRAS`,
+`PROMPT`): reproduce ESC como lo hace la TUI —`operation.cancel()` sobre el turno
+(`repl.py:290-296`), no `runtime.cancel` directo— colgado del primer `ToolCallEvent` más
+`TRAS`. Tool de corte: `Sleep`, que no consulta `ctx.stop` (`native/sleep.py:44`) y por eso
+fija la duración de la fase de tools sin depender del shell. Dos mitades:
+
+**Mitad canónica — la evidencia que faltaba** (`Sleep(3)`, `TRAS=0.5`, corte a `t+21.6`,
+tool cerrando a `t+24.1`, dentro de la gracia de 5 s de `cancel`). El bucle reentra por
+arriba con `_aborted(ctx)` y sale por `ABORTED_TOOLS` (`agent_loop.py:427-438`):
+`ToolResultEvent` normal → `MessageEvent(origin=interrupt)` con
+`INTERRUPT_MESSAGE_FOR_TOOL_USE` → `AbortEvent(reason=turn_cancelled, tool_use=True, turn=1)`.
+Registro: `{"subtype":"error_during_execution","is_error":true,"status":"completed",
+"end_reason":"aborted","abort_reason":"turn_cancelled"}`, sin clave `result` y con
+`[ede_diagnostic] tail=user_text tail_origin=interrupt end_reason=aborted
+stop_reason=tool_calls`. `abort.tool_use: true` y `ABORTED_TOOLS` quedan acreditados contra
+modelo real.
+
+**Mitad que abre hallazgo — `FIND-CODE-ABORT-TOOLS-1`, ABIERTO** (`Sleep(20)`, `TRAS=1`,
+corte a `t+21.7` con la tool corriendo hasta `t+40.7`). La gracia expira a `t+26.7` y
+`LocalAgentRuntime.cancel` cae al `kill` duro (`execution/local/runtime.py:212-214`). Medido:
+**no se emite `AbortEvent`**, y el registro sale `{"subtype":"error_during_execution",
+"status":"killed","end_reason":null,"abort_reason":null}` con
+`tail=assistant_text tail_origin=assistant`. O sea: el consumidor **no puede distinguir un
+ESC en fase de tools de una caída**, y `abort_tool_use` es `false` justo en el caso que sí es
+aborto en tools. Causa medida: `ToolDispatcher._run` (`tools/dispatcher.py:75-78`) hace
+`asyncio.wait_for(tool.execute(...), timeout)` sin correr carrera contra `ctx.stop.wait()`,
+así que el canal de espera que `FIND-CODE-ESC-2` construyó en `contracts/abort.py` **sigue
+sin consumidor en la fase de tools** —lo que aquel paso arregló fue el `await` del stream—.
+**Pendiente antes de proponer nada (`D-08`):** leer en A cómo se corre esa carrera
+(`query.ts` en torno a `:1508-1515` y el sitio donde A ejecuta la tool) y sólo entonces
+enunciar la conducta. No se toca fuente en esta ventana.
+
+**Al margen, medido:** la carencia declarada en `(d)` sobre `local_catalog.py` **no
+reproduce hoy**: `localhost` resuelve sólo a `127.0.0.1` y `llama-server` responde 200 por
+ese nombre, así que el arnés corrió con el `base_url` del repo, sin rodeo. La declaración se
+mantiene —depende del entorno, no del código— pero deja de estar sorteada.
+
 ### 2026-08-31 (d) · FIND-CODE-ABORT-TERM-1 · pagado en parte, forma REABIERTA
 
 **Pagado y en el árbol** (`agentic_code`, sin commitear al abrir esta entrada):
@@ -648,7 +688,8 @@ contra este censo, `VALIDACION-AGENTIC-CODE.md` y `SEPARACION/DECISIONES.md`): e
 `error_max_structured_output_retries` (`QueryEngine.ts:1024-1046`). `is_error` sí queda
 pagado en este paso.
 
-**Pendiente bloqueado**: la evidencia E2E de la fase de TOOLS (`abort.tool_use: true`,
+**Pendiente bloqueado** — ~~vigente~~ **PAGADO el 2026-08-31, ver `(e)`**: la evidencia E2E de
+la fase de TOOLS (`abort.tool_use: true`,
 `ABORTED_TOOLS`) se canceló y no se puede rehacer hasta restaurar la GPU. El overlay
 `/usr/lib/wsl/lib` quedó con las libs de usuario 610.57.01 mientras Windows pasó a 616.56;
 `llama-server` cayó a CPU. Se arregla con `wsl --shutdown`, que mata la sesión.
