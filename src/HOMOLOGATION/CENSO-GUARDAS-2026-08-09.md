@@ -606,6 +606,50 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-09-02 (g) · El marcador vuelve a mandar: `EMBUDO-FASE-A.md`, 5 filas de 16
+
+Ventana de **cero mutaciones de fuente**. Encargo del usuario: el trabajo se había convertido en
+«apareció esto, apareció lo otro» sin cerrar nada, y sin fecha visible de fin. La causa no es la
+cola: es que **el criterio de fin dejó de estar delante**. Se recupera y se cuenta.
+
+**El marcador no había que construirlo.** Es `HOMOLOGATION/EMBUDO-FASE-A.md`, dos columnas
+—`elige` (la tool gana los 4 casos que son suyos) y `cierra` (tras su llamada no hace falta otra
+tool para afirmar lo que su resultado debía afirmar)—, **16 filas** que cubren las 19 tools del
+embudo (`Config`, `Sleep` y `ToolSearch` quedan fuera; la familia `Task` es fila única de seis).
+
+**Estado real, verificado en git y no de memoria** (último commit que lo movió: `21123f8`,
+2026-08-25; desde entonces **ninguna ronda** en ninguno de los dos repos):
+
+| | filas |
+|---|---|
+| cerradas 2/2 | `write_file` · `read_file` · `glob` · `WebSearch` · `WebFetch` |
+| media | `grep` (`elige` ok, falta `cierra`) |
+| a cero | `bash` · `TodoWrite` · `Edit` · familia `Task` · `AskUserQuestion` |
+
+**Lo que falta, contado: 11 casillas** (`grep·cierra` + cinco filas × 2), cada una = una corrida de
+4 rondas orgánicas con enunciado de grado 1 contra modelo real. Ése es el número que faltaba, y es
+finito.
+
+**Regla que se restablece, y es la que se incumplió:** desde aquí sólo se trabaja lo que mueve una
+casilla del marcador. Todo lo demás se declara medido y **no se abre**. Un desvío se paga sólo si
+bloquea la casilla en curso.
+
+**`FIND-CODE-ABORT-BG-1` — APARCADO como carencia medida, sin trabajo asociado.** Nunca fue un fix:
+en B no hay avería. `bash` ejecuta, y desde `D-69` el aborto mata el árbol de procesos por cualquier
+razón (`tools/exec_env.py::_collect`). Lo que B no tiene es el *backgrounding* de A
+(`ShellCommand.background()`) ni su exención de `USER_INTERRUPT` (`#abortHandler:186-193`), y esa
+exención **no tiene productor**: en `agentic_code` nadie levanta `USER_INTERRUPT` —teclear durante
+un turno **encola** (`repl.py:197`), Esc/Ctrl+C va a `cancel_active_turn()` → `TURN_CANCELLED`
+(`execution/local/runtime.py:196`), `registry.kill()` a `AGENT_KILLED` y el reloj a `TIMEOUT`—.
+Construir la exención habría sido construir mecanismo para un caso que el producto no produce.
+Queda declarado frente a A y fuera de la cola.
+
+**Declarados y NO abiertos** (siguen medidos donde están escritos, ninguno mueve casilla):
+`FIND-RT-COMPACT-EVT-1` · `FIND-RT-TOOLINPUT-1` · `5.b` de este §5 · `DEUDA-BEDROCK-ABORT-1` ·
+calibración de `counted` · `FIND-GOOGLE-CASING` · `cache_write_1h` · `P1` de
+`PLAN-OPTIMIZACION-TUI.md` · `base_url` con `localhost` en `local_catalog.py`. `FIND-CODE-TODO-1`
+**no** entra en esta lista: es la fila `TodoWrite` del marcador y se paga cuando toque su casilla.
+
 ### 2026-09-01 (f) · FIND-CODE-ABORT-TERM-1 · CERRADO, y `M2` reacreditada en rojo
 
 Cumplidos los cuatro puntos que `(d)` dejó a pagar, en su orden. Detalle en
