@@ -2793,3 +2793,32 @@ Retoma: `FIND-CODE-ABORT-TERM-1` al frente, y detrás `FIND-RT-COMPACT-EVT-1`, `
 y `FIND-CODE-TODO-1`. Siguen abiertos: `DEUDA-BEDROCK-ABORT-1` (arriba), la calibración de `counted`
 (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, y `P1` de
 `PLAN-OPTIMIZACION-TUI.md`.
+
+## § 5 · addendum 2026-09-02 — `FIND-CODE-ABORT-TOOLS-1` pagado (`D-69`)
+
+El ESC en fase de tools ya no depende de ningún reloj. Medido antes de tocar nada: la gracia de 5 s
+de `D-66` no era corta, es que el mecanismo **no llegaba al hijo** — `run_shell` no recibía señal,
+`_task_registry.kill` cancela la task de asyncio y nunca el proceso del SO, y el dispatcher sólo
+miraba `ctx.stop.aborted` **antes** de arrancar. En A corta quien sostiene el proceso, al oír la
+señal (`ShellCommand.ts:264-267`, `:337-343`, con `detached: true` en `Shell.ts:334`), y no hay
+cronómetro en ningún punto (`toolExecution.ts:1206-1222`).
+
+Inyectado: `stop` a lo largo del Protocol `ToolExecEnvironment` y sus cuatro caminos, spawn con
+`start_new_session=True`, `_collect` corriendo `communicate()` contra `stop.wait()`,
+`_kill_process_tree` con `killpg(pgid, SIGKILL)`; `_race` en el dispatcher; el cable en `bash.py`; y
+la **retirada** de la gracia en `LocalAgentRuntime.cancel`, que ahora alza la señal y devuelve.
+
+Acreditación `D-12·b`: seis mutaciones, seis rojas, revert desde copia propia verificada por
+`sha256` con purga de `.pyc` (`D-62`) en cada pasada. `M6` (quitar el `stop=` de `bash.py`) salió
+**verde** a la primera: la batería medía el kill por cancelación de la corrutina, no el cable. Se
+añadió el caso que lo mide y `M6` se repitió en rojo.
+
+`agentic_code` **301 passed**, `ruff` limpio en los cinco ficheros, `mypy` limpio en los cuatro
+fuentes, sin procesos supervivientes. Sintéticas de `agentic_runtime` ni corridas ni tocadas.
+
+Retoma: `FIND-CODE-ABORT-BG-1` al frente — el backgrounding de comandos y la exención de
+`USER_INTERRUPT` que A hace en `ShellCommand.ts:186-193` / `:349-366`, mandado construir por el
+usuario (`D-22`) y **no** declarado como divergencia. Detrás, `FIND-RT-COMPACT-EVT-1`,
+`FIND-RT-TOOLINPUT-1`, `FIND-CODE-TODO-1`. Sin cambio: `5.b`, `DEUDA-BEDROCK-ABORT-1`, la
+calibración de `counted`, `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, `P1` de
+`PLAN-OPTIMIZACION-TUI.md` y el `base_url` con `localhost` de `local_catalog.py`.

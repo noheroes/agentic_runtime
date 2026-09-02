@@ -307,7 +307,12 @@ Important:
         if cwd_error is not None:
             return ToolResult.error(self.name, cwd_error)
         try:
-            result = await exec_env.run_shell(command, cwd=cwd, timeout=self.timeout_seconds)
+            result = await exec_env.run_shell(
+                command,
+                cwd=cwd,
+                timeout=self.timeout_seconds,
+                stop=getattr(ctx, "stop", None),
+            )
             tracked = getattr(result, "cwd", None)
             if getattr(ctx, "is_subagent", False):
                 tracked = None

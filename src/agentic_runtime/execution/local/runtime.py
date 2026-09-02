@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300.0
-_DEFAULT_CANCEL_GRACE = 5.0
 
 
 def _last_assistant_text(messages: list[Any]) -> str:
@@ -83,7 +82,6 @@ class LocalAgentRuntime:
         session_repo: SessionRepo[Any] | None = None,
         context_budget: ContextBudget | None = None,
         default_timeout: float = _DEFAULT_TIMEOUT,
-        cancel_grace: float = _DEFAULT_CANCEL_GRACE,
     ) -> None:
         self._model_caller = model_caller
         self._tool_registry = tool_registry
@@ -116,7 +114,6 @@ class LocalAgentRuntime:
         self._session_repo = session_repo
         self._context_budget = context_budget
         self._default_timeout = default_timeout
-        self._cancel_grace = cancel_grace
 
     @property
     def runtime_id(self) -> str:
@@ -198,6 +195,14 @@ class LocalAgentRuntime:
     async def cancel(
         self, task_id: str, *, reason: AbortReason = AbortReason.TURN_CANCELLED
     ) -> bool:
+        """Alza la señal y devuelve. No espera, no cronometra, no mata la task.
+
+        El plazo de gracia que había aquí (`D-66`) era un `5.0` mío arbitrando algo cuya
+        duración se desconoce, y además mataba lo que no tocaba: `_task_registry.kill`
+        termina la task de asyncio, nunca el proceso del SO que la tool sostiene. A no
+        cronometra el aborto en ningún punto; corta quien tiene el proceso, al oír la
+        señal (`ShellCommand.ts:186-193`). El corte real vive ahora ahí.
+        """
         rec = self._task_registry.get(task_id)
         if rec is None:
             return False
@@ -208,16 +213,6 @@ class LocalAgentRuntime:
             return self._task_registry.kill(task_id)
         if not stop.aborted:
             abort(reason)
-        try:
-            await asyncio.wait_for(asyncio.shield(asyncio_task), self._cancel_grace)
-        except (TimeoutError, asyncio.TimeoutError):
-            return self._task_registry.kill(task_id)
-        except asyncio.CancelledError:
-            if asyncio_task.cancelled():
-                return True
-            raise
-        except Exception:  # noqa: BLE001
-            return True
         return True
 
     def result(self, task_id: str) -> str | None:

@@ -14,11 +14,16 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import signal
 import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+from ..contracts.abort import AbortSignal
+
+ABORTED_RETURNCODE = 137
 
 
 class ExecEnvironmentUnavailable(RuntimeError):
@@ -88,6 +93,84 @@ def _read_tracked_cwd(path: str | None) -> str | None:
     return tracked or None
 
 
+def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Mata el ÁRBOL del comando, no el proceso suelto, y sin esperar a nadie.
+
+    Homólogo de `ShellCommand.ts:337-343` (`treeKill(pid, 'SIGKILL')`), que A puede
+    permitirse porque spawnea `detached: true` (`Shell.ts:334`, con su razón escrita al
+    lado: «Don't pass the signal - we'll handle termination ourselves with tree-kill»).
+    Aquí el equivalente es `start_new_session=True` en el spawn: sin él, `killpg` no
+    tendría grupo que matar y los nietos —`sleep 30 &`, un `npm` que arrancó hijos—
+    sobrevivirían al comando que los lanzó.
+
+    `proc.kill()` es el degradado para plataformas sin `killpg`, y también la salida
+    cuando el hijo comparte grupo con nosotros: alcanza al shell y no a su descendencia,
+    que es peor, pero un `killpg` sobre el grupo propio sería un suicidio del host. Ese
+    caso sólo aparece si alguien retira el `start_new_session` del spawn, y entonces el
+    fallo debe ser una carencia visible, no un `SIGKILL` al proceso que ejecuta.
+    """
+    if proc.returncode is not None:
+        return
+    killpg = getattr(os, "killpg", None)
+    if killpg is not None:
+        try:
+            grupo = os.getpgid(proc.pid)
+            if grupo != os.getpgid(0):
+                killpg(grupo, signal.SIGKILL)
+                return
+        except (OSError, AttributeError):
+            pass
+    with suppress(OSError):
+        proc.kill()
+
+
+async def _collect(
+    proc: asyncio.subprocess.Process,
+    *,
+    timeout: float,
+    stop: AbortSignal | None,
+) -> tuple[str, int]:
+    """Espera al comando compitiendo contra la señal de aborto, y mata lo que quede vivo.
+
+    El dueño del proceso es quien escucha la señal, como en A (`ShellCommand.ts:264-267`
+    registra el listener de `abort` en el objeto que sostiene el `ChildProcess`). Que el
+    aborto llegue por señal y no por cancelación de la corrutina es lo que hace que el
+    hijo muera aunque nadie llegue a procesar esa cancelación.
+
+    El `finally` cubre el tercer camino —que a esta corrutina la cancelen desde fuera—
+    porque una cancelación que deja el proceso vivo es exactamente el defecto que se paga
+    aquí: mueve el problema en vez de cerrarlo.
+    """
+    communicate = asyncio.ensure_future(proc.communicate())
+    watch = asyncio.ensure_future(stop.wait()) if stop is not None else None
+    waiters: set[asyncio.Future[Any]] = {communicate}
+    if watch is not None:
+        waiters.add(watch)
+    try:
+        done, _ = await asyncio.wait(
+            waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+        )
+        if communicate in done:
+            stdout, _ = communicate.result()
+            code = proc.returncode if proc.returncode is not None else -1
+            return stdout.decode(errors="replace"), code
+        _kill_process_tree(proc)
+        harvested = b""
+        with suppress(Exception):
+            harvested, _ = await communicate
+        if not done:
+            raise TimeoutError(
+                f"el comando excedió {timeout}s; su árbol de procesos fue terminado"
+            )
+        return harvested.decode(errors="replace"), ABORTED_RETURNCODE
+    finally:
+        if watch is not None and not watch.done():
+            watch.cancel()
+        if not communicate.done():
+            _kill_process_tree(proc)
+            communicate.cancel()
+
+
 @dataclass
 class ShellResult:
     """Salida de un comando shell: stdout+stderr combinados y código de retorno.
@@ -107,9 +190,20 @@ class ToolExecEnvironment(Protocol):
     """Ejecuta un comando shell en algún entorno (host / sandbox / remoto)."""
 
     async def run_shell(
-        self, command: str, *, cwd: str | None = None, timeout: float
+        self,
+        command: str,
+        *,
+        cwd: str | None = None,
+        timeout: float,
+        stop: AbortSignal | None = None,
     ) -> ShellResult:
         """Ejecuta un comando de shell, opcionalmente en `cwd`.
+
+        **`stop` es la costura del aborto** (`FIND-CODE-ABORT-TOOLS-1`). El backend que
+        sostiene el proceso es el único que puede matarlo, así que es él quien recibe la
+        señal, igual que en A: `Shell.ts:333` decide expresamente NO delegar la
+        terminación en el `AbortSignal` del spawn y hacerla él con `tree-kill`. `None` =
+        el llamante no tiene señal que ofrecer, y entonces sólo arbitra el `timeout`.
 
         **`cwd` es defecto de CONTRATO saldado** (problema #1 del listado de
         `VALIDACION-AGENTIC-CODE.md`): sin él, el comando heredaba el cwd del PROCESO
@@ -123,7 +217,12 @@ class ToolExecEnvironment(Protocol):
         ...
 
     async def run_argv(
-        self, argv: list[str], *, cwd: str | None = None, timeout: float
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        timeout: float,
+        stop: AbortSignal | None = None,
     ) -> ShellResult:
         """Ejecuta un **argv** (sin shell) en el mismo entorno que `run_shell`.
 
@@ -144,16 +243,23 @@ class LocalExecEnvironment:
     """Default: corre el comando como subproceso del host, in-process."""
 
     async def run_shell(
-        self, command: str, *, cwd: str | None = None, timeout: float
+        self,
+        command: str,
+        *,
+        cwd: str | None = None,
+        timeout: float,
+        stop: AbortSignal | None = None,
     ) -> ShellResult:
-        # Rastreo del cwd calcado de A (`bashProvider.ts:180-186`): `eval <comando> &&
-        # pwd -P >| <tmp>`. Los dos detalles son portantes:
-        #   · `eval` con el comando ENTERO citado — sin él, `&& pwd` se ata sólo al
-        #     último tramo de un `a; b` o `a || b` y el rastreo mentiría.
-        #   · `&&` — si el comando falla NO se escribe nada, así que el llamante
-        #     conserva el cwd anterior en vez de adoptar uno a medias. El código de
-        #     salida sigue siendo el del comando, porque `&&` cortocircuita.
-        # `pwd -P` (físico) por consistencia con lo que ve el proceso, igual que A.
+        """Subproceso del host, en **sesión propia** para que su árbol sea matable.
+
+        Rastreo del cwd calcado de A (`bashProvider.ts:184-186`): `eval <comando> &&
+        pwd -P >| <tmp>`. Los dos detalles son portantes: `eval` con el comando ENTERO
+        citado —sin él, `&& pwd` se ata sólo al último tramo de un `a; b` o `a || b` y el
+        rastreo mentiría—, y el `&&` —si el comando falla NO se escribe nada, así que el
+        llamante conserva el cwd anterior en vez de adoptar uno a medias; el código de
+        salida sigue siendo el del comando porque `&&` cortocircuita—. `pwd -P` (físico)
+        por consistencia con lo que ve el proceso, igual que A.
+        """
         track_path: str | None = None
         command_string = command
         if cwd is not None:
@@ -168,11 +274,12 @@ class LocalExecEnvironment:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=cwd,
+                start_new_session=True,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            output, returncode = await _collect(proc, timeout=timeout, stop=stop)
             return ShellResult(
-                output=stdout.decode(errors="replace"),
-                returncode=proc.returncode if proc.returncode is not None else -1,
+                output=output,
+                returncode=returncode,
                 cwd=_read_tracked_cwd(track_path),
             )
         finally:
@@ -181,19 +288,22 @@ class LocalExecEnvironment:
                     os.unlink(track_path)
 
     async def run_argv(
-        self, argv: list[str], *, cwd: str | None = None, timeout: float
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        timeout: float,
+        stop: AbortSignal | None = None,
     ) -> ShellResult:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
+            start_new_session=True,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return ShellResult(
-            output=stdout.decode(errors="replace"),
-            returncode=proc.returncode if proc.returncode is not None else -1,
-        )
+        output, returncode = await _collect(proc, timeout=timeout, stop=stop)
+        return ShellResult(output=output, returncode=returncode)
 
 
 class BwrapExecEnvironment:
@@ -205,7 +315,6 @@ class BwrapExecEnvironment:
     Los binds de sistema son de solo lectura. El comando se pasa verbatim a `sh -c`.
     """
 
-    # Directorios de sistema montados ro por default; ajustables por el consumidor.
     _DEFAULT_RO_BINDS = ("/usr", "/bin", "/lib", "/lib64", "/etc")
 
     def __init__(
@@ -255,7 +364,12 @@ class BwrapExecEnvironment:
         )
 
     async def run_shell(
-        self, command: str, *, cwd: str | None = None, timeout: float
+        self,
+        command: str,
+        *,
+        cwd: str | None = None,
+        timeout: float,
+        stop: AbortSignal | None = None,
     ) -> ShellResult:
         """Honra `cwd` traduciéndolo al path de DENTRO del sandbox (`_inner_cwd`).
 
@@ -266,25 +380,37 @@ class BwrapExecEnvironment:
         host sin traducción inversa. Declararlo es preferible a devolver un path que el
         llamante adoptaría como si fuera del host.
         """
-        return await self._spawn(self._build_argv(command, cwd), timeout)
+        return await self._spawn(self._build_argv(command, cwd), timeout, stop)
 
     async def run_argv(
-        self, argv: list[str], *, cwd: str | None = None, timeout: float
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        timeout: float,
+        stop: AbortSignal | None = None,
     ) -> ShellResult:
         """Igual que `run_shell` pero sin `sh -c`: el argv entra **verbatim** al sandbox."""
-        return await self._spawn(self._sandbox_prefix(self._inner_cwd(cwd)) + argv, timeout)
+        return await self._spawn(
+            self._sandbox_prefix(self._inner_cwd(cwd)) + argv, timeout, stop
+        )
 
-    async def _spawn(self, argv: list[str], timeout: float) -> ShellResult:
+    async def _spawn(
+        self, argv: list[str], timeout: float, stop: AbortSignal | None = None
+    ) -> ShellResult:
+        """`--die-with-parent` no basta: el padre es el proceso Python, que sigue vivo.
+
+        El aborto tiene que matar el grupo igual que en el backend local, así que este
+        spawn también abre sesión propia.
+        """
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return ShellResult(
-            output=stdout.decode(errors="replace"),
-            returncode=proc.returncode if proc.returncode is not None else -1,
-        )
+        output, returncode = await _collect(proc, timeout=timeout, stop=stop)
+        return ShellResult(output=output, returncode=returncode)
 
 
 __all__ = [

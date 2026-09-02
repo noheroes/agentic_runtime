@@ -4948,3 +4948,122 @@ forma**. Detrás, `FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `FIND-CODE-TOD
 `error_max_structured_output_retries`), `DEUDA-BEDROCK-ABORT-1`, la calibración de `counted`
 (2026-09-01), `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, y `P1` de
 `PLAN-OPTIMIZACION-TUI.md`.
+
+---
+
+## D-69 · `FIND-CODE-ABORT-TOOLS-1`: el aborto lo corta quien sostiene el proceso, y no lo cronometra nadie
+
+**2026-09-02.** Fase `agentic_code` · estabilización. Cierra `FIND-CODE-ABORT-TOOLS-1`, que `D-68`
+§*Abierto* puso al frente de la cola.
+
+- **Palabra del usuario**: *«pero si la homologacion no quedo completa, porque el backgrounding de
+  comandos era necesaria, se tiene que hacer. y apruebo los 3 puntos anteriores.»* — aprueba las tres
+  inyecciones y **rechaza** mi recomendación de declarar la exención `reason === 'interrupt'` de A
+  como divergencia: el mecanismo que falta se construye (`D-22`).
+
+### El defecto medido: la gracia no era corta, el mecanismo no llegaba al hijo
+
+`D-66` había puesto en `LocalAgentRuntime.cancel` un plazo de gracia de `5.0` s rematado con
+`_task_registry.kill`. Medido, el defecto no era la duración:
+
+1. `run_shell` **no recibía señal alguna**: esperaba con `wait_for(proc.communicate())`. Con ESC en
+   fase de tools, la corrutina se soltaba y el proceso del SO **seguía vivo**.
+2. `_task_registry.kill` cancela la *task* de asyncio, **nunca** el proceso que la tool sostiene.
+3. El dispatcher sólo consultaba `ctx.stop.aborted` **antes** de arrancar; dentro del `await` no
+   escuchaba nadie, así que el corte tenía que arbitrarlo un reloj externo.
+
+Recalibrar la gracia habría mudado el problema de sitio: el proceso sobrevive igual.
+
+### Lo que dicta A (`D-08`, leído 1→EOF)
+
+- `ShellCommand.ts:264-267` — el objeto que sostiene el `ChildProcess` **registra él mismo** el
+  listener de `abort`.
+- `ShellCommand.ts:337-343` — `#doKill` hace `treeKill(pid, 'SIGKILL')`: mata el **árbol**.
+- `Shell.ts:333-334` — spawnea `detached: true` y con su razón escrita al lado: *«Don't pass the
+  signal - we'll handle termination ourselves with tree-kill»*.
+- `toolExecution.ts:1206-1222` — `await tool.call(...)` **pelado**: A no cronometra el aborto en
+  ningún punto; la señal viaja en el `toolUseContext` y la tool corta sola. La interrupción vuelve
+  como un `tool_result` ordinario (`:1694-1737`).
+
+### Lo inyectado
+
+- `tools/exec_env.py` — `stop: AbortSignal | None = None` en el Protocol y en los cuatro caminos
+  (`LocalExecEnvironment.run_shell`/`run_argv`, `BwrapExecEnvironment.run_shell`/`run_argv`/`_spawn`);
+  spawn con `start_new_session=True` (homólogo de `detached: true`); `_collect`, que corre
+  `proc.communicate()` **contra** `stop.wait()` en `asyncio.wait(FIRST_COMPLETED)` y cubre en el
+  `finally` el tercer camino —que a la corrutina la cancelen desde fuera—; `_kill_process_tree`, con
+  `os.killpg(pgid, SIGKILL)` (homólogo de `treeKill`) y `ABORTED_RETURNCODE = 137`.
+- `tools/dispatcher.py` — `_race`: la señal compite con la ejecución. Rinde el `ToolResult.aborted`
+  que ya existía, con su `reason`, y **no espera** a que la cancelación termine: matar al hijo es del
+  backend, que ya oyó la misma señal.
+- `tools/native/bash.py` — cablea `stop=getattr(ctx, "stop", None)` a `run_shell`.
+- `execution/local/runtime.py` — se **retira** la gracia de `D-66` (`_DEFAULT_CANCEL_GRACE`, el kwarg
+  `cancel_grace` y su atributo): `cancel()` alza la señal y devuelve.
+- `agentic_code/tests/test_abort_tools.py` — **nuevo**, cinco casos en el consumidor real (`D-15`),
+  con el criterio y las citas en el docstring (única excepción del § 4). El nieto (`sleep 120 &`) es
+  lo que mide: matar sólo al shell lo dejaría en pie.
+
+### Suicidio evitado, y declarado
+
+Sin `start_new_session`, `os.getpgid(proc.pid)` es el grupo **propio** y el `killpg` habría
+`SIGKILL`-eado al proceso que ejecuta. `_kill_process_tree` compara con `os.getpgid(0)` y degrada a
+`proc.kill()` — que alcanza al shell y no a su descendencia—: si alguien retira el
+`start_new_session`, el fallo debe ser una carencia visible, no un tiro en el pie.
+
+### Acreditación (`D-12·b`) — seis mutaciones, seis rojas
+
+Copia propia de los cuatro fuentes en `mktemp -d` (`/tmp/homolog-abort-FcGHQW`), `sha256` idéntico al
+repo antes de mutar; revert desde esa copia con **purga de `.pyc`** en cada pasada (`D-62`), hash
+comprobado tras cada revert, y censo de procesos supervivientes tras cada ronda.
+
+| | mutación | rojo |
+|---|---|---|
+| M1 | sin `start_new_session` en el spawn local | el nieto sobrevive (2 casos) |
+| M2 | `_collect` sordo a la señal (`watch = None`) | el nieto sobrevive |
+| M3 | `_kill_process_tree` no mata | el nieto sobrevive (2 casos) |
+| M4 | `_race` sordo a la señal (`watch = None`) | no rinde `aborted` (2 casos) |
+| M5 | vuelve la gracia `5.0` + `kill` en `cancel()` | `5.005… < 1.0` |
+| M6 | `bash` deja de pasar `stop` | el nieto sobrevive |
+
+**`M6` salió verde en la primera pasada**: por el dispatcher el árbol muere igual, pero por la
+cancelación de la corrutina, que es el camino frágil —basta una tool que se trague el
+`CancelledError`—. No se aceptó como falso negativo: la prueba no medía el cable, así que se **añadió**
+el caso que lo mide (`BashTool.execute` en directo, sin dispatcher) y `M6` se repitió en rojo. Una
+inyección que ninguna prueba acredita es un superviviente, no una inyección.
+
+Hashes del estado sano: `tools/exec_env.py`
+`d075638de5fc57a52bef783c973dcaf216415928e52c642947b2d94ba0ab84eb`; `tools/dispatcher.py`
+`975e383347677571deda08ed4862656932c313c1a78918f638cb4eb9d9b6bbb6`; `tools/native/bash.py`
+`e7b2600ecc3f8c3e223216c85da67d4887991c55747aa55045f721694322dab2`;
+`execution/local/runtime.py` `a9cfacb49dad9539e11f445bbe6eea88f83a60d4f55b2a259f1e4277a277d854`.
+
+### Suites, `ruff`, `mypy` y procesos
+
+`agentic_code` **301 passed** (base `296` de `D-68` + los 5 casos nuevos). `ruff` sobre los cinco
+ficheros tocados: **All checks passed**. `mypy` sobre los cuatro fuentes: **Success: no issues found
+in 4 source files**. Sin procesos supervivientes al cierre (los que M3 dejó vivos a propósito se
+cazaron por pid, no por patrón). Sintéticas de `agentic_runtime` ni corridas ni tocadas (acuerdo de
+fase).
+
+### Lo que este pago NO cierra: el backgrounding
+
+A **exime** `reason === 'interrupt'` del kill (`ShellCommand.ts:186-193`) y en su lugar hace
+`background(taskId)` (`:349-366`), para que el modelo vea la salida parcial de un comando que sigue
+corriendo. B **no tiene** ese mecanismo, así que hoy `USER_INTERRUPT` mata como cualquier otra razón.
+Por palabra del usuario **no se declara como divergencia**: se construye (`D-22`), en su propio paso,
+y hasta entonces el kill uniforme es **provisional**, no la forma final.
+
+### Lo que NO deroga
+
+`D-66` queda **corregido en su mecanismo**: el `end_reason: "aborted"` y el `abort_reason` que pagó
+siguen intactos; lo que se retira es el plazo de gracia y el `kill` de la task, que medían y mataban
+lo que no tocaba. `D-08`, `D-12·b`, `D-15`, `D-21`, `D-22`, `D-49`, `D-56`, `D-62`…`D-65`, `D-67` y
+`D-68` intactos.
+
+### Abierto
+
+`FIND-CODE-ABORT-BG-1` (nuevo, al frente): construir el backgrounding de comandos y la exención de
+`USER_INTERRUPT`. Detrás, `FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `FIND-CODE-TODO-1`. Sin
+cambio: `5.b` del censo, `DEUDA-BEDROCK-ABORT-1`, la calibración de `counted`, `FIND-GOOGLE-CASING`,
+`cache_write_1h` sin consumidor real, `P1` de `PLAN-OPTIMIZACION-TUI.md` y el `base_url` con
+`localhost` de `local_catalog.py`.

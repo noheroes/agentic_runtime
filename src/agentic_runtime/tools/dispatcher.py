@@ -73,13 +73,56 @@ class ToolDispatcher:
         elif decision.updated_input is not None:
             validated = decision.updated_input
 
+        return await self._race(tool, validated, ctx, tool_name, effective_timeout)
+
+    @staticmethod
+    async def _race(
+        tool: Any,
+        validated: dict[str, Any],
+        ctx: ToolUseContext,
+        tool_name: str,
+        effective_timeout: float,
+    ) -> ToolResult:
+        """La señal de aborto compite con la ejecución, en vez de esperar a que termine.
+
+        `:43-44` sólo miraba `ctx.stop.aborted` ANTES de arrancar: una vez dentro del
+        `await`, nadie escuchaba, y el aborto tenía que arbitrarlo un reloj de fuera. A no
+        tiene ese reloj —`toolExecution.ts:1206-1222` es un `await tool.call(...)` pelado—
+        porque allí la señal viaja DENTRO del contexto y la tool corta sola. Esto es esa
+        misma escucha, puesta donde B puede ponerla.
+
+        La cancelación no se espera: matar al hijo es cosa del backend que lo sostiene
+        (`exec_env._collect`), que ya ha oído la misma señal. Esperar aquí a que la
+        corrutina termine de cancelarse volvería a colgar el turno con la tool sorda que
+        es justo el caso que se está pagando.
+        """
+        stop = getattr(ctx, "stop", None)
+        execution: asyncio.Future[ToolResult] = asyncio.ensure_future(
+            tool.execute(validated, ctx)
+        )
+        watch = asyncio.ensure_future(stop.wait()) if stop is not None else None
+        waiters: set[asyncio.Future[Any]] = {execution}
+        if watch is not None:
+            waiters.add(watch)
         try:
-            result: ToolResult = await asyncio.wait_for(
-                tool.execute(validated, ctx),
-                timeout=effective_timeout,
+            done, _ = await asyncio.wait(
+                waiters, timeout=effective_timeout, return_when=asyncio.FIRST_COMPLETED
             )
-            return result
-        except TimeoutError:
-            return ToolResult.timeout(tool_name)
+            if execution in done:
+                return execution.result()
+            if not done:
+                return ToolResult.timeout(tool_name)
+            return ToolResult.aborted(tool_name, reason=stop.reason() if stop else None)
         except Exception as exc:  # noqa: BLE001
             return ToolResult.error(tool_name, str(exc))
+        finally:
+            if watch is not None and not watch.done():
+                watch.cancel()
+            if not execution.done():
+                execution.cancel()
+                execution.add_done_callback(_drain)
+
+
+def _drain(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
