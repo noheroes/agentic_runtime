@@ -606,6 +606,160 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-09-03 (a) · El paso anunciado en `(h)`, APLICADO: ESC blando por el camino propio, duro sólo al segundo
+
+Se aplica entero el diseño que la entrada `(h)` dejó anunciado y sin tocar fuente. Dos fuentes y dos
+tests de `agentic_code`; `agentic_runtime` no se toca.
+
+**`driver.py`** — `TurnHandle(task_id, aborted)`, opcional en `dispatch_prompt` y sembrado justo tras
+`runtime.dispatch`. La rama de `CancelledError` **se salta el `runtime.cancel`** cuando el handle ya
+viene abortado: la señal la levantó el REPL, y repetirla sería el consumidor fabricando terminal.
+
+**`repl.py`** — `_execute` crea, pasa y libera el handle; en la rama de ÉXITO, si el handle está
+abortado, se anuncia `turno cancelado` y **no** se publica `last_capture_path`. `cancel_active_turn()`
+conserva su firma exacta y escala por estado: blando —levanta la señal y deja cerrar— mientras el turno
+vive y hay `task_id` sin abortar; duro en cualquier otro caso, incluida la segunda llamada. El camino
+forzado vive aparte como `_force_cancel_active_turn`, y por él entran EOF y `/exit`, que no pueden
+esperar a un motor sordo. Las tareas de aborto se recogen en el `finally` de `run()`.
+
+**Los dos dobles de test pasan a ser HONESTOS.** `SlowReplRuntime` y `CancellableQueuedRuntime` tenían
+`join` = `await asyncio.Event().wait()`, o sea un runtime que no cierra nunca: contra él, blando y duro
+son indistinguibles. Ahora su `cancel` emite `AbortEvent(reason="turn_cancelled", turn=1)` y libera el
+`join`, como hace el runtime real desde `D-69`. Las aserciones del test canónico (`test_repl.py:112-189`)
+**no se tocan**.
+
+**Hueco propio de la red de pruebas, hallado a mitad de trabajo y pagado antes de acreditar.** Con los
+dobles ya honestos, ninguna prueba existente distinguía un aborto blando de uno duro: una inyección que
+hiciera `cancel_active_turn` siempre dura quedaba **verde**. Se añaden tres detectores de conducta
+—`…esc_lets_the_turn_close_by_itself` (la historia interrumpida llega a `conversation`, que es la prueba
+de que el turno cerró por la rama de éxito y no fue arrancado de su `join`), `…second_esc_is_the_hard_escape`
+(el segundo ESC fuerza, y `cancelled == 1` prueba que el driver no repite la señal) y
+`…exit_does_not_wait_for_a_turn_that_ignores_the_signal` (`wait_for` con techo de 2 s)—.
+
+**`tests/test_driver.py`** — el test del turno interrumpido se **reescribe** con el criterio corregido
+de `(f)`/`(h)`, no se recupera el aparcado en scratch, que llevaba el criterio viejo (`killed`): cierre
+por la rama de éxito, `COMPLETED` puesto por quien abortó, `StreamMode.CANCELLED`, `end_reason:"aborted"`,
+`abort_reason:"turn_cancelled"`, `conversation.messages` con la historia interrumpida y el registro `result`
+del `.jsonl` en `completed` / `aborted` / `error_during_execution` / `is_error` / **sin clave `result`**.
+
+**Acreditación (`D-12·b`), 5 inyecciones → 5 rojas, 0 falsos positivos**, cada una revertida desde copia
+propia verificada por `sha256` con purga de `__pycache__` y `sha256sum -c` OK tras cada revert
+(`driver.py` `b46d94e9…`, `repl.py` `65a5f501…`, `test_repl.py` `b29c225f…`, `test_driver.py` `6ea1670b…`):
+`INY-1` `cancel_active_turn` siempre dura ⇒ 2 rojas · `INY-2` el driver no siembra `handle.task_id` ⇒ 3 ·
+`INY-3` la rama de `CancelledError` ignora `handle.aborted` ⇒ 2 (una es el test canónico, que llega al
+camino duro por el `/exit` inmediato) · `INY-4` la rama de éxito abortada no anuncia ⇒ 2 · `INY-5` la
+salida vuelve a la escalada blanda ⇒ 1 (`TimeoutError`).
+
+**Medido:** `agentic_code` **305 passed** (302 antes de los tres detectores), `ruff check src tests`
+limpio, sin procesos supervivientes. `mypy --strict` sobre los dos fuentes rinde **un** error
+—`repl.py:106`, `Returning Any` en `_record_compaction`, código no tocado—: medido contra la copia previa
+del árbol, donde sale idéntico en `:104`, luego es **preexistente** y la deuda neta por diff es cero.
+Sintéticas de `agentic_runtime` ni corridas ni tocadas.
+
+**Segunda ronda de la misma ventana: la red tiene que probar DOS casos, no uno.** La primera
+acreditación medía que la funcionalidad pedida está —el ESC blando cierra por el camino propio, el
+segundo escapa duro, el registro es el canónico—, pero del otro caso, *que el colateral no se
+produjo*, sólo cubría los flancos que pasan por el REPL: `/exit` sobre motor sordo sigue cancelando
+duro, el turno cancelado por su dueño sigue limpiando, y la cola sigue arrancando el prompt
+siguiente. El hueco: la guarda nueva es `handle is None or not handle.aborted` (`driver.py:113`) y
+el REPL **siempre** pasa handle, así que la rama `handle is None` —por la que entran `run_prompt` y
+`--print`— no la medía nada. Mutarla a `handle is not None and not handle.aborted` dejaba el árbol
+entero verde mientras el camino duro de siempre se rompía en silencio para `--print`.
+
+Pagado con un solo detector, `test_driver_hard_cancel_keeps_the_path_it_had_before_the_handle`:
+`dispatch_prompt` sin handle sobre un runtime sordo, cancelación del dueño, y se exige lo de antes
+del cambio —`cancel` llamado una vez, captura cerrada con el `KILLED` fabricado cuando el runtime no
+declara terminal, `CancelledError` propagado—. INY-6 (esa misma mutación) rinde **1 rojo y 0 falsos
+positivos**, y cae exactamente el detector nuevo. Revert desde copia propia verificada
+(`driver.py b46d94e9…`, `test_driver.py 44640400…`), `sha256sum -c` 2× OK y `__pycache__` purgado.
+Medidas sobre el árbol restaurado: **306 passed**, `ruff` limpio, sin supervivientes. Precisión sobre
+la cifra de `mypy` del párrafo anterior: el «un error» es el de los dos fuentes tocados; sobre todo
+`src` hay 11, todos en ficheros fuera del diff (`tui.py` y compañía), luego preexistentes.
+
+**Y el error de `mypy --strict` se paga, no se rotula.** Estaba declarado como preexistente y con
+deuda neta por diff cero, pero eso no es haberlo pagado. Origen único: `repl.py:50` declaraba
+`payload_recorder: Any | None`, luego `recorder.borrow(...)` era `Any` y devolverlo desde
+`_record_compaction` —tipada `AbstractContextManager[None]`— disparaba `no-any-return`. Se paga
+tipando el campo con lo que el sitio de construcción realmente pasa (`cli.py:211-215` arma un
+`PayloadRecorder` o `None`, y lo entrega en `:289`), no con un `cast` en la línea del retorno;
+`driver.dispatch_prompt` ya lo declaraba así. Dos líneas: el import y la anotación. Medido después:
+`mypy --strict` sobre los dos fuentes tocados **sin errores**, sobre todo `src` baja de 11 a 10, y
+los 10 que quedan están en ficheros fuera del diff (`tui.py` ×4, `transcript_browser.py` ×3,
+`terminal.py`, `suggestions.py`, `queue_view.py`) — deuda declarada, ajena a este cambio. Suite
+**306 passed**, `ruff` limpio.
+
+**El marcador sigue sin moverse.** `grep`·cierra continúa siendo la casilla más cercana; con esto queda
+pagado el desvío que la bloqueaba y se vuelve a él.
+
+### 2026-09-02 (h) · ESC se homologa por su propio camino: forma (b) elegida, y el puente del proveedor MEDIDO
+
+Ventana de **cero mutaciones de fuente**. `agentic_code` queda limpio y en verde
+(`tests/test_repl.py tests/test_driver.py` → 11 passed), sin procesos supervivientes.
+
+**El arreglo que había anunciado se retira: dos de sus tres partes eran erróneas.** Un
+`await runtime.join(task_id)` incondicional en la rama de `CancelledError` **cuelga el REPL**
+—el `join` no retorna hasta que el turno cierra, y con `D-68` `cancel` no espera—, y forzar
+`TaskStatus.KILLED` contradice el criterio acreditado en `(f)`: el registro canónico de un turno
+interrumpido es `status: "completed"` + `end_reason: "aborted"` + `subtype:
+"error_during_execution"`, nunca un `killed` fabricado por el consumidor. `driver.py` revertido
+entero (`sha256 5e9df5e7…d04dc25b`).
+
+**Forma elegida por el usuario: (b), la homóloga.** ESC levanta la señal de aborto y el turno
+**cierra por su propio camino**; `task.cancel()` queda reservado como escape duro del segundo ESC.
+La forma (a) —mínima, parchear la rama de `CancelledError`— se descarta por lo que es: insistir en
+un camino que contradice la homologación. En A el aborto cooperativo sale por la **rama de éxito**
+de la unión que el consumidor está esperando (`query.ts:1005-1052`): el consumidor **lee** la
+etiqueta terminal de quien abortó, no se la inventa. Hoy en B el ESC arranca `dispatch_prompt` de
+su propio `join`, que es la divergencia estructural.
+
+**Diseño anunciado, NO aplicado** (se aplica en la ventana siguiente):
+`driver.py` gana un `TurnHandle` (`task_id`, `aborted`) opcional en `dispatch_prompt`, sembrado
+justo tras `runtime.dispatch`; la rama de `CancelledError` se salta el `runtime.cancel` cuando el
+handle ya viene abortado. `repl.py`: `_execute` crea, pasa y libera el handle; `cancel_active_turn()`
+hace el aborto **blando** cuando el turno vive y hay `task_id`, y **duro** en cualquier otro caso
+—incluida la segunda llamada—, con el camino forzado como método interno aparte para EOF (`:163`) y
+salida (`:189`). Los dos dobles de test cuyo `join` es `await asyncio.Event().wait()` pasan a ser
+honestos: el `join` retorna tras el aborto, como hace el runtime real. Las aserciones del test
+canónico de `test_repl.py:112-186` **no se tocan**.
+
+**Trampa de diseño cazada antes de mutar:** el parámetro `force` que había propuesto para
+`cancel_active_turn` es **inviable**. `tests/test_tui.py:902-906` sustituye el método por una lambda
+**de cero argumentos**; añadir parámetro lo rompe. La firma se conserva exacta y la escalada la
+decide el propio método por estado.
+
+**Colateral medido, y no es simétrico:**
+- Cambio de conducta que es el arreglo, no daño: el Esc del modal de permisos (`tui.py:1396`) pasa a
+  **registrar la denegación** antes de que el turno se pliegue; hoy la mata a media escritura, y
+  `"cancel"` no está en `_TURN_KEYS`/`_PROJECT_KEYS` (`permissions.py:134-156`), así que el rechazo
+  ya era la decisión correcta y se estaba perdiendo.
+- Sólo de tiempos: la TUI sigue en «trabajando» durante el pliegue y el siguiente prompt encolado
+  arranca cuando el turno cierra, no antes.
+- Sin efecto: `--print`/`run_prompt`, SIGTERM/SIGHUP (`cli.py:320-325`), `cancel_or_restore` sin
+  turno vivo, y `test_repl_cleans_up_active_tasks_when_its_owner_is_cancelled`.
+
+**Lo que faltaba medir, MEDIDO aquí — el puente del proveedor aborta la petición HTTP en vuelo,
+antes del primer byte.** `OpenAICompletionsProvider.stream` lanza por `launch_with_abort`
+(`agentic_models/providers/openai_completions.py:686-689`); `launch_with_abort` cuelga supervisor
+sii hay `options.signal` y `_supervise_abort` hace `task.cancel()` cuando gana el watcher
+(`utils/abort_signals.py:67-85`), con `watch_abort` esperando la corrutina `wait()` del
+`AbortController` sin sondeo (`:53-64`). La señal del turno entra como `options.signal` en
+`models/caller.py:215-216`. La cancelación muerde en cualquier `await`, incluido el
+`client.chat.completions.create(...)` de `openai_completions.py:505` —previo a la respuesta—, y el
+propio fuente lo da por supuesto poniendo `timeout = None` cuando hay señal (`:500-501`). Al
+cancelarse, `:654-665` empuja `{"type":"error","reason":"aborted"}` y cierra el stream; el caller
+rinde `ErrorEvent` y retorna (`caller.py:354-361`).
+⇒ **La única regresión real de (b) baja a menor**: el supuesto que la sostenía —«si el motor ignora
+la señal, el primer ESC no devuelve el prompt»— no reproduce con este puente. Alcance honesto de la
+medida: vale para `openai-completions`, proveedor del `.env` vivo y del E2E de `(e)`; Bedrock ya
+tiene su carencia declarada (`DEUDA-BEDROCK-ABORT-1`); los otros seis proveedores no se han abierto.
+
+**Incumplimiento propio, declarado:** para restaurar `tests/test_driver.py` usé
+`git checkout -- tests/test_driver.py`, contra la regla de no revertir por `checkout`. Mitigación
+—que no es excusa—: el contenido estaba aparcado en scratch y las líneas eran mías de esta ventana.
+
+**El marcador no se movió.** `grep`·cierra sigue siendo la casilla más cercana; esto es el desvío
+que la bloqueaba, y se paga entero antes de volver.
+
 ### 2026-09-02 (g) · El marcador vuelve a mandar: `EMBUDO-FASE-A.md`, 5 filas de 16
 
 Ventana de **cero mutaciones de fuente**. Encargo del usuario: el trabajo se había convertido en
