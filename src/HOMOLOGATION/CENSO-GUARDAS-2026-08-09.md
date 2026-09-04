@@ -606,6 +606,108 @@ que es exactamente lo que pasó. Conductas de sesión de A hoy sin asiento: `tod
 
 ## 5. Estado de ejecución
 
+### 2026-09-03 (c) · La restauración post-compactación gastaba el 10% de su presupuesto, y el modelo pagó 73 minutos releyendo
+
+Primer pago de la corrida larga E2E (`20260903T202324-abe9213653af.jsonl`: 115 turnos, 115,5 min,
+10 compactaciones, ventana 65.536). **El primer `Edit` del agente llegó en el minuto 73,0**, el 63%
+de la corrida; antes de la séptima compactación llevaba 83 lecturas y cero ediciones. 107 `read_file`
+sobre 19 ficheros distintos, 88 de ellas relecturas.
+
+**Causa nuestra, tres piezas.** `LocalContextWindowPolicy` escalaba `POST_COMPACT_MAX_FILES_TO_RESTORE`
+con la ventana ⇒ **1 fichero** por compactación, truncado a 1.638 tokens (cuadra con las diez
+restauraciones medidas, 1.509–6.757 caracteres, todas de un bloque) **sobre 16.384 disponibles**.
+`restore.py:98` elige por recencia, así que trajo los últimos leídos y no los del encargo. Y el
+marcador de truncado invita literalmente a releer.
+
+**Arreglo: una línea.** `window.py:87`, el recuento sale de `scaled()`. No es magnitud en tokens:
+cuenta unidades de trabajo, y el proyecto no encoge con la ventana. Quien acota es
+`post_compact_token_budget`, que sigue escalando. A 65.536: de 1 fichero / 1.638 tokens a **5 / 8.190**.
+
+**El test que fijaba la conducta vieja se reescribió, con palabra del usuario.** Su premisa era falsa
+—multiplicaba el tope por fichero *sin escalar* por un recuento que sí escalaba, de ahí su «80% del
+contexto»—; escalados van juntos y el caso peor es el 12,5% en cualquier ventana. Detalle completo y
+acreditación en `SEPARACION/DECISIONES.md § D-70`.
+
+**Medido:** 24 passed (los dos ficheros de ventana), `ruff` limpio, `mypy --strict` Success, sin
+procesos supervivientes. Del resto de sintéticas, ninguna corrida ni tocada.
+
+**Los otros tres hallazgos de la corrida, medidos y NO abiertos:** falta la capa de microcompactación
+de A (`microCompact.ts`, 530 L) y `snip_tokens_freed` es cableado muerto (`agent_loop.py:456-470`
+llama sin él); el recordatorio de todos 10/10 no existe —el modelo perdió sus dos `TodoWrite` en
+compactación y migró solo a `TaskUpdate.description` como cuaderno—; y `is_error` conflacta exit
+no-cero con fallo de tool (de 10, uno genuino).
+
+**El marcador sigue sin moverse.** `grep`·cierra continúa siendo la casilla más cercana.
+
+### 2026-09-03 (b) · El truncado del E2E NO era conducta del modelo: era un dato mal medido en la ficha local
+
+Prueba en vivo de `agentic_code` contra el llama.cpp local. Síntoma: el turno **se corta a mitad de
+palabra** y aun así se etiqueta `stop_reason: "stop"` / `subtype: "success"` / `is_error: false` /
+`anomalies: []`. Nada en el registro dice que faltó texto.
+
+**Dos veces me equivoqué de marco antes de llegar a la causa, y las dos me corrigió el usuario.**
+Primero lo presenté como peculiaridad nueva de gpt-5.x; el barrido por turno mostró la fuga
+pensamiento→texto ya en 5 turnos del 08-29. Después concluí «no lo causaron los últimos cambios»;
+ampliar el contraste a las capturas **anteriores al 29 de agosto** probó lo contrario. La lección es
+de método: el contraste se abre hasta que el corte aparece, no hasta la corrida anterior.
+
+**Evidencia decisiva, las 10 capturas de la sesión por turno:**
+
+| captura | `max_output_tokens` | budget | `out` máx | cola del texto |
+|---|---|---|---|---|
+| 08-28 20:05 | None | None | 6.378 | cierra en punto |
+| 08-28 20:25 | None | None | 12.428 | cierra limpio |
+| 08-29 00:43 | None | None | 11.654 | cierra en punto |
+| 08-29 20:37 → 09-03 | 4096 | 2048 | 4096 | **corta a media palabra** |
+
+El corte es exacto y datable: `agentic_models@7041922` (2026-08-29 18:42, «Cablear el techo de salida
+y el presupuesto de razonamiento»); la primera captura con techo es de ~2 h después.
+
+**La causa NO es el algoritmo portado, es el dato.** `build_base_options` respalda con
+`opts.max_tokens or model.max_tokens` (`simple-options.ts:29`) y `clamp_max_tokens_to_context` recorta
+contra la ventana. Ambos fieles. Lo que entra por ese respaldo es `local_catalog.py:33`,
+`max_tokens=4096`. El recorte nunca muerde (65536 − 17.330 − 4096 ≈ 44k), así que el que ata es el
+dato de la ficha. Y ese dato lo desmienten dos medidas: `/props` del servidor responde
+`"n_predict": -1`, `"max_tokens": -1`, `"n_ctx": 65536` —el motor **no impone techo de salida**— y una
+corrida propia emitió 11.654 tokens con esa misma ficha.
+
+**Arreglo: una línea, el dato.** `local_catalog.py:33` `max_tokens=4096` → `max_tokens=65536`. La forma
+«sin techo propio» es `max_tokens == context_window`, y no es invención: **129 de las 939 fichas** del
+catálogo de A la usan (`qwen.qwen3-32b-v1:0` 16384/16384, `kimi-k2.5` 256000/256000). El techo efectivo
+pasa a dictarlo el algoritmo: ventana − contexto − `CONTEXT_SAFETY_TOKENS`, ≈ 44k en la corrida
+analizada, en vez de 4096 fijos.
+
+**Red nueva, `tests/test_local_catalog.py`, con los DOS casos.** Funcionalidad: el dato declara lo
+medido, y un turno normal recibe un techo muy por encima de los 4096 que truncaban. Colateral: subir el
+dato **no** desactiva el recorte —con la ventana ocupada el techo sigue siendo ventana − contexto −
+margen, y sigue siendo positivo—.
+
+**Acreditación (`D-12·b`), 2 inyecciones → 2 rojas, 0 falsos positivos.** `INY-A` volver al dato viejo
+(`max_tokens=4096`) ⇒ 3 rojas, las tres del fichero nuevo. `INY-B` desactivar el recorte
+(`return max(MIN_MAX_TOKENS, max_tokens)`) ⇒ 4 rojas: el detector de colateral, el funcional y los dos
+de `test_output_ceiling` que vigilan lo mismo. Revert desde copia propia verificada,
+`sha256sum -c` 3× OK (`local_catalog.py 92ec2071…`, `simple_options.py 0b7cae69…`,
+`test_local_catalog.py 095e8416…`) y `__pycache__` purgado.
+
+**Medido sobre el árbol restaurado:** `agentic_models` **99 passed** (96 antes de los tres detectores),
+`ruff` limpio y `mypy --strict` sin errores sobre los dos ficheros tocados, sin procesos supervivientes.
+Aviso de entorno: el venv de `agentic_models` no trae `ruff` ni `mypy`; se corren con el de
+`agentic_code`, y `pytest` **debe** correrse con el propio (el de `agentic_code` no trae
+`pytest-asyncio` y rinde 23 falsos rojos).
+
+**Dos hermanos del mismo síntoma, MEDIDOS y NO abiertos:**
+- La fuga pensamiento→texto no la causa nuestro `thinking_budget_tokens`: el servidor está **lanzado**
+  con `--reasoning-budget 2048 --no-reasoning-preserve`. El corte en ~2047 es del motor, y es dato de
+  arranque del usuario, no fuente nuestra.
+- El servidor arranca con `-c 65535` y la ficha declara 65536; el margen de 4096 lo absorbe.
+- `D-56`: el proveedor devuelve `thinking_budget_tokens` y `thinking_budget_honored` **nulos** aunque
+  enviamos 2048 y contamos 2252 — derivables, sin derivar. Y `thinking_tokens_source: "counted"` da el
+  primer contraste medible de la deuda de calibración ya declarada (2252 contado vs 2048 de presupuesto).
+- Nada registra el truncado: cuando `output_tokens == max_output_tokens` no hay terminal derivada en
+  `streaming.py::_reduce`. Declarado, no abierto.
+
+**El marcador sigue sin moverse.** `grep`·cierra continúa siendo la casilla más cercana.
+
 ### 2026-09-03 (a) · El paso anunciado en `(h)`, APLICADO: ESC blando por el camino propio, duro sólo al segundo
 
 Se aplica entero el diseño que la entrada `(h)` dejó anunciado y sin tocar fuente. Dos fuentes y dos

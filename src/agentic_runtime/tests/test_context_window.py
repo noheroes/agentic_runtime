@@ -14,10 +14,13 @@ Contrapartes canónicas leídas ÍNTEGRAS:
   (122-130).
 
 Criterio: la aritmética canónica se reproduce EXACTA bajo la política `canonical`;
-la política `local` escala por ventana los nueve valores canónicos, y NO escala los
-dos que son medida empírica de `~/python/prueba_modelo_local` (`compact.py:41`
-`MIN_RESUMEN_CHARS=600`; `loop.py:330` el 1.5x de rebrote) — escalarlos por 0.16
-destruiría el valor medido, que es lo único que los justifica.
+la política `local` escala por ventana los ocho valores canónicos que son magnitudes
+en TOKENS, y NO escala tres: los dos que son medida empírica de
+`~/python/prueba_modelo_local` (`compact.py:41` `MIN_RESUMEN_CHARS=600`; `loop.py:330`
+el 1.5x de rebrote) —escalarlos por 0.16 destruiría el valor medido, que es lo único
+que los justifica— y `POST_COMPACT_MAX_FILES_TO_RESTORE`, que no mide tokens sino
+unidades de trabajo: el proyecto no encoge con la ventana del modelo, y el gasto ya
+lo acota `post_compact_token_budget`.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ from agentic_runtime.context.window import (
     CANONICAL_REFERENCE_WINDOW,
     MAX_OUTPUT_TOKENS_FOR_SUMMARY,
     MIN_SUMMARY_CHARS_LOCAL,
+    POST_COMPACT_MAX_FILES_TO_RESTORE,
     POST_COMPACT_MAX_TOKENS_PER_FILE,
     POST_COMPACT_SKILLS_TOKEN_BUDGET,
     POST_COMPACT_TOKEN_BUDGET,
@@ -209,11 +213,28 @@ def test_local_scales_every_canonical_constant_by_window_ratio():
     )
 
 
-def test_local_restores_at_least_one_file():
-    """5 ficheros × 5k en una ventana de 32k serían el 80% del contexto. Escalado
-    da 0.81 ficheros; el suelo de 1 evita que la restauración quede muerta."""
+def test_local_does_not_scale_the_file_count():
+    """Reescrito el 2026-09-03: la premisa anterior («5 ficheros × 5k en una ventana
+    de 32k serían el 80% del contexto») multiplicaba el tope por fichero SIN escalar
+    por un recuento que sí escalaba. Escalados van juntos —5 × 819 = 4.095, el 12,5%
+    de la ventana— y ese 80% no se da nunca: por construcción del canónico
+    (`compact.ts:122-130`) `5 × POST_COMPACT_MAX_TOKENS_PER_FILE <= POST_COMPACT_TOKEN_BUDGET`,
+    y ambos llevan el mismo factor.
+
+    El recuento no es una magnitud en tokens: cuenta unidades de trabajo, y el
+    proyecto no encoge con la ventana del modelo. Quien acota el gasto es
+    `post_compact_token_budget`, que `restore.py:167` aplica adjunto a adjunto;
+    escalar además el recuento contaba dos veces la misma protección y dejaba la
+    restauración en el 10% de su propia asignación (medido en la corrida
+    `20260903T202324-abe9213653af.jsonl`: 1 fichero de 1.638 tokens sobre 16.384
+    disponibles, y 107 relecturas detrás).
+    """
     budget = resolve_context_window_policy("local").budget(32_768, 4_096)
-    assert budget.post_compact_max_files_to_restore == 1
+    assert budget.post_compact_max_files_to_restore == POST_COMPACT_MAX_FILES_TO_RESTORE
+    assert (
+        budget.post_compact_max_files_to_restore * budget.post_compact_max_tokens_per_file
+        <= budget.post_compact_token_budget
+    )
 
 
 def test_local_empirical_guards_keep_their_measured_value():

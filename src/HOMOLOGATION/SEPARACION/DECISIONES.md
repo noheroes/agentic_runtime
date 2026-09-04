@@ -5067,3 +5067,143 @@ lo que no tocaba. `D-08`, `D-12·b`, `D-15`, `D-21`, `D-22`, `D-49`, `D-56`, `D-
 cambio: `5.b` del censo, `DEUDA-BEDROCK-ABORT-1`, la calibración de `counted`, `FIND-GOOGLE-CASING`,
 `cache_write_1h` sin consumidor real, `P1` de `PLAN-OPTIMIZACION-TUI.md` y el `base_url` con
 `localhost` de `local_catalog.py`.
+
+---
+
+## D-70 · El recuento de ficheros a restaurar NO es una magnitud en tokens, y escalarlo costó 73 minutos de relectura
+
+**2026-09-03.** Fase `agentic_code` · prueba E2E. Primer pago de los detectados en la corrida larga
+contra el modelo local.
+
+- **Palabra del usuario**: *«1. vamos con el commit de control y acepto tu recomendacion de 2.»*
+  —autoriza el paso— y, sobre el choque con la suite apartada, *«de acuerdo con 1»*, que autoriza
+  reescribir el caso que fijaba la conducta vieja.
+
+### El defecto, medido en la corrida `20260903T202324-abe9213653af.jsonl`
+
+115 turnos, 115,5 min, 189 llamadas a tool, **10 compactaciones**, ventana 65.536. El primer `Edit`
+del agente llegó en el **seq 29400 = minuto 73,0**, el 63% de la corrida. Antes de la séptima
+compactación: 45 turnos, 31.289 tokens de salida, **83 lecturas de fichero y cero ediciones**. En
+total 107 `read_file` sobre **19 ficheros distintos** —5,6 lecturas por fichero, 88 de ellas
+relecturas—. El bucle era: leer todo → 55K → compactar a 6K → el resumen dice «confirma los
+diagnósticos» → releer todo.
+
+La causa es nuestra y son tres piezas encadenadas:
+
+1. `LocalContextWindowPolicy` escalaba `POST_COMPACT_MAX_FILES_TO_RESTORE` linealmente con la
+   ventana ⇒ a 65.536 el tope quedaba en **exactamente 1 fichero** por compactación.
+2. `POST_COMPACT_MAX_TOKENS_PER_FILE` escalado da 1.638 tokens ≈ 6,7 KB, que **cuadra con las diez
+   restauraciones medidas** (1.509–6.757 caracteres, todas de un solo bloque).
+3. `restore.py:98` elige por recencia, así que restauró `blobs.py` y `models.py` —los últimos
+   leídos— y no `scheduler.py`/`locking.py`, que eran los del encargo.
+
+Y el marcador de truncado dice literalmente *«read the file again if you need the full text»*.
+
+### El criterio, y por qué la premisa vieja estaba mal
+
+El recuento **cuenta unidades de trabajo, no tokens**: el proyecto tiene los mismos 19 ficheros con
+una ventana de 65K que con una de 200K. Quien acota el gasto es `post_compact_token_budget`, que sí
+escala y que `restore.py:167` aplica adjunto a adjunto. Escalar además el recuento **contaba dos
+veces la misma protección**.
+
+El test que fijaba la conducta vieja —`test_local_restores_at_least_one_file`— la razonaba así:
+*«5 ficheros × 5k en una ventana de 32k serían el 80% del contexto»*. La aritmética no se sostiene:
+multiplicaba el tope por fichero **sin escalar** por un recuento que sí escalaba. Escalados van
+juntos y el caso peor es constante:
+
+| ventana | budget global | por fichero | 5 ficheros | % de la ventana |
+|---|---|---|---|---|
+| 65.536 | 16.384 | 1.638 | 8.190 | 12,5% |
+| 32.768 | 8.192 | 819 | 4.095 | 12,5% |
+
+Por construcción del canónico (`compact.ts:122-130`) `5 × 5.000 = 25.000 <= 50.000`, y ambos llevan
+el mismo factor: los cinco ficheros **no pueden** pasarse del presupuesto. Ese 80% no ocurre nunca.
+
+El dato que lo remata: con 16.384 tokens de presupuesto, la corrida restauró 1.638. **El 10% de su
+propia asignación.**
+
+### Lo inyectado
+
+- `agentic_runtime/context/window.py:87` — `post_compact_max_files_to_restore` sale de `scaled()`.
+  Una línea. El camino `canonical` no se mueve (`_unscaled` era identidad); sólo cambia `local`.
+- `agentic_runtime/tests/test_window_local_restore_budget.py` — **nuevo**, cuatro casos con el
+  criterio y la medida en el docstring de módulo (única excepción del § 4). Dos miden la
+  funcionalidad (el recuento no encoge; la corrida habría restaurado más de lo que restauró) y dos
+  el **colateral**: que el caso peor sigue cabiendo en el presupuesto escalado y por debajo de media
+  ventana, y que los presupuestos en tokens siguen escalando.
+- `agentic_runtime/tests/test_context_window.py` — `test_local_restores_at_least_one_file` pasa a
+  `test_local_does_not_scale_the_file_count`, **reescrito con el criterio correcto y su aritmética**,
+  no ablandado (`no-debilitar-la-prueba`): afirma ahora lo contrario de lo que afirmaba. Y el
+  encabezado corrige *«escala los nueve valores canónicos»* → **ocho**, nombrando el tercero que no
+  escala y por qué.
+
+### Acreditación
+
+El rojo se escribió **antes** del arreglo y el estado previo es el mutante: 2 de 4 casos en rojo
+(`assert 1 == 5` y `assert 1638 > 6552`), los otros 2 —los detectores de colateral— **ya en verde**,
+que es lo que acredita que miden el guarda y no el cambio. Tras la línea, 4/4.
+
+Corrección propia declarada: mi segundo assert de `test_the_measured_run…` pedía
+`restored >= budget // 2` y fallaba **por 2 tokens** (`5 × 1638 = 8190` contra `16384 // 2 = 8192`),
+puro truncamiento de `int()` sobre una razón que es exactamente 0,5. Era un proxy frágil, no un
+criterio: se sustituyó por la igualdad exacta contra el recuento canónico. Se anota porque cambiar un
+assert propio después de verlo fallar es justo la maniobra que `no-debilitar-la-prueba` vigila.
+
+El impacto sobre las apartadas se determinó **leyendo enteras** las tres suites del área —
+`test_context_window.py` (236 L), `test_compact_restore.py` (310 L) y `test_compact_engine.py`
+(879 L)—, no sondeando: la única que fijaba el recuento es la reescrita.
+`test_compact_restore.py:222-238` deposita dos ficheros y sigue verde porque al excluido lo tumba el
+predicado del integrador, no el tope.
+
+### Medido
+
+`test_context_window.py` + `test_window_local_restore_budget.py`: **24 passed**. `ruff` sobre los
+tres ficheros: **All checks passed**. `mypy --strict` sobre `window.py`: **Success**. Sin procesos
+supervivientes. Del resto de sintéticas de `agentic_runtime`, ninguna corrida ni tocada: la
+reescrita entra por la palabra del usuario, y sólo ella.
+
+Aviso de entorno: el venv de `agentic_runtime` **no trae `ruff`**; se corre con el de `agentic_code`
+(`ruff 0.16.1`). `pytest` sí es el propio.
+
+Hashes del estado sano: `context/window.py`
+`b79c07df6b40b377fbe41538593e243a1b188f4cf60f38abe8fb35b06f88c5f5`;
+`tests/test_context_window.py` `bf731e87e5228bac7ccd4291f6029a01945f7880338e2025580d1389eb0567bd`;
+`tests/test_window_local_restore_budget.py`
+`3da29648eb74fc8ac9b933874cf167487002a352d2b83b87b451abfa44f3bd5a`.
+
+### Lo que este pago NO cierra
+
+- **La selección sigue siendo por recencia** (`restore.py:98`). Con cinco huecos en vez de uno el
+  daño baja mucho, pero el criterio sigue sin mirar el encargo. No se abre aquí: pide contraste
+  canónico antes de proponer forma.
+- **No hay microcompactación** (`D-22`). A tiene una capa previa que nosotros no —`microCompact.ts`
+  (530 L), que desaloja resultados de tool rancios conservando la estructura de mensajes— más
+  `HISTORY_SNIP`/`snipProjection`. Y `should_auto_compact` acepta `snip_tokens_freed` que **nadie
+  alimenta**: `agent_loop.py:456-470` llama sin él y siempre vale 0. Cableado muerto, declarado.
+- **El recordatorio de todos** (`TODO_REMINDER_CONFIG` 10/10). Medido en la corrida: el modelo usó
+  `TodoWrite` dos veces (seq 9750, 16700), perdió las dos en compactación, **no volvió a llamarla** y
+  migró a `TaskCreate`/`TaskList`/`TaskUpdate`, usando `TaskUpdate.description` como cuaderno (seq
+  32624: *«Bug 1: FIXED. Scheduler._record now writes full dense-state checkpoint…»*). Se rodeó solo
+  una tool de sólo-escritura buscando una legible.
+- **`is_error` conflacta salida no-cero con fallo de tool**: de 10 resultados con `is_error=True`,
+  **uno** es genuino (`read_file` sobre `prompt.py` inexistente, seq 34211); los otros nueve son
+  `ruff` con exit 1 y los rojos deliberados del encargo. Medido, no abierto: pide canónico.
+
+### Lo que NO deroga
+
+`D-41` queda **acotado, no derogado**: la política `local` sigue escalando por ventana toda magnitud
+en tokens; lo que se retira es escalar una que no lo es. `D-08` intacto: el reparto sale de
+`compact.ts:122-130` leído, no de deducir. `D-22` aplicado en su lectura estricta: lo que falta se
+declara medido (microcompactación, `snip_tokens_freed`) y no se rotula como divergencia. `D-15`
+intacto: el defecto lo detectó el consumidor real, y el canónico dictó. `D-49` intacto. `D-12·b`,
+`D-21`, `D-56`, `D-62`…`D-69` intactos.
+
+### Abierto
+
+Al frente, los tres restantes de esta corrida: **microcompactación** (`D-22`), el **recordatorio de
+todos** 10/10, y la **selección por relevancia** de `restore.py`. Detrás, sin cambio:
+`FIND-CODE-ABORT-BG-1`, `FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `5.b` del censo,
+`DEUDA-BEDROCK-ABORT-1`, la calibración de `counted`, `FIND-GOOGLE-CASING`, `cache_write_1h`,
+`P1` de `PLAN-OPTIMIZACION-TUI.md`, el `base_url` con `localhost` de `local_catalog.py`, los 10
+errores de `mypy --strict` de `agentic_code` fuera del diff, y el aborto medido sólo para
+`openai-completions`.

@@ -84,7 +84,7 @@ def _assemble(
         warning_threshold=autocompact - scaled(WARNING_THRESHOLD_BUFFER_TOKENS),
         error_threshold=autocompact - scaled(ERROR_THRESHOLD_BUFFER_TOKENS),
         blocking_limit=effective - scaled(MANUAL_COMPACT_BUFFER_TOKENS),
-        post_compact_max_files_to_restore=scaled(POST_COMPACT_MAX_FILES_TO_RESTORE),
+        post_compact_max_files_to_restore=POST_COMPACT_MAX_FILES_TO_RESTORE,
         post_compact_token_budget=scaled(POST_COMPACT_TOKEN_BUDGET),
         post_compact_max_tokens_per_file=scaled(POST_COMPACT_MAX_TOKENS_PER_FILE),
         post_compact_max_tokens_per_skill=scaled(POST_COMPACT_MAX_TOKENS_PER_SKILL),
