@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from ...context.tool_use import ToolUseContext
 
 TODO_WRITE_TOOL_NAME = "TodoWrite"
-_TODOS_KEY = "todos"
+TODOS_APP_STATE_KEY = "todos"
 
 _TODO_SCHEMA = {
     "type": "array",
@@ -247,13 +247,13 @@ ensures you complete all requirements successfully.
 
     async def execute(self, input: dict[str, Any], ctx: ToolUseContext) -> ToolResult:
         todos = input.get("todos", [])
-        old_todos = ctx.app_state.native.get(_TODOS_KEY, [])
+        old_todos = ctx.app_state.native.get(TODOS_APP_STATE_KEY, [])
 
         all_done = all(todo.get("status") == "completed" for todo in todos)
         new_todos: list[Any] = [] if all_done else todos
 
         def modifier(c: ToolUseContext) -> ToolUseContext:
-            c.app_state.native[_TODOS_KEY] = new_todos
+            c.app_state.native[TODOS_APP_STATE_KEY] = new_todos
             return c
 
         return ToolResult(

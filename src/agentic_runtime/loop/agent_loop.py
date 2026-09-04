@@ -67,7 +67,13 @@ from ..tools.native.supported_settings import (
     OFF_EFFORT_LEVEL,
     THINKING_APP_STATE_KEY,
 )
+from ..tools.native.todo_write import TODO_WRITE_TOOL_NAME, TODOS_APP_STATE_KEY
 from ..tools.pool import ToolPool
+from ..tools.todo_reminder import (
+    TODO_REMINDER_KEY,
+    compute_todo_reminder,
+    render_todo_reminder,
+)
 from .outcome import LoopEndReason, LoopOutcome
 
 if TYPE_CHECKING:
@@ -258,6 +264,26 @@ class AgentLoop:
                 SKILL_LISTING_KEY: {"names": list(delta.names)},
             },
             origin="skill_listing_delta",
+        )
+
+    async def _announce_todo_reminder(
+        self, ctx: ToolUseContext, published_names: frozenset[str]
+    ) -> None:
+        reminder = compute_todo_reminder(
+            ctx.messages,
+            ctx.app_state.native.get(TODOS_APP_STATE_KEY, []),
+            todo_tool_available=TODO_WRITE_TOOL_NAME in published_names,
+        )
+        if reminder is None:
+            return
+        await self._append(
+            ctx,
+            {
+                "role": "user",
+                "content": _as_reminder(render_todo_reminder(reminder)),
+                TODO_REMINDER_KEY: {"item_count": reminder.item_count},
+            },
+            origin="todo_reminder",
         )
 
     def _compaction_provider_messages(self, ctx: ToolUseContext) -> list[dict[str, Any]]:
@@ -506,6 +532,7 @@ class AgentLoop:
                 )
             await self._announce_agent_listing(ctx, published_names)
             await self._announce_skill_listing(ctx, published_names)
+            await self._announce_todo_reminder(ctx, published_names)
 
             system_sections: list[str] = []
             if self._capability_manager is not None:

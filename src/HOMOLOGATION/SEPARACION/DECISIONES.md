@@ -5207,3 +5207,32 @@ todos** 10/10, y la **selección por relevancia** de `restore.py`. Detrás, sin 
 `P1` de `PLAN-OPTIMIZACION-TUI.md`, el `base_url` con `localhost` de `local_catalog.py`, los 10
 errores de `mypy --strict` de `agentic_code` fuera del diff, y el aborto medido sólo para
 `openai-completions`.
+
+## D-71 — El recordatorio 10/10 de la lista de tareas (`FIND-TODO-REMINDER-1`)
+
+**Decisión.** B emite el recordatorio de `TodoWrite` con las dos ventanas del canónico
+(`attachments.ts:254-257`), cableado en el bucle para **todo hilo, subagentes incluidos**, como A lo
+cablea en `allThreadAttachments` (`:893-897`) y no en los del hilo principal.
+
+**Forma.** `tools/todo_reminder.py` calcula y rinde; `agent_loop.py::_announce_todo_reminder` publica
+un `role:user` envuelto en `<system-reminder>` con sidecar `TODO_REMINDER_KEY`. La cuenta es de
+turnos de ASISTENTE, con la comprobación del `tool_use` **antes** del incremento y los dos contadores
+**independientes** (`:3245-3246`): en el turno de la escritura, el de escrituras no sube y el de
+recordatorios sí.
+
+**Lo que no se porta, declarado (`D-22` en su lectura estricta):** `isThinkingMessage` no tiene caso
+en B; `BRIEF_TOOL_NAME` es catálogo de producto; y la clave por agente/sesión de `appState.todos[…]`
+**no** se construye aquí — la ranura sigue siendo única, luego un subagente ve la lista del padre.
+Eso es `FIND-TODO`, bloqueado por la decisión del depósito de estado, y se paga en su paso.
+
+**Recencia por dato, no por texto (`FIND-DEFER-1`).** A la reconstruye del `type` del attachment; B,
+del sidecar. Re-parsear el rendido sería frágil por construcción: lleva contenido de usuario. Un
+sidecar perdido degrada a re-recordar, nunca a callar.
+
+**Acreditación.** 12 casos; 8 mutaciones revertidas → 8 rojas, 0 falsos positivos, `sha256` y purga
+de bytecode (`D-62`). Contra modelo real (`D-15`): recordatorio en la vuelta 11 de doce, una sola
+emisión, lista y `item_count` correctos, sin mención al usuario.
+
+**No deroga nada.** `D-08` intacto —la corrección del anidamiento salió de leer `attachments.ts`
+1→EOF, no de deducir—. `D-70` queda con dos de sus tres abiertos: microcompactación y selección por
+relevancia.

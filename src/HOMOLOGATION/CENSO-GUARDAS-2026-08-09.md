@@ -3122,3 +3122,64 @@ usuario (`D-22`) y **no** declarado como divergencia. Detrás, `FIND-RT-COMPACT-
 `FIND-RT-TOOLINPUT-1`, `FIND-CODE-TODO-1`. Sin cambio: `5.b`, `DEUDA-BEDROCK-ABORT-1`, la
 calibración de `counted`, `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, `P1` de
 `PLAN-OPTIMIZACION-TUI.md` y el `base_url` con `localhost` de `local_catalog.py`.
+
+## § 5 · addendum 2026-09-04 — el recordatorio 10/10 de la lista de tareas, pagado (`FIND-TODO-REMINDER-1`)
+
+Uno de los tres que dejó abierto `D-70`. Lo que medía la corrida contra el modelo local: el modelo
+llamó a `TodoWrite` dos veces, perdió las dos en compactación y **no volvió a llamarla nunca**,
+migrando a `TaskUpdate.description` como cuaderno. No era capricho del modelo — era que en B nada le
+recordaba que la lista seguía ahí. En A eso lo hace un attachment del hilo entero
+(`utils/attachments.ts:893-897`), con dos ventanas de diez turnos de ASISTENTE
+(`:254-257`), su cuenta en `getTodoReminderTurnCounts` (`:3212-3264`), sus guardas en
+`getTodoReminderAttachments` (`:3266-3317`) y su literal en `utils/messages.ts:3663-3679`.
+
+Hecho, en `agentic_runtime`: `tools/todo_reminder.py` **nuevo** —`TODO_REMINDER_CONFIG`,
+`count_todo_reminder_turns`, `render_todo_reminder`, `compute_todo_reminder`—; el cable en
+`loop/agent_loop.py` (`_announce_todo_reminder`, tras los anuncios de agentes y de skills), que lee
+la misma ranura que escribe la tool y publica el aviso como `role:user` envuelto en
+`<system-reminder>` con sidecar `TODO_REMINDER_KEY`; y `_TODOS_KEY` promovido a
+`TODOS_APP_STATE_KEY` para que el recordatorio no importe un privado ajeno.
+
+**Corrección contra el canónico, antes de que la bendijera un test verde** (`D-08`). El primer
+borrado anidaba el contador de recordatorios en el `else` del de escrituras. `attachments.ts:3245-3246`
+los tiene como dos `if` **independientes**: en el turno de la `TodoWrite`, el contador de escrituras
+no sube pero el de recordatorios **sí**. Se leyó `attachments.ts` 1→EOF (3997 líneas, tres páginas
+por el techo de 25k tokens) y se corrigió antes de cablear.
+
+Divergencias declaradas, no disfrazadas: (1) `isThinkingMessage` (`:3222-3224`) no tiene qué saltar
+—`_assistant_message` (`agent_loop.py:115-137`) no crea mensaje sin contenido ni `tool_calls`, y el
+pensamiento viaja dentro del mismo mensaje que el texto—; (2) `BRIEF_TOOL_NAME` (`:3285-3287`) es
+catálogo de producto de A; (3) la clave por agente/sesión de `appState.todos[…]` (`:3313`) **no** se
+porta: B lee la ranura única de la tool, así que un subagente ve la lista del padre — es `FIND-TODO`,
+paso 9 del orden de ataque, bloqueado por la decisión del depósito de estado (paso 7) y **no** abierto
+aquí; (4) la recencia se reconstruye del sidecar, no del texto rendido (lección `FIND-DEFER-1`), y un
+sidecar perdido degrada a **re-recordar**, nunca a callar.
+
+**Defecto del andamio, no del módulo, corregido en el rojo**: con un guion que sólo emitía
+`DoneEvent`, `ScriptedCaller` no producía mensaje de asistente y el contador no avanzaba nunca — el
+andamio, y no el módulo, decidía que jamás se recordaba. El guion da contenido a cada turno.
+
+Pruebas: `tests/test_todo_reminder.py` **12 verdes**, acreditadas por **8 mutaciones revertidas → 8
+rojas, 0 falsos positivos**, con purga de `__pycache__` en cada revert (`D-62`) y restauración
+verificada por `sha256sum -c` sobre copia propia sellada. `test_loop_homologation` +
+`test_agent_listing` + `test_todo_reminder` = **55 verdes, 4 xfailed**, con el único rojo
+preexistente `test_loop_max_turns_ceiling_bounds_runaway` (importa `_MAX_TURNS`, borrado por `D-65`;
+sintética apartada, ni litigada ni tocada). `agentic_code` **306 verdes**. `ruff` limpio en lo mío;
+los dos `E501` de `agent_loop.py:664,696` son preexistentes y están fuera del diff.
+
+**Acreditado contra modelo real** (`D-15`, `llama-server` vivo, `local` /
+`unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`): doce vueltas de pregunta trivial, recordatorio en la **vuelta
+11** —diez turnos de asistente cumplidos— con la lista sembrada viajando en el formato del canónico
+(`[1. [completed] …\n2. [in_progress] …]`) y `item_count: 2`; **una sola emisión en doce vueltas**, y
+el modelo no lo mencionó al usuario. Sin procesos supervivientes. Sintéticas de `agentic_runtime` ni
+corridas ni tocadas.
+
+Retoma: de los tres de `D-70` quedan la **microcompactación** (`D-22`, `microCompact.ts` 530 L más el
+`snip_tokens_freed` que nadie alimenta, `agent_loop.py:456-470`) y la **selección por relevancia** de
+`restore.py:98`. Encargado por el usuario y pendiente: la compactación **visible en la TUI** de
+`agentic_code` como en el canónico —icono del spinner en otro tono, `✽ Compacting conversation… (2m
+42s · ↓ 6.9k tokens)` y barra de 0% a 100%—. Sin cambio: `FIND-TODO` (paso 9, bloqueado por el paso
+7), `is_error` conflactando salida no-cero con fallo de tool, `FIND-CODE-ABORT-BG-1`,
+`FIND-RT-COMPACT-EVT-1`, `FIND-RT-TOOLINPUT-1`, `5.b`, `DEUDA-BEDROCK-ABORT-1`, la calibración de
+`counted`, `FIND-GOOGLE-CASING`, `cache_write_1h` sin consumidor real, `P1` de
+`PLAN-OPTIMIZACION-TUI.md` y el `base_url` con `localhost` de `local_catalog.py`.
